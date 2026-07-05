@@ -6,12 +6,16 @@ const {
   mockCreateSnapshot,
   mockWaitForRuntimeDiagnostics,
   mockBuildSyntheticMessage,
+  mockSaveCheckpoint,
+  mockUpdateCheckpoint,
 } = vi.hoisted(() => ({
   mockStreamChat: vi.fn(),
   mockExecuteHtmlProjectToolCall: vi.fn(),
   mockCreateSnapshot: vi.fn(),
   mockWaitForRuntimeDiagnostics: vi.fn(),
   mockBuildSyntheticMessage: vi.fn(),
+  mockSaveCheckpoint: vi.fn().mockResolvedValue(undefined),
+  mockUpdateCheckpoint: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('./llmService', () => ({
@@ -57,6 +61,11 @@ vi.mock('./conversationUtils', async importOriginal => {
     buildSyntheticMessage: mockBuildSyntheticMessage,
   };
 });
+
+vi.mock('./agentRunCheckpointService', () => ({
+  saveCheckpoint: mockSaveCheckpoint,
+  updateCheckpoint: mockUpdateCheckpoint,
+}));
 
 import { AgentRunController, CONTINUATION_PROMPT } from './agentRunController';
 

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatContainer from '../ChatContainer';
 import { createMockChatSession, TEST_ASSISTANTS } from './test-utils';
 import { useAppContext } from '../../core/useAppContext';
-import type { AgentRunState } from '../../../types';
+import type { AgentRunCheckpoint, AgentRunState } from '../../../types';
 import type { AgentRunController, AgentRunResult } from '../../../services/agentRunController';
 
 const {
@@ -21,6 +21,10 @@ const {
   mockAppendProjectActivity,
   mockClearProjectWorkspace,
   mockSetAgentRunState,
+  mockGetInterruptedForSession,
+  mockClaimCheckpoint,
+  mockDeleteCheckpoint,
+  mockGetProject,
 } = vi.hoisted(() => ({
   mockCreateNewSession: vi.fn().mockResolvedValue(undefined),
   mockAgentRunControllerCtor: vi.fn(),
@@ -35,6 +39,10 @@ const {
   mockAppendProjectActivity: vi.fn(),
   mockClearProjectWorkspace: vi.fn(),
   mockSetAgentRunState: vi.fn(),
+  mockGetInterruptedForSession: vi.fn().mockResolvedValue(null),
+  mockClaimCheckpoint: vi.fn().mockResolvedValue(null),
+  mockDeleteCheckpoint: vi.fn().mockResolvedValue(undefined),
+  mockGetProject: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../core/useAppContext', async () => {
@@ -61,10 +69,23 @@ vi.mock('../../../services/agentRunController', () => ({
     const instance: Partial<AgentRunController> = {
       run: mockControllerRun,
       stop: mockControllerStop,
+      flushCheckpoint: vi.fn().mockResolvedValue(undefined),
       getState: mockControllerGetInstance,
     };
     return instance;
   }),
+}));
+
+vi.mock('../../../services/agentRunCheckpointService', () => ({
+  getInterruptedForSession: mockGetInterruptedForSession,
+  claimCheckpoint: mockClaimCheckpoint,
+  deleteCheckpoint: mockDeleteCheckpoint,
+}));
+
+vi.mock('../../../services/htmlProjectStore', () => ({
+  htmlProjectStore: {
+    getProject: mockGetProject,
+  },
 }));
 
 vi.mock('../../../services/ragCacheManagerV2', () => ({
@@ -117,10 +138,35 @@ const completeState: AgentRunState = {
   finishReason: 'complete',
 };
 
+const interruptedCheckpoint: AgentRunCheckpoint = {
+  schemaVersion: 1,
+  runId: 'run-interrupted',
+  sessionId: 'test-session-1',
+  assistantId: 'test-assistant-1',
+  projectId: null,
+  status: 'running',
+  turnIndex: 1,
+  maxTurns: 5,
+  originalMessage: 'Resume this task',
+  committedHistoryDelta: [{ role: 'model', content: 'First completed turn' }],
+  partialText: 'Partial output',
+  toolTrace: ['inspect'],
+  tokenTotals: {
+    promptTokenCount: 10,
+    candidatesTokenCount: 15,
+  },
+  agentHarnessEnabled: true,
+  sharedMode: false,
+  createdAt: 1640995200000,
+  updatedAt: 1640995200000,
+  heartbeatAt: 1640995200000,
+};
+
 const buildRunResult = (fullText: string): AgentRunResult => ({
   state: completeState,
   fullText,
   finalHistory: [],
+  historyDelta: [],
   tokenInfo: {
     promptTokenCount: 10,
     candidatesTokenCount: 15,
@@ -164,6 +210,20 @@ describe('ChatContainer', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetInterruptedForSession.mockResolvedValue(null);
+    mockClaimCheckpoint.mockResolvedValue(null);
+    mockDeleteCheckpoint.mockResolvedValue(undefined);
+    mockGetProject.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      writable: true,
+      value: {
+        request: vi.fn(
+          async (_name: string, _options: unknown, callback: (lock: object) => Promise<unknown>) =>
+            callback({}),
+        ),
+      },
+    });
 
     vi.mocked(useAppContext).mockReturnValue({
       actions: {
@@ -471,5 +531,40 @@ describe('ChatContainer', () => {
     expect(mockSetAgentRunState).toHaveBeenCalledWith(null);
     expect(screen.getByTestId('welcome-message')).toBeInTheDocument();
     expect(screen.queryByText('Existing message')).not.toBeInTheDocument();
+  });
+
+  it('renders a resume banner for an interrupted run', async () => {
+    mockGetInterruptedForSession.mockResolvedValueOnce(interruptedCheckpoint);
+
+    render(<ChatContainer {...defaultProps} />);
+
+    expect(await screen.findByTestId('resume-run-banner')).toBeInTheDocument();
+    expect(screen.getByText(/上次工作在第 2\/5 回合中斷/)).toBeInTheDocument();
+    expect(screen.getByText('Partial output')).toBeInTheDocument();
+  });
+
+  it('discards interrupted work before sending a new message', async () => {
+    mockGetInterruptedForSession.mockResolvedValue(interruptedCheckpoint);
+
+    render(<ChatContainer {...defaultProps} />);
+    await screen.findByTestId('resume-run-banner');
+
+    await sendMessage('New message after crash');
+
+    await waitFor(() => {
+      expect(mockDeleteCheckpoint).toHaveBeenCalledWith('run-interrupted');
+      expect(mockSetAgentRunState).toHaveBeenCalledWith(null);
+      expect(defaultProps.onNewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: 'model', content: 'First completed turn' }),
+            expect.objectContaining({ role: 'user', content: 'New message after crash' }),
+          ]),
+        }),
+        'New message after crash',
+        'Test reply',
+        expect.anything(),
+      );
+    });
   });
 });

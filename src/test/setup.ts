@@ -1,36 +1,6 @@
 import '@testing-library/jest-dom';
+import 'fake-indexeddb/auto';
 import { vi } from 'vitest';
-
-// Define IDB globals missing from jsdom (required by idb library instanceof checks)
-/* global EventTarget */
-class FakeIDBRequest extends EventTarget {}
-class FakeIDBDatabase extends EventTarget {}
-class FakeIDBTransaction extends EventTarget {}
-class FakeIDBObjectStore {}
-class FakeIDBIndex {}
-class FakeIDBCursor {}
-// @ts-ignore
-global.IDBRequest = FakeIDBRequest;
-// @ts-ignore
-global.IDBDatabase = FakeIDBDatabase;
-// @ts-ignore
-global.IDBTransaction = FakeIDBTransaction;
-// @ts-ignore
-global.IDBObjectStore = FakeIDBObjectStore;
-// @ts-ignore
-global.IDBIndex = FakeIDBIndex;
-// @ts-ignore
-global.IDBCursor = FakeIDBCursor;
-
-// Mock window.indexedDB for testing
-Object.defineProperty(window, 'indexedDB', {
-  value: {
-    open: vi.fn(),
-    deleteDatabase: vi.fn(),
-    databases: vi.fn(),
-  },
-  writable: true,
-});
 
 // Mock localStorage
 Object.defineProperty(window, 'localStorage', {

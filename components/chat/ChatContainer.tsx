@@ -7,9 +7,61 @@ import WelcomeMessage from './WelcomeMessage';
 import ThinkingIndicator from './ThinkingIndicator';
 import StreamingResponse from './StreamingResponse';
 import { AgentRunController } from '../../services/agentRunController';
-import type { AgentRunState } from '../../types';
-import { ChatMessage, HtmlProjectWorkspaceUpdate } from '../../types';
+import {
+  claimCheckpoint,
+  deleteCheckpoint,
+  getInterruptedForSession,
+} from '../../services/agentRunCheckpointService';
+import { htmlProjectStore } from '../../services/htmlProjectStore';
+import type { AgentRunCheckpoint, AgentRunState, ChatMessage } from '../../types';
+import { HtmlProjectWorkspaceUpdate } from '../../types';
 import { applyTokenUsageToSession } from '../../services/sessionTokenUsage';
+
+const INTERRUPTION_NOTICE = '⚠️ 上次工作已中斷';
+
+const buildInterruptedNotice = (checkpoint: AgentRunCheckpoint): ChatMessage => ({
+  role: 'model',
+  content: `${INTERRUPTION_NOTICE}（第 ${Math.min(checkpoint.turnIndex + 1, checkpoint.maxTurns)}/${checkpoint.maxTurns} 回合）。`,
+  synthetic: true,
+});
+
+const sameMessage = (left?: ChatMessage, right?: ChatMessage): boolean =>
+  left?.role === right?.role && left?.content === right?.content;
+
+const appendWithoutDuplicateTail = (
+  existingMessages: ChatMessage[],
+  additions: ChatMessage[],
+): ChatMessage[] => {
+  const nextMessages = [...existingMessages];
+
+  for (const message of additions) {
+    if (!sameMessage(nextMessages.at(-1), message)) {
+      nextMessages.push(message);
+    }
+  }
+
+  return nextMessages;
+};
+
+const updateSessionTitle = (title: string, userMessage: string): string =>
+  title === 'New Chat' && userMessage ? userMessage.substring(0, 40) : title;
+
+const mergeCheckpointMessages = (
+  sessionMessages: ChatMessage[],
+  checkpoint: AgentRunCheckpoint,
+  includeInterruptedNotice: boolean,
+): ChatMessage[] => {
+  const additions: ChatMessage[] = [
+    { role: 'user', content: checkpoint.originalMessage },
+    ...checkpoint.committedHistoryDelta,
+  ];
+
+  if (includeInterruptedNotice) {
+    additions.push(buildInterruptedNotice(checkpoint));
+  }
+
+  return appendWithoutDuplicateTail(sessionMessages, additions);
+};
 
 const ChatContainer: React.FC<ChatContainerProps> = ({
   session,
@@ -33,6 +85,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const [isThinking, setIsThinking] = useState(false);
   const [currentSession, setCurrentSession] = useState(session);
   const [runState, setRunState] = useState<AgentRunState | null>(null);
+  const [interruptedCheckpoint, setInterruptedCheckpoint] = useState<AgentRunCheckpoint | null>(
+    null,
+  );
+  const [resumeUnavailableReason, setResumeUnavailableReason] = useState<string | null>(null);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef(session);
   const controllerRef = useRef<AgentRunController | null>(null);
@@ -59,6 +116,106 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     scrollToBottom();
   }, [currentSession.messages, streamingResponse, isThinking]);
 
+  useEffect(() => {
+    let active = true;
+
+    const loadInterruptedCheckpoint = async () => {
+      if (!session.id) {
+        if (active) {
+          setInterruptedCheckpoint(null);
+          setResumeUnavailableReason(null);
+          setResumeError(null);
+        }
+        return;
+      }
+
+      const checkpoint = await getInterruptedForSession(session.id);
+      if (!active) {
+        return;
+      }
+
+      if (!checkpoint) {
+        setInterruptedCheckpoint(null);
+        setResumeUnavailableReason(null);
+        setResumeError(null);
+        return;
+      }
+
+      const lastCommitted = checkpoint.committedHistoryDelta.at(-1);
+      if (lastCommitted && sameMessage(session.messages.at(-1), lastCommitted)) {
+        await deleteCheckpoint(checkpoint.runId);
+        if (active) {
+          setInterruptedCheckpoint(null);
+          setResumeUnavailableReason(null);
+          setResumeError(null);
+        }
+        return;
+      }
+
+      if (checkpoint.projectId) {
+        const project = await htmlProjectStore.getProject(checkpoint.projectId);
+        if (!active) {
+          return;
+        }
+
+        if (!project) {
+          setInterruptedCheckpoint(checkpoint);
+          setResumeUnavailableReason('原本的 HTML 專案已不存在，只能捨棄並封存這次中斷紀錄。');
+          setResumeError(null);
+          return;
+        }
+      }
+
+      setInterruptedCheckpoint(checkpoint);
+      setResumeUnavailableReason(
+        checkpoint.turnIndex >= checkpoint.maxTurns
+          ? '這次工作已達最大回合數，只能捨棄並封存中斷前的紀錄。'
+          : null,
+      );
+      setResumeError(null);
+    };
+
+    void loadInterruptedCheckpoint();
+
+    return () => {
+      active = false;
+    };
+  }, [session.id, session.messages]);
+
+  useEffect(() => {
+    const flushCheckpoint = () => {
+      void controllerRef.current?.flushCheckpoint(true);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushCheckpoint();
+      }
+    };
+
+    const handleBeforeUnload = (event: Event) => {
+      if (controllerRef.current?.getState().status === 'running') {
+        const beforeUnloadEvent = event as unknown as {
+          preventDefault: () => void;
+          returnValue: string;
+        };
+        flushCheckpoint();
+        beforeUnloadEvent.preventDefault();
+        beforeUnloadEvent.returnValue = '';
+      }
+    };
+
+    window.addEventListener('pagehide', flushCheckpoint);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('pagehide', flushCheckpoint);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
+
   const handleProjectToolActivity = (update: HtmlProjectWorkspaceUpdate) => {
     const nextProjectId = update.activeProjectId ?? sessionRef.current.activeProjectId ?? null;
 
@@ -83,25 +240,57 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) {
-      return;
+  const persistCheckpointArchive = async (
+    checkpoint: AgentRunCheckpoint,
+    options?: { clearProject?: boolean },
+  ): Promise<void> => {
+    const mergedMessages = mergeCheckpointMessages(sessionRef.current.messages, checkpoint, true);
+    const nextSession = {
+      ...sessionRef.current,
+      activeProjectId: options?.clearProject
+        ? null
+        : (sessionRef.current.activeProjectId ?? checkpoint.projectId),
+      messages: mergedMessages,
+      title: updateSessionTitle(sessionRef.current.title, checkpoint.originalMessage),
+      updatedAt: Date.now(),
+    };
+
+    await actions?.updateSession?.(nextSession);
+    sessionRef.current = nextSession;
+    setCurrentSession(nextSession);
+
+    if (options?.clearProject) {
+      actions?.setActiveProject?.(null);
+      actions?.setProjectWorkspaceOpen?.(false);
+      actions?.clearProjectWorkspace?.();
     }
-    const userMessage = input.trim();
-    setInput('');
+
+    await deleteCheckpoint(checkpoint.runId);
+    setInterruptedCheckpoint(null);
+    setResumeUnavailableReason(null);
+    setResumeError(null);
+  };
+
+  const executeRun = async ({
+    message,
+    displaySession,
+    historyMessages,
+    resumeCheckpoint,
+  }: {
+    message: string;
+    displaySession: typeof currentSession;
+    historyMessages: ChatMessage[];
+    resumeCheckpoint?: AgentRunCheckpoint;
+  }) => {
     setIsLoading(true);
     setIsThinking(true);
     setStreamingResponse('');
     setRunState(null);
+    setResumeError(null);
     actions?.setAgentRunState?.(null);
 
-    const newUserMessage = { role: 'user' as const, content: userMessage };
-    const updatedSession = {
-      ...currentSession,
-      messages: [...currentSession.messages, newUserMessage],
-    };
-    sessionRef.current = updatedSession;
-    setCurrentSession(updatedSession);
+    sessionRef.current = displaySession;
+    setCurrentSession(displaySession);
 
     try {
       setStatusText(ragChunks.length > 0 ? '🔎 搜尋知識庫中...' : '🤖 生成回答...');
@@ -109,36 +298,36 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       let chatHistory: ChatMessage[];
       let enhancedSystemPrompt = systemPrompt;
 
-      if (currentSession.compactContext) {
-        const compactedContextPrompt = `\n\n[PREVIOUS CONVERSATION SUMMARY]\n${currentSession.compactContext.content}\n\nThe above is a summary of our previous conversation. Please refer to this context when responding to continue our conversation naturally.\n\n[CURRENT CONVERSATION]`;
+      if (displaySession.compactContext) {
+        const compactedContextPrompt = `\n\n[PREVIOUS CONVERSATION SUMMARY]\n${displaySession.compactContext.content}\n\nThe above is a summary of our previous conversation. Please refer to this context when responding to continue our conversation naturally.\n\n[CURRENT CONVERSATION]`;
 
         enhancedSystemPrompt = `${enhancedSystemPrompt}${compactedContextPrompt}`;
-        chatHistory = currentSession.messages;
+        chatHistory = historyMessages;
 
         console.log('📜 [CHAT HISTORY] Using compressed context in system prompt:', {
-          compactTokens: currentSession.compactContext.tokenCount,
-          compressedRounds: currentSession.compactContext.compressedFromRounds,
-          preservedMessages: currentSession.messages.length,
+          compactTokens: displaySession.compactContext.tokenCount,
+          compressedRounds: displaySession.compactContext.compressedFromRounds,
+          preservedMessages: historyMessages.length,
           systemPromptLength: enhancedSystemPrompt.length,
         });
       } else {
-        chatHistory = currentSession.messages;
+        chatHistory = historyMessages;
         console.log('📜 [CHAT HISTORY] Using regular history:', {
           messageCount: chatHistory.length,
         });
       }
 
-      // G5/G9: 透過 AgentRunController 統一調度 (单回合 when agentHarnessEnabled=false)
       const controller = new AgentRunController({
         assistantId,
-        sessionId: currentSession.id,
-        activeProjectId: currentSession.activeProjectId ?? null,
+        sessionId: displaySession.id,
+        activeProjectId: resumeCheckpoint?.projectId ?? displaySession.activeProjectId ?? null,
         systemPrompt: enhancedSystemPrompt,
         history: chatHistory,
-        message: userMessage,
+        message,
         knowledgeChunks: ragChunks,
-        agentHarnessEnabled,
-        sharedMode,
+        agentHarnessEnabled: resumeCheckpoint?.agentHarnessEnabled ?? agentHarnessEnabled,
+        sharedMode: resumeCheckpoint?.sharedMode ?? sharedMode,
+        resumeFrom: resumeCheckpoint,
         callbacks: {
           onChunk: chunk => {
             if (isThinkingRef.current) {
@@ -158,34 +347,82 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       });
       controllerRef.current = controller;
 
-      const result = await controller.run();
-      controllerRef.current = null;
+      const runWithController = async () => {
+        const result = await controller.run();
+        controllerRef.current = null;
 
-      // Capture final state (in case the controller didn't emit a terminal onStateChange).
-      setRunState(result.state);
-      actions?.setAgentRunState?.(result.state);
+        setRunState(result.state);
+        actions?.setAgentRunState?.(result.state);
 
-      const tokenInfo = result.tokenInfo;
-      const fullModelResponse = result.fullText;
+        const tokenInfo = result.tokenInfo;
+        const fullModelResponse = result.fullText;
 
-      setIsLoading(false);
-      setIsThinking(false);
-      setStatusText('');
+        setIsLoading(false);
+        setIsThinking(false);
+        setStatusText('');
 
-      const baseSession = sessionRef.current;
-      const newAiMessage = { role: 'model' as const, content: fullModelResponse };
-      const finalSession = applyTokenUsageToSession(
-        {
-          ...baseSession,
-          messages: [...baseSession.messages, newAiMessage],
-        },
-        tokenInfo,
-      );
+        const baseSession = sessionRef.current;
+        const newAiMessage = { role: 'model' as const, content: fullModelResponse };
+        const finalSession = applyTokenUsageToSession(
+          {
+            ...baseSession,
+            messages: [...baseSession.messages, newAiMessage],
+          },
+          tokenInfo,
+        );
 
-      sessionRef.current = finalSession;
-      setCurrentSession(finalSession);
-      setStreamingResponse('');
-      onNewMessage(finalSession, userMessage, fullModelResponse, tokenInfo);
+        sessionRef.current = finalSession;
+        setCurrentSession(finalSession);
+        setStreamingResponse('');
+        await onNewMessage(finalSession, message, fullModelResponse, tokenInfo);
+        await deleteCheckpoint(result.state.runId);
+        setInterruptedCheckpoint(null);
+        setResumeUnavailableReason(null);
+      };
+
+      const lockKey = `agent-run-${displaySession.id}`;
+      const lockManager =
+        typeof navigator !== 'undefined' && 'locks' in navigator ? navigator.locks : undefined;
+
+      if (lockManager) {
+        const lockResult = await lockManager.request(
+          lockKey,
+          resumeCheckpoint ? { mode: 'exclusive', ifAvailable: true } : { mode: 'exclusive' },
+          async lock => {
+            if (resumeCheckpoint && !lock) {
+              return false;
+            }
+
+            await runWithController();
+            return true;
+          },
+        );
+
+        if (resumeCheckpoint && lockResult === false) {
+          setIsLoading(false);
+          setIsThinking(false);
+          setStatusText('');
+          setRunState(null);
+          actions?.setAgentRunState?.(null);
+          setResumeError('工作仍在其他分頁進行中。');
+        }
+        return;
+      }
+
+      if (resumeCheckpoint) {
+        const claimed = await claimCheckpoint(resumeCheckpoint.runId);
+        if (!claimed) {
+          setIsLoading(false);
+          setIsThinking(false);
+          setStatusText('');
+          setRunState(null);
+          actions?.setAgentRunState?.(null);
+          setResumeError('無法取得續跑權限，可能已有其他分頁接手此工作。');
+          return;
+        }
+      }
+
+      await runWithController();
     } catch (error) {
       controllerRef.current = null;
       console.error('Error during chat stream:', error);
@@ -200,11 +437,74 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
   };
 
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) {
+      return;
+    }
+
+    const userMessage = input.trim();
+    setInput('');
+
+    if (interruptedCheckpoint) {
+      await persistCheckpointArchive(interruptedCheckpoint, {
+        clearProject: resumeUnavailableReason !== null && Boolean(interruptedCheckpoint.projectId),
+      });
+    }
+
+    const baseSession = sessionRef.current;
+    const newUserMessage = { role: 'user' as const, content: userMessage };
+    const updatedSession = {
+      ...baseSession,
+      messages: [...baseSession.messages, newUserMessage],
+    };
+
+    await executeRun({
+      message: userMessage,
+      displaySession: updatedSession,
+      historyMessages: baseSession.messages,
+    });
+  };
+
+  const handleResume = async () => {
+    if (!interruptedCheckpoint || resumeUnavailableReason) {
+      return;
+    }
+
+    const baseSession = sessionRef.current;
+    const mergedSession = {
+      ...baseSession,
+      messages: mergeCheckpointMessages(baseSession.messages, interruptedCheckpoint, false),
+      title: updateSessionTitle(baseSession.title, interruptedCheckpoint.originalMessage),
+      updatedAt: Date.now(),
+    };
+
+    await executeRun({
+      message: interruptedCheckpoint.originalMessage,
+      displaySession: mergedSession,
+      historyMessages:
+        interruptedCheckpoint.turnIndex === 0 ? baseSession.messages : mergedSession.messages,
+      resumeCheckpoint: interruptedCheckpoint,
+    });
+  };
+
+  const handleDiscardInterruptedRun = async () => {
+    if (!interruptedCheckpoint) {
+      return;
+    }
+
+    await persistCheckpointArchive(interruptedCheckpoint, {
+      clearProject: resumeUnavailableReason !== null && Boolean(interruptedCheckpoint.projectId),
+    });
+  };
+
   const handleStop = () => {
     controllerRef.current?.stop('user-stop');
   };
 
   const isRunning = runState?.status === 'running';
+  const interruptedTurnLabel = interruptedCheckpoint
+    ? `${Math.min(interruptedCheckpoint.turnIndex + 1, interruptedCheckpoint.maxTurns)}/${interruptedCheckpoint.maxTurns}`
+    : null;
 
   return (
     <div className='flex flex-col h-full bg-gray-900'>
@@ -236,6 +536,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                     setIsThinking(false);
                     setStatusText('');
                     setInput('');
+                    setInterruptedCheckpoint(null);
+                    setResumeUnavailableReason(null);
+                    setResumeError(null);
                   }}
                   className='flex items-center space-x-1 md:space-x-2 px-2 md:px-3 py-1.5 rounded-md transition-colors text-xs md:text-sm font-medium bg-purple-700 hover:bg-purple-600 text-purple-100 hover:text-white'
                   title='開啟新對話'
@@ -265,6 +568,53 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         <div
           className={`${isWorkspaceOpen ? 'mx-auto max-w-4xl' : 'max-w-none'} px-3 py-4 md:px-4 md:py-6`}
         >
+          {interruptedCheckpoint && (
+            <div
+              className='mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100'
+              data-testid='resume-run-banner'
+            >
+              <div className='flex flex-col gap-3 md:flex-row md:items-center md:justify-between'>
+                <div>
+                  <p className='font-semibold'>偵測到中斷的 Agent 工作</p>
+                  <p className='mt-1 text-amber-100/90'>
+                    上次工作在第 {interruptedTurnLabel}{' '}
+                    回合中斷。您可以繼續執行，或先將中斷前紀錄封存到對話中後捨棄這次工作。
+                  </p>
+                  {resumeUnavailableReason && (
+                    <p className='mt-2 text-amber-200'>{resumeUnavailableReason}</p>
+                  )}
+                  {resumeError && <p className='mt-2 text-rose-200'>{resumeError}</p>}
+                  {interruptedCheckpoint.partialText && (
+                    <details className='mt-2'>
+                      <summary className='cursor-pointer text-amber-50'>
+                        查看中斷時的部分輸出
+                      </summary>
+                      <pre className='mt-2 whitespace-pre-wrap rounded-lg bg-gray-900/40 p-3 text-xs text-amber-50'>
+                        {interruptedCheckpoint.partialText}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+                <div className='flex flex-wrap gap-2'>
+                  <button
+                    type='button'
+                    onClick={() => void handleResume()}
+                    disabled={Boolean(resumeUnavailableReason) || isLoading}
+                    className='rounded-lg bg-cyan-600 px-4 py-2 font-medium text-white transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50'
+                  >
+                    繼續
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => void handleDiscardInterruptedRun()}
+                    className='rounded-lg border border-amber-200/40 px-4 py-2 font-medium text-amber-50 transition hover:bg-amber-100/10'
+                  >
+                    捨棄並封存
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {currentSession.messages.length === 0 && !streamingResponse && !isThinking && (
             <WelcomeMessage
               assistantName={assistantName}

@@ -9,6 +9,10 @@ import {
 } from '../../services/tursoService';
 import { resolveShortUrl, recordShortUrlClick } from '../../services/shortUrlService';
 import { htmlPreviewService } from '../../services/htmlPreviewService';
+import {
+  deleteForSession as deleteRunCheckpointsForSession,
+  sweepStale as sweepStaleRunCheckpoints,
+} from '../../services/agentRunCheckpointService';
 import { htmlProjectStore } from '../../services/htmlProjectStore';
 import { htmlProjectImportService } from '../../services/htmlProjectImportService';
 import { getTemplateFiles } from '../../services/htmlProjectTemplates';
@@ -271,6 +275,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         }
       }
 
+      await sweepStaleRunCheckpoints();
       const storedAssistants = await db.getAllAssistants();
       dispatch({
         type: 'SET_ASSISTANTS',
@@ -360,7 +365,11 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   const deleteAssistant = useCallback(
     async (assistantId: string) => {
       if (window.confirm('確定要刪除此助理和所有聊天記錄嗎？')) {
+        const deletedSessions = await db.getSessionsForAssistant(assistantId);
         await db.deleteAssistant(assistantId);
+        await Promise.all(
+          deletedSessions.map(session => deleteRunCheckpointsForSession(session.id)),
+        );
         await htmlProjectStore.deleteProjectsByAssistant(assistantId);
         dispatch({ type: 'DELETE_ASSISTANT', payload: assistantId });
 
@@ -391,6 +400,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
 
       if (window.confirm('確定要刪除此聊天會話嗎？')) {
         await db.deleteSession(sessionId);
+        await deleteRunCheckpointsForSession(sessionId);
         const assistantSessions = await db.getSessionsForAssistant(state.currentAssistant.id);
         const sortedSessions = assistantSessions.sort((a, b) => b.createdAt - a.createdAt);
         dispatch({ type: 'SET_SESSIONS', payload: sortedSessions });

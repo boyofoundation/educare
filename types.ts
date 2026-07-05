@@ -429,6 +429,33 @@ export interface AgentRunState {
   updatedAt: number;
 }
 
+export interface AgentRunCheckpoint {
+  schemaVersion: 1;
+  runId: string;
+  sessionId: string;
+  assistantId: string;
+  projectId: string | null;
+  status: AgentRunStatus;
+  turnIndex: number;
+  maxTurns: number;
+  originalMessage: string;
+  committedHistoryDelta: ChatMessage[];
+  partialText?: string;
+  toolTrace: string[];
+  todoSummary?: HtmlProjectTodoSummary;
+  snapshotVersion?: number;
+  firstTurnPackSet?: HtmlProjectToolPackName[];
+  tokenTotals: {
+    promptTokenCount: number;
+    candidatesTokenCount: number;
+  };
+  agentHarnessEnabled: boolean;
+  sharedMode: boolean;
+  createdAt: number;
+  updatedAt: number;
+  heartbeatAt: number;
+}
+
 /**
  * RAG 設定介面 - 使用者可配置的全域 RAG 設定
  */

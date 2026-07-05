@@ -99,6 +99,10 @@ vi.mock('../../../services/tursoService', () => ({
   initializeDatabase: vi.fn().mockResolvedValue(undefined),
   getAssistantFromTurso: vi.fn().mockResolvedValue(null),
 }));
+vi.mock('../../../services/agentRunCheckpointService', () => ({
+  deleteForSession: vi.fn().mockResolvedValue(undefined),
+  sweepStale: vi.fn().mockResolvedValue(0),
+}));
 vi.mock('../../../services/htmlProjectStore', () => ({
   htmlProjectStore: {
     listProjectsByAssistant: vi.fn().mockResolvedValue([]),

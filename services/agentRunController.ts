@@ -1,4 +1,5 @@
 import {
+  type AgentRunCheckpoint,
   type AgentRunState,
   type AgentRunStatus,
   type ChatMessage,
@@ -13,6 +14,7 @@ import {
 } from '../types';
 import type { ProviderUsageMetadata } from './llmAdapter';
 import { buildSyntheticMessage, serializeAgentTurnLog } from './conversationUtils';
+import { saveCheckpoint, updateCheckpoint } from './agentRunCheckpointService';
 import { previewRuntimeDiagnostics } from './previewRuntimeDiagnostics';
 import { htmlProjectStore } from './htmlProjectStore';
 import { executeHtmlProjectToolCall } from './htmlProjectToolService';
@@ -30,6 +32,8 @@ export const CONTINUATION_PROMPT =
  * Kept small so the controller resumes quickly even when no preview is mounted.
  */
 const G4_RUNTIME_DIAGNOSTICS_WAIT_MS = 500;
+const CHECKPOINT_PARTIAL_FLUSH_MS = 2_000;
+const CHECKPOINT_HEARTBEAT_MS = 5_000;
 
 /**
  * Snapshot note recorded at run start (G11).
@@ -79,6 +83,8 @@ export interface AgentRunControllerOptions {
   maxTurns?: number;
   /** caller-provided AbortSignal (stop button). Controller also owns an internal AbortController. */
   signal?: AbortSignal;
+  /** interrupted-run checkpoint used to resume the existing run state. */
+  resumeFrom?: AgentRunCheckpoint;
   callbacks: AgentRunControllerCallbacks;
 }
 
@@ -86,6 +92,7 @@ export interface AgentRunResult {
   state: AgentRunState;
   fullText: string;
   finalHistory: ChatMessage[];
+  historyDelta: ChatMessage[];
   tokenInfo: {
     promptTokenCount: number;
     candidatesTokenCount: number;
@@ -131,30 +138,36 @@ export class AgentRunController {
   private state: AgentRunState;
   private userStopped = false;
   private callerSignalLinked = false;
+  private latestPartialText = '';
+  private checkpointFlush: ((force?: boolean) => Promise<void>) | null = null;
 
   constructor(options: AgentRunControllerOptions) {
     this.options = options;
     this.internalAbort = new AbortController();
 
+    const resumeFrom = options.resumeFrom;
     const maxTurns = options.agentHarnessEnabled
-      ? (options.maxTurns ?? (options.sharedMode ? 1 : 5))
+      ? (resumeFrom?.maxTurns ?? options.maxTurns ?? (options.sharedMode ? 1 : 5))
       : 1;
 
     const now = Date.now();
     this.state = {
-      runId: generateRunId(),
-      projectId: options.activeProjectId ?? '',
-      sessionId: options.sessionId ?? null,
-      assistantId: options.assistantId,
+      runId: resumeFrom?.runId ?? generateRunId(),
+      projectId: resumeFrom?.projectId ?? options.activeProjectId ?? '',
+      sessionId: resumeFrom?.sessionId ?? options.sessionId ?? null,
+      assistantId: resumeFrom?.assistantId ?? options.assistantId,
       status: 'running',
-      turnIndex: 0,
+      turnIndex: resumeFrom?.turnIndex ?? 0,
       maxTurns,
+      snapshotVersion: resumeFrom?.snapshotVersion,
+      todoSummary: resumeFrom?.todoSummary,
       previewDiagnosticState: 'not_executed',
-      autoContinued: false,
-      toolTrace: [],
-      startedAt: now,
+      autoContinued: (resumeFrom?.turnIndex ?? 0) > 0,
+      toolTrace: resumeFrom?.toolTrace ? [...resumeFrom.toolTrace] : [],
+      startedAt: resumeFrom?.createdAt ?? now,
       updatedAt: now,
     };
+    this.latestPartialText = resumeFrom?.partialText ?? '';
   }
 
   /**
@@ -164,12 +177,19 @@ export class AgentRunController {
   async run(): Promise<AgentRunResult> {
     const { options, state } = this;
     const callbacks = options.callbacks;
+    const resumeFrom = options.resumeFrom;
+    const sessionId = state.sessionId;
+    const originalMessage = resumeFrom?.originalMessage ?? options.message;
+    const checkpointHistory = resumeFrom?.committedHistoryDelta
+      ? [...resumeFrom.committedHistoryDelta]
+      : [];
+    const historyDelta: ChatMessage[] = [];
 
     // Link caller signal → internal abort (one-time).
     this.linkCallerSignal();
 
     // G11: best-effort run-start snapshot.
-    if (options.activeProjectId) {
+    if (!resumeFrom && options.activeProjectId) {
       try {
         const snapshot = await htmlProjectStore.createSnapshot(
           options.activeProjectId,
@@ -183,260 +203,383 @@ export class AgentRunController {
 
     const history = [...options.history];
     let fullText = '';
-    let totalPromptTokens = 0;
-    let totalCandidatesTokens = 0;
+    let totalPromptTokens = resumeFrom?.tokenTotals.promptTokenCount ?? 0;
+    let totalCandidatesTokens = resumeFrom?.tokenTotals.candidatesTokenCount ?? 0;
     let finalUsage: ProviderUsageMetadata | undefined;
     let finalProvider: string | undefined;
     let finalModel: string | undefined;
-    let firstTurnPackSet: HtmlProjectToolPackName[] | undefined;
+    let firstTurnPackSet = resumeFrom?.firstTurnPackSet
+      ? [...resumeFrom.firstTurnPackSet]
+      : undefined;
 
     // Loop-detection trackers.
     let lastFourToolsPrev: string[] | null = null;
     let lastTodoCompletedCount: number | null = null;
 
     // Aggregated tool trace across turns (for state.toolTrace).
-    const aggregatedToolTrace: string[] = [];
+    const aggregatedToolTrace: string[] = resumeFrom?.toolTrace ? [...resumeFrom.toolTrace] : [];
+
+    let lastPartialFlushAt = 0;
+
+    const buildCheckpointRecord = (
+      status: AgentRunStatus,
+      partialText?: string,
+    ): AgentRunCheckpoint => ({
+      schemaVersion: 1,
+      runId: state.runId,
+      sessionId: sessionId ?? '',
+      assistantId: options.assistantId,
+      projectId: options.activeProjectId ?? null,
+      status,
+      turnIndex: state.turnIndex,
+      maxTurns: state.maxTurns,
+      originalMessage,
+      committedHistoryDelta: [...checkpointHistory],
+      partialText,
+      toolTrace: [...state.toolTrace],
+      todoSummary: state.todoSummary,
+      snapshotVersion: state.snapshotVersion,
+      firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
+      tokenTotals: {
+        promptTokenCount: totalPromptTokens,
+        candidatesTokenCount: totalCandidatesTokens,
+      },
+      agentHarnessEnabled: options.agentHarnessEnabled,
+      sharedMode: options.sharedMode ?? false,
+      createdAt: resumeFrom?.createdAt ?? state.startedAt,
+      updatedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    });
+
+    const flushCheckpointProgress = async (force = false): Promise<void> => {
+      if (!sessionId) {
+        return;
+      }
+
+      const now = Date.now();
+      if (!force && now - lastPartialFlushAt < CHECKPOINT_PARTIAL_FLUSH_MS) {
+        return;
+      }
+
+      lastPartialFlushAt = now;
+      await updateCheckpoint(state.runId, {
+        status: 'running',
+        turnIndex: state.turnIndex,
+        committedHistoryDelta: [...checkpointHistory],
+        partialText: this.latestPartialText || undefined,
+        toolTrace: [...state.toolTrace],
+        todoSummary: state.todoSummary,
+        snapshotVersion: state.snapshotVersion,
+        firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
+        tokenTotals: {
+          promptTokenCount: totalPromptTokens,
+          candidatesTokenCount: totalCandidatesTokens,
+        },
+        heartbeatAt: now,
+        updatedAt: now,
+      });
+    };
+
+    const markTerminalCheckpoint = async (status: AgentRunStatus): Promise<void> => {
+      if (!sessionId) {
+        return;
+      }
+
+      await updateCheckpoint(state.runId, {
+        status,
+        turnIndex: state.turnIndex,
+        committedHistoryDelta: [...checkpointHistory],
+        partialText: this.latestPartialText || undefined,
+        toolTrace: [...state.toolTrace],
+        todoSummary: state.todoSummary,
+        snapshotVersion: state.snapshotVersion,
+        firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
+        tokenTotals: {
+          promptTokenCount: totalPromptTokens,
+          candidatesTokenCount: totalCandidatesTokens,
+        },
+        heartbeatAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    };
+
+    this.checkpointFlush = flushCheckpointProgress;
+
+    if (sessionId) {
+      await saveCheckpoint(buildCheckpointRecord('running', this.latestPartialText || undefined));
+    }
+
+    const heartbeatInterval =
+      sessionId !== null && sessionId !== undefined
+        ? window.setInterval(() => {
+            void flushCheckpointProgress();
+          }, CHECKPOINT_HEARTBEAT_MS)
+        : null;
 
     this.emitStateChange();
 
-    while (state.turnIndex < state.maxTurns) {
-      // Per-round abort check (in case caller signal aborted between turns).
-      if (this.internalAbort.signal.aborted) {
-        this.handleAbortTermination();
-        break;
-      }
+    try {
+      while (state.turnIndex < state.maxTurns) {
+        // Per-round abort check (in case caller signal aborted between turns).
+        if (this.internalAbort.signal.aborted) {
+          this.handleAbortTermination();
+          await markTerminalCheckpoint(this.state.status);
+          break;
+        }
 
-      callbacks.onTurnStart?.(state.turnIndex, state.maxTurns);
+        callbacks.onTurnStart?.(state.turnIndex, state.maxTurns);
 
-      const isContinuation = state.turnIndex > 0;
-      const messageForTurn = isContinuation ? CONTINUATION_PROMPT : options.message;
+        const isContinuation = state.turnIndex > 0;
+        const messageForTurn = isContinuation ? CONTINUATION_PROMPT : options.message;
+        const synthetic = isContinuation
+          ? buildSyntheticMessage('user', CONTINUATION_PROMPT, 'continuation prompt')
+          : null;
 
-      // G6: inject synthetic user message before continuation turns.
-      if (isContinuation) {
-        const synthetic = buildSyntheticMessage('user', CONTINUATION_PROMPT, 'continuation prompt');
-        history.push(synthetic);
-        state.autoContinued = true;
-      }
+        // G6: inject synthetic user message before continuation turns.
+        if (synthetic !== null) {
+          history.push(synthetic);
+          state.autoContinued = true;
+        }
 
-      // Holder object — TS uses DECLARED property types at read sites, which
-      // sidesteps the local-variable narrowing that occurs when assignments
-      // happen inside the onComplete closure.
-      const turn: {
-        finishReason: FinishReason;
-        text: string;
-        toolSequence: string[];
-        projectSummary: HtmlProjectSummary | null;
-        selectedPackSet?: HtmlProjectToolPackName[];
-      } = {
-        finishReason: 'complete',
-        text: '',
-        toolSequence: [],
-        projectSummary: null,
-      };
-      let streamError: Error | undefined;
-
-      try {
-        await streamChat({
-          systemPrompt: options.systemPrompt,
-          ragContext: options.ragContext,
-          history,
-          message: messageForTurn,
-          assistantId: options.assistantId,
-          sessionId: options.sessionId,
-          activeProjectId: options.activeProjectId,
-          knowledgeChunks: options.knowledgeChunks,
-          signal: this.internalAbort.signal,
-          packSetOverride: isContinuation ? firstTurnPackSet : undefined,
-          onChunk: text => {
-            callbacks.onChunk(text, state.turnIndex);
-          },
-          onProjectToolActivity: callbacks.onProjectToolActivity,
-          onComplete: (meta, text) => {
-            turn.text = text;
-            turn.finishReason = meta.finishReason ?? 'complete';
-            turn.toolSequence = meta.toolSequence ?? [];
-            turn.projectSummary = meta.projectSummary ?? null;
-            turn.selectedPackSet = meta.selectedPackSet;
-            totalPromptTokens += meta.promptTokenCount;
-            totalCandidatesTokens += meta.candidatesTokenCount;
-            if (meta.usage) {
-              finalUsage = meta.usage;
-            }
-            if (meta.provider) {
-              finalProvider = meta.provider;
-            }
-            if (meta.model) {
-              finalModel = meta.model;
-            }
-          },
-        });
-      } catch (error) {
-        streamError = error as Error;
-      }
-
-      // G17 (5a): abort priority — abort always wins.
-      if (this.internalAbort.signal.aborted || turn.finishReason === 'aborted') {
-        // No half-turn write: do NOT append the model message or synthetic
-        // continuation prompt for the next turn (we're terminating).
-        this.handleAbortTermination();
-        // Emit a turn summary reflecting the abort for any UI listeners.
-        const abortSummary: AgentRunTurnSummary = {
-          turnIndex: state.turnIndex,
-          finishReason: 'aborted',
-          text: turn.text,
-          toolSequence: turn.toolSequence,
-          todoSummary: turn.projectSummary?.todoSummary,
-          previewDiagnosticState: state.previewDiagnosticState,
-          autoContinued: state.turnIndex > 0,
+        // Holder object — TS uses DECLARED property types at read sites, which
+        // sidesteps the local-variable narrowing that occurs when assignments
+        // happen inside the onComplete closure.
+        const turn: {
+          finishReason: FinishReason;
+          text: string;
+          toolSequence: string[];
+          projectSummary: HtmlProjectSummary | null;
+          selectedPackSet?: HtmlProjectToolPackName[];
+        } = {
+          finishReason: 'complete',
+          text: '',
+          toolSequence: [],
+          projectSummary: null,
         };
-        callbacks.onTurnComplete?.(state.turnIndex, abortSummary);
-        break;
-      }
+        let streamError: Error | undefined;
+        this.latestPartialText = '';
 
-      if (streamError) {
-        state.status = 'failed';
-        state.finishReason = turn.finishReason;
-        this.emitStateChange();
-        callbacks.onError?.(streamError);
-        // Emit a turn summary even on failure (best-effort).
-        const failSummary = this.buildTurnSummary(
+        try {
+          await streamChat({
+            systemPrompt: options.systemPrompt,
+            ragContext: options.ragContext,
+            history,
+            message: messageForTurn,
+            assistantId: options.assistantId,
+            sessionId: options.sessionId,
+            activeProjectId: options.activeProjectId,
+            knowledgeChunks: options.knowledgeChunks,
+            signal: this.internalAbort.signal,
+            packSetOverride: isContinuation ? firstTurnPackSet : undefined,
+            onChunk: text => {
+              this.latestPartialText += text;
+              callbacks.onChunk(text, state.turnIndex);
+              void flushCheckpointProgress();
+            },
+            onProjectToolActivity: callbacks.onProjectToolActivity,
+            onComplete: (meta, text) => {
+              turn.text = text;
+              turn.finishReason = meta.finishReason ?? 'complete';
+              turn.toolSequence = meta.toolSequence ?? [];
+              turn.projectSummary = meta.projectSummary ?? null;
+              turn.selectedPackSet = meta.selectedPackSet;
+              totalPromptTokens += meta.promptTokenCount;
+              totalCandidatesTokens += meta.candidatesTokenCount;
+              if (meta.usage) {
+                finalUsage = meta.usage;
+              }
+              if (meta.provider) {
+                finalProvider = meta.provider;
+              }
+              if (meta.model) {
+                finalModel = meta.model;
+              }
+            },
+          });
+        } catch (error) {
+          streamError = error as Error;
+        }
+
+        // G17 (5a): abort priority — abort always wins.
+        if (this.internalAbort.signal.aborted || turn.finishReason === 'aborted') {
+          // No half-turn write: do NOT append the model message or synthetic
+          // continuation prompt for the next turn (we're terminating).
+          this.handleAbortTermination();
+          await markTerminalCheckpoint(this.state.status);
+          // Emit a turn summary reflecting the abort for any UI listeners.
+          const abortSummary: AgentRunTurnSummary = {
+            turnIndex: state.turnIndex,
+            finishReason: 'aborted',
+            text: turn.text,
+            toolSequence: turn.toolSequence,
+            todoSummary: turn.projectSummary?.todoSummary,
+            previewDiagnosticState: state.previewDiagnosticState,
+            autoContinued: state.turnIndex > 0,
+          };
+          callbacks.onTurnComplete?.(state.turnIndex, abortSummary);
+          break;
+        }
+
+        if (streamError) {
+          state.status = 'failed';
+          state.finishReason = turn.finishReason;
+          this.emitStateChange();
+          await markTerminalCheckpoint(state.status);
+          callbacks.onError?.(streamError);
+          // Emit a turn summary even on failure (best-effort).
+          const failSummary = this.buildTurnSummary(
+            state.turnIndex,
+            turn.finishReason,
+            turn.text,
+            turn.toolSequence,
+            turn.projectSummary,
+          );
+          callbacks.onTurnComplete?.(state.turnIndex, failSummary);
+          break;
+        }
+
+        // Capture first-turn pack set for continuation override (G2).
+        if (state.turnIndex === 0 && turn.selectedPackSet && turn.selectedPackSet.length > 0) {
+          firstTurnPackSet = [...turn.selectedPackSet];
+        }
+
+        // G1/G4: wait briefly for runtime diagnostics if there is an active project.
+        let turnPreviewDiagnosticState: HtmlProjectRuntimeDiagnosticStatus = 'not_executed';
+        if (options.activeProjectId && turn.projectSummary) {
+          try {
+            const diag = await previewRuntimeDiagnostics.waitForRuntimeDiagnostics(
+              options.activeProjectId,
+              turn.projectSummary.previewVersion,
+              G4_RUNTIME_DIAGNOSTICS_WAIT_MS,
+            );
+            turnPreviewDiagnosticState = diag.status;
+          } catch {
+            turnPreviewDiagnosticState = 'not_executed';
+          }
+        }
+        state.previewDiagnosticState = turnPreviewDiagnosticState;
+        if (turn.projectSummary?.todoSummary) {
+          state.todoSummary = turn.projectSummary.todoSummary;
+        }
+
+        // Update aggregated tool trace + state.toolTrace (last N for loop detection).
+        for (const toolName of turn.toolSequence) {
+          aggregatedToolTrace.push(toolName);
+        }
+        state.toolTrace = aggregatedToolTrace.slice(-32);
+
+        // G12 (AC#7): loop detection — TWO consecutive turns with identical
+        // last-4 tool sequences AND 0 todo `completed` delta → 'failed'.
+        const lastFour = turn.toolSequence.slice(-4);
+        const currentTodoCompleted = turn.projectSummary?.todoSummary.completed ?? 0;
+        if (
+          lastFourToolsPrev !== null &&
+          lastFour.length === 4 &&
+          lastFourToolsPrev.length === 4 &&
+          lastFourToolsPrev.every((tool, idx) => tool === lastFour[idx]) &&
+          currentTodoCompleted === lastTodoCompletedCount
+        ) {
+          state.status = 'failed';
+          state.finishReason = 'stop-route';
+          state.loopDetected = true;
+          this.emitStateChange();
+          await markTerminalCheckpoint(state.status);
+
+          const loopSummary = this.buildTurnSummary(
+            state.turnIndex,
+            'stop-route',
+            turn.text,
+            turn.toolSequence,
+            turn.projectSummary,
+          );
+          callbacks.onTurnComplete?.(state.turnIndex, loopSummary);
+          break;
+        }
+        // Update unconditionally so only TRULY consecutive turns are compared (G12).
+        // A zero/short-tool turn resets the chain — otherwise two matching 4-tool
+        // turns separated by a no-op turn could false-positive as a loop.
+        lastFourToolsPrev = lastFour;
+        lastTodoCompletedCount = currentTodoCompleted;
+
+        // G4: continuation decision — controller-verify has top priority.
+        const modelReportedComplete = turn.toolSequence.includes('reportTurnOutcome');
+        const finishIndicatesComplete =
+          turn.finishReason === 'complete' && !!options.activeProjectId;
+        const todoAllComplete = turn.projectSummary?.todoSummary.allComplete === true;
+
+        const needsG4Verify =
+          options.activeProjectId &&
+          (modelReportedComplete || finishIndicatesComplete || todoAllComplete);
+
+        let terminalComplete = false;
+        if (needsG4Verify && options.activeProjectId) {
+          const verified = await this.verifyCompletionAuthoritative();
+          if (verified.passes) {
+            terminalComplete = true;
+            if (verified.summary) {
+              turn.projectSummary = verified.summary;
+              state.todoSummary = verified.summary.todoSummary;
+            }
+            state.previewDiagnosticState = verified.diagnosticState;
+          }
+          // else: false-complete (AC#8) → fall through to continuation logic.
+        }
+
+        // Commit this turn to history (G6) — model message with agentTurnLog.
+        const agentTurnLog = serializeAgentTurnLog(
+          turn.toolSequence.length > 0
+            ? `tools: ${turn.toolSequence.join(', ')}`
+            : turn.text.slice(0, 200),
+        );
+        const modelMessage: ChatMessage = {
+          role: 'model',
+          content: turn.text,
+          agentTurnLog,
+        };
+        const committedMessages = synthetic ? [synthetic, modelMessage] : [modelMessage];
+        checkpointHistory.push(...committedMessages);
+        historyDelta.push(...committedMessages);
+        history.push(modelMessage);
+        this.latestPartialText = '';
+        fullText = turn.text;
+
+        // Emit per-turn summary.
+        const turnSummary = this.buildTurnSummary(
           state.turnIndex,
           turn.finishReason,
           turn.text,
           turn.toolSequence,
           turn.projectSummary,
         );
-        callbacks.onTurnComplete?.(state.turnIndex, failSummary);
-        break;
-      }
+        callbacks.onTurnComplete?.(state.turnIndex, turnSummary);
 
-      // Capture first-turn pack set for continuation override (G2).
-      if (state.turnIndex === 0 && turn.selectedPackSet && turn.selectedPackSet.length > 0) {
-        firstTurnPackSet = [...turn.selectedPackSet];
-      }
+        if (terminalComplete) {
+          state.status = 'complete';
+          state.finishReason = 'complete';
+          this.emitStateChange();
+          await markTerminalCheckpoint(state.status);
+          break;
+        }
 
-      // G1/G4: wait briefly for runtime diagnostics if there is an active project.
-      let turnPreviewDiagnosticState: HtmlProjectRuntimeDiagnosticStatus = 'not_executed';
-      if (options.activeProjectId && turn.projectSummary) {
-        try {
-          const diag = await previewRuntimeDiagnostics.waitForRuntimeDiagnostics(
-            options.activeProjectId,
-            turn.projectSummary.previewVersion,
-            G4_RUNTIME_DIAGNOSTICS_WAIT_MS,
-          );
-          turnPreviewDiagnosticState = diag.status;
-        } catch {
-          turnPreviewDiagnosticState = 'not_executed';
+        // Non-terminal completion signals that failed verify, or continuation
+        // finish reasons (tool-budget-exhausted / stop-route) → continue_needed.
+        // Advance to next turn if budget remains.
+        state.turnIndex += 1;
+        await flushCheckpointProgress(true);
+        if (state.turnIndex >= state.maxTurns) {
+          // Budget reached → run-level 'complete'.
+          state.status = 'complete';
+          state.finishReason = turn.finishReason;
+          this.emitStateChange();
+          await markTerminalCheckpoint(state.status);
+          break;
         }
       }
-      state.previewDiagnosticState = turnPreviewDiagnosticState;
-      if (turn.projectSummary?.todoSummary) {
-        state.todoSummary = turn.projectSummary.todoSummary;
+    } finally {
+      if (heartbeatInterval !== null) {
+        window.clearInterval(heartbeatInterval);
       }
-
-      // Update aggregated tool trace + state.toolTrace (last N for loop detection).
-      for (const toolName of turn.toolSequence) {
-        aggregatedToolTrace.push(toolName);
-      }
-      state.toolTrace = aggregatedToolTrace.slice(-32);
-
-      // G12 (AC#7): loop detection — TWO consecutive turns with identical
-      // last-4 tool sequences AND 0 todo `completed` delta → 'failed'.
-      const lastFour = turn.toolSequence.slice(-4);
-      const currentTodoCompleted = turn.projectSummary?.todoSummary.completed ?? 0;
-      if (
-        lastFourToolsPrev !== null &&
-        lastFour.length === 4 &&
-        lastFourToolsPrev.length === 4 &&
-        lastFourToolsPrev.every((tool, idx) => tool === lastFour[idx]) &&
-        currentTodoCompleted === lastTodoCompletedCount
-      ) {
-        state.status = 'failed';
-        state.finishReason = 'stop-route';
-        state.loopDetected = true;
-        this.emitStateChange();
-
-        const loopSummary = this.buildTurnSummary(
-          state.turnIndex,
-          'stop-route',
-          turn.text,
-          turn.toolSequence,
-          turn.projectSummary,
-        );
-        callbacks.onTurnComplete?.(state.turnIndex, loopSummary);
-        break;
-      }
-      // Update unconditionally so only TRULY consecutive turns are compared (G12).
-      // A zero/short-tool turn resets the chain — otherwise two matching 4-tool
-      // turns separated by a no-op turn could false-positive as a loop.
-      lastFourToolsPrev = lastFour;
-      lastTodoCompletedCount = currentTodoCompleted;
-
-      // G4: continuation decision — controller-verify has top priority.
-      const modelReportedComplete = turn.toolSequence.includes('reportTurnOutcome');
-      const finishIndicatesComplete = turn.finishReason === 'complete' && !!options.activeProjectId;
-      const todoAllComplete = turn.projectSummary?.todoSummary.allComplete === true;
-
-      const needsG4Verify =
-        options.activeProjectId &&
-        (modelReportedComplete || finishIndicatesComplete || todoAllComplete);
-
-      let terminalComplete = false;
-      if (needsG4Verify && options.activeProjectId) {
-        const verified = await this.verifyCompletionAuthoritative();
-        if (verified.passes) {
-          terminalComplete = true;
-          if (verified.summary) {
-            turn.projectSummary = verified.summary;
-            state.todoSummary = verified.summary.todoSummary;
-          }
-          state.previewDiagnosticState = verified.diagnosticState;
-        }
-        // else: false-complete (AC#8) → fall through to continuation logic.
-      }
-
-      // Commit this turn to history (G6) — model message with agentTurnLog.
-      const agentTurnLog = serializeAgentTurnLog(
-        turn.toolSequence.length > 0
-          ? `tools: ${turn.toolSequence.join(', ')}`
-          : turn.text.slice(0, 200),
-      );
-      const modelMessage: ChatMessage = {
-        role: 'model',
-        content: turn.text,
-        agentTurnLog,
-      };
-      history.push(modelMessage);
-      fullText = turn.text;
-
-      // Emit per-turn summary.
-      const turnSummary = this.buildTurnSummary(
-        state.turnIndex,
-        turn.finishReason,
-        turn.text,
-        turn.toolSequence,
-        turn.projectSummary,
-      );
-      callbacks.onTurnComplete?.(state.turnIndex, turnSummary);
-
-      if (terminalComplete) {
-        state.status = 'complete';
-        state.finishReason = 'complete';
-        this.emitStateChange();
-        break;
-      }
-
-      // Non-terminal completion signals that failed verify, or continuation
-      // finish reasons (tool-budget-exhausted / stop-route) → continue_needed.
-      // Advance to next turn if budget remains.
-      state.turnIndex += 1;
-      if (state.turnIndex >= state.maxTurns) {
-        // Budget reached → run-level 'complete'.
-        state.status = 'complete';
-        state.finishReason = turn.finishReason;
-        this.emitStateChange();
-        break;
-      }
+      this.checkpointFlush = null;
     }
 
     const telemetry = this.buildRunLevelTelemetry(
@@ -449,6 +592,7 @@ export class AgentRunController {
       state: this.state,
       fullText,
       finalHistory: history,
+      historyDelta,
       tokenInfo: {
         promptTokenCount: totalPromptTokens,
         candidatesTokenCount: totalCandidatesTokens,
@@ -470,6 +614,10 @@ export class AgentRunController {
       this.state.abortReason = reason;
     }
     this.internalAbort.abort(reason);
+  }
+
+  async flushCheckpoint(force = true): Promise<void> {
+    await this.checkpointFlush?.(force);
   }
 
   /** Current state snapshot (for UI activity panel). */
