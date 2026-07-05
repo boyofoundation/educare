@@ -9,10 +9,12 @@ import type { AgentRunController, AgentRunResult } from '../../../services/agent
 
 const {
   mockCreateNewSession,
+  mockUpdateSession,
   mockAgentRunControllerCtor,
   mockControllerRun,
   mockControllerStop,
   mockControllerGetInstance,
+  mockControllerFlushCheckpoint,
   mockPerformCachedRagQuery,
   mockResultsToContextString,
   mockSetActiveProject,
@@ -27,10 +29,12 @@ const {
   mockGetProject,
 } = vi.hoisted(() => ({
   mockCreateNewSession: vi.fn().mockResolvedValue(undefined),
+  mockUpdateSession: vi.fn().mockResolvedValue(undefined),
   mockAgentRunControllerCtor: vi.fn(),
   mockControllerRun: vi.fn(),
   mockControllerStop: vi.fn(),
   mockControllerGetInstance: vi.fn(),
+  mockControllerFlushCheckpoint: vi.fn().mockResolvedValue(undefined),
   mockPerformCachedRagQuery: vi.fn(),
   mockResultsToContextString: vi.fn(),
   mockSetActiveProject: vi.fn(),
@@ -51,6 +55,7 @@ vi.mock('../../core/useAppContext', async () => {
     AppContext: React.createContext({
       actions: {
         createNewSession: mockCreateNewSession,
+        updateSession: mockUpdateSession,
         setActiveProject: mockSetActiveProject,
         setProjectWorkspaceOpen: mockSetProjectWorkspaceOpen,
         setProjectPreview: mockSetProjectPreview,
@@ -69,7 +74,7 @@ vi.mock('../../../services/agentRunController', () => ({
     const instance: Partial<AgentRunController> = {
       run: mockControllerRun,
       stop: mockControllerStop,
-      flushCheckpoint: vi.fn().mockResolvedValue(undefined),
+      flushCheckpoint: mockControllerFlushCheckpoint,
       getState: mockControllerGetInstance,
     };
     return instance;
@@ -162,6 +167,17 @@ const interruptedCheckpoint: AgentRunCheckpoint = {
   heartbeatAt: 1640995200000,
 };
 
+const buildInterruptedCheckpoint = (
+  overrides: Partial<AgentRunCheckpoint> = {},
+): AgentRunCheckpoint => ({
+  ...interruptedCheckpoint,
+  ...overrides,
+  committedHistoryDelta:
+    overrides.committedHistoryDelta ?? interruptedCheckpoint.committedHistoryDelta,
+  toolTrace: overrides.toolTrace ?? interruptedCheckpoint.toolTrace,
+  tokenTotals: overrides.tokenTotals ?? interruptedCheckpoint.tokenTotals,
+});
+
 const buildRunResult = (fullText: string): AgentRunResult => ({
   state: completeState,
   fullText,
@@ -208,6 +224,14 @@ describe('ChatContainer', () => {
     await user.click(screen.getByRole('button', { name: '傳送訊息' }));
   };
 
+  const clickResume = async () => {
+    await userEvent.setup().click(screen.getByRole('button', { name: '繼續' }));
+  };
+
+  const clickDiscard = async () => {
+    await userEvent.setup().click(screen.getByRole('button', { name: '捨棄並封存' }));
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetInterruptedForSession.mockResolvedValue(null);
@@ -228,6 +252,7 @@ describe('ChatContainer', () => {
     vi.mocked(useAppContext).mockReturnValue({
       actions: {
         createNewSession: mockCreateNewSession,
+        updateSession: mockUpdateSession,
         setActiveProject: mockSetActiveProject,
         setProjectWorkspaceOpen: mockSetProjectWorkspaceOpen,
         setProjectPreview: mockSetProjectPreview,
@@ -511,6 +536,121 @@ describe('ChatContainer', () => {
     expect(screen.queryByText('🤖 生成回答...')).not.toBeInTheDocument();
   });
 
+  it('keeps the checkpoint when final session persistence fails after a completed run', async () => {
+    mockGetInterruptedForSession.mockResolvedValueOnce(
+      buildInterruptedCheckpoint({ runId: 'run-persist-failure' }),
+    );
+    const persistenceError = new Error('session persistence failed');
+    const onNewMessage = vi.fn().mockRejectedValueOnce(persistenceError);
+    mockControllerRun.mockResolvedValueOnce(buildRunResult('Recovered response'));
+
+    render(<ChatContainer {...defaultProps} onNewMessage={onNewMessage} />);
+    await screen.findByTestId('resume-run-banner');
+
+    await clickResume();
+
+    await waitFor(() => {
+      expect(screen.getByText('session persistence failed')).toBeInTheDocument();
+    });
+    expect(onNewMessage).toHaveBeenCalled();
+    expect(mockDeleteCheckpoint).not.toHaveBeenCalledWith('run-persist-failure');
+    expect(screen.getByTestId('resume-run-banner')).toBeInTheDocument();
+  });
+
+  it('flushes checkpoints on pagehide and hidden visibility changes while a run is active', async () => {
+    let resolveRun: (value: AgentRunResult) => void = () => undefined;
+    let stateChange: ((state: AgentRunState) => void) | null = null;
+    mockControllerRun.mockImplementationOnce(
+      async () =>
+        new Promise<AgentRunResult>(resolve => {
+          resolveRun = resolve;
+        }),
+    );
+    mockAgentRunControllerCtor.mockImplementationOnce((options: unknown) => {
+      const opts = options as { callbacks?: { onStateChange?: (s: AgentRunState) => void } };
+      stateChange = opts.callbacks?.onStateChange ?? null;
+      return {
+        run: mockControllerRun,
+        stop: mockControllerStop,
+        flushCheckpoint: mockControllerFlushCheckpoint,
+        getState: mockControllerGetInstance,
+      } as Partial<AgentRunController>;
+    });
+
+    render(<ChatContainer {...defaultProps} />);
+    await sendMessage('Trigger lifecycle flush');
+
+    await act(async () => {
+      stateChange?.(runningState);
+    });
+
+    window.dispatchEvent(new Event('pagehide'));
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden',
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await waitFor(() => {
+      expect(mockControllerFlushCheckpoint).toHaveBeenCalledWith(true);
+    });
+    expect(mockControllerFlushCheckpoint.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    await act(async () => {
+      resolveRun(buildRunResult('Flushed run'));
+    });
+  });
+
+  it('warns on beforeunload only while the controller reports a running state', async () => {
+    let resolveRun: (value: AgentRunResult) => void = () => undefined;
+    let stateChange: ((state: AgentRunState) => void) | null = null;
+    mockControllerGetInstance.mockReturnValue({ status: 'running' });
+    mockControllerRun.mockImplementationOnce(
+      async () =>
+        new Promise<AgentRunResult>(resolve => {
+          resolveRun = resolve;
+        }),
+    );
+    mockAgentRunControllerCtor.mockImplementationOnce((options: unknown) => {
+      const opts = options as { callbacks?: { onStateChange?: (s: AgentRunState) => void } };
+      stateChange = opts.callbacks?.onStateChange ?? null;
+      return {
+        run: mockControllerRun,
+        stop: mockControllerStop,
+        flushCheckpoint: mockControllerFlushCheckpoint,
+        getState: mockControllerGetInstance,
+      } as Partial<AgentRunController>;
+    });
+
+    render(<ChatContainer {...defaultProps} />);
+    await sendMessage('Before unload');
+
+    await act(async () => {
+      stateChange?.(runningState);
+    });
+
+    const beforeUnloadEvent = new Event('beforeunload') as Event & {
+      returnValue: boolean;
+    };
+    const preventDefaultSpy = vi.fn();
+    Object.defineProperty(beforeUnloadEvent, 'preventDefault', {
+      value: preventDefaultSpy,
+      configurable: true,
+    });
+
+    window.dispatchEvent(beforeUnloadEvent);
+
+    await waitFor(() => {
+      expect(preventDefaultSpy).toHaveBeenCalled();
+      expect(mockControllerFlushCheckpoint).toHaveBeenCalledWith(true);
+    });
+    expect(beforeUnloadEvent.returnValue).toBe(true);
+
+    await act(async () => {
+      resolveRun(buildRunResult('Warn me'));
+    });
+  });
+
   it('starts a new shared conversation from the header button', async () => {
     const user = userEvent.setup();
     const session = createMockChatSession({
@@ -533,7 +673,7 @@ describe('ChatContainer', () => {
     expect(screen.queryByText('Existing message')).not.toBeInTheDocument();
   });
 
-  it('renders a resume banner for an interrupted run', async () => {
+  it('renders a resume banner for a stale interrupted run', async () => {
     mockGetInterruptedForSession.mockResolvedValueOnce(interruptedCheckpoint);
 
     render(<ChatContainer {...defaultProps} />);
@@ -543,15 +683,269 @@ describe('ChatContainer', () => {
     expect(screen.getByText('Partial output')).toBeInTheDocument();
   });
 
-  it('discards interrupted work before sending a new message', async () => {
-    mockGetInterruptedForSession.mockResolvedValue(interruptedCheckpoint);
+  it('hides the resume banner when there is no stale interrupted checkpoint', async () => {
+    mockGetInterruptedForSession.mockResolvedValueOnce(null);
 
     render(<ChatContainer {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockGetInterruptedForSession).toHaveBeenCalledWith(defaultProps.session.id);
+    });
+    expect(screen.queryByTestId('resume-run-banner')).not.toBeInTheDocument();
+  });
+
+  it('auto-deletes interrupted checkpoints whose last committed message already matches the session tail', async () => {
+    mockGetInterruptedForSession.mockResolvedValueOnce(
+      buildInterruptedCheckpoint({
+        committedHistoryDelta: [{ role: 'model', content: 'Already persisted turn' }],
+      }),
+    );
+
+    const session = createMockChatSession({
+      messages: [{ role: 'model', content: 'Already persisted turn' }],
+    });
+
+    render(<ChatContainer {...defaultProps} session={session} />);
+
+    await waitFor(() => {
+      expect(mockDeleteCheckpoint).toHaveBeenCalledWith('run-interrupted');
+    });
+    expect(screen.queryByTestId('resume-run-banner')).not.toBeInTheDocument();
+  });
+
+  it('resumes by merging the original user message before committed history and using checkpoint flags', async () => {
+    const checkpoint = buildInterruptedCheckpoint({
+      projectId: 'project-77',
+      agentHarnessEnabled: false,
+      sharedMode: true,
+      committedHistoryDelta: [
+        { role: 'user', content: 'Resume this task', synthetic: true },
+        { role: 'model', content: 'First completed turn', agentTurnLog: 'tools: inspect' },
+      ],
+    });
+    mockGetInterruptedForSession.mockResolvedValueOnce(checkpoint);
+    mockGetProject.mockResolvedValueOnce({ id: 'project-77' });
+    mockControllerRun.mockResolvedValueOnce({
+      ...buildRunResult('Resumed final response'),
+      state: {
+        ...completeState,
+        runId: checkpoint.runId,
+      },
+    });
+
+    render(
+      <ChatContainer
+        {...defaultProps}
+        session={createMockChatSession({ activeProjectId: 'project-42' })}
+      />,
+    );
+    await screen.findByTestId('resume-run-banner');
+    expect(mockAgentRunControllerCtor).not.toHaveBeenCalled();
+
+    await clickResume();
+
+    await waitFor(() => {
+      expect(mockAgentRunControllerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Resume this task',
+          activeProjectId: 'project-77',
+          agentHarnessEnabled: false,
+          sharedMode: true,
+          resumeFrom: checkpoint,
+          history: [
+            expect.objectContaining({ role: 'user', content: 'Resume this task' }),
+            expect.objectContaining({ role: 'model', content: 'First completed turn' }),
+          ],
+        }),
+      );
+      expect(defaultProps.onNewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: 'user', content: 'Resume this task' }),
+            expect.objectContaining({ role: 'model', content: 'First completed turn' }),
+            expect.objectContaining({ role: 'model', content: 'Resumed final response' }),
+          ]),
+        }),
+        'Resume this task',
+        'Resumed final response',
+        expect.anything(),
+      );
+    });
+    const ctorArgs = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+      history: Array<{ role: string; content: string }>;
+    };
+    expect(
+      ctorArgs.history.filter(
+        message => message.role === 'user' && message.content === 'Resume this task',
+      ),
+    ).toHaveLength(1);
+    expect(ctorArgs.history.some(message => message.content.includes('⚠️ 上次工作已中斷'))).toBe(
+      false,
+    );
+    expect(mockDeleteCheckpoint).toHaveBeenCalledWith('run-interrupted');
+  });
+
+  it('resumes turn-zero checkpoints without replaying the original message into controller history', async () => {
+    const checkpoint = buildInterruptedCheckpoint({
+      turnIndex: 0,
+      committedHistoryDelta: [],
+    });
+    mockGetInterruptedForSession.mockResolvedValueOnce(checkpoint);
+    const session = createMockChatSession({
+      messages: [{ role: 'model', content: 'Existing session context' }],
+    });
+
+    render(<ChatContainer {...defaultProps} session={session} />);
+    await screen.findByTestId('resume-run-banner');
+
+    await clickResume();
+
+    await waitFor(() => {
+      expect(mockAgentRunControllerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          history: [{ role: 'model', content: 'Existing session context' }],
+        }),
+      );
+    });
+  });
+
+  it('shows an active-run error when a resume Web Lock is unavailable in another tab', async () => {
+    mockGetInterruptedForSession.mockResolvedValueOnce(interruptedCheckpoint);
+    const request = vi.fn(
+      async (
+        _name: string,
+        _options: unknown,
+        callback: (lock: object | null) => Promise<unknown>,
+      ) => callback(null),
+    );
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      writable: true,
+      value: { request },
+    });
+
+    render(<ChatContainer {...defaultProps} />);
+    await screen.findByTestId('resume-run-banner');
+
+    await clickResume();
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        'agent-run-test-session-1',
+        { mode: 'exclusive', ifAvailable: true },
+        expect.any(Function),
+      );
+      expect(mockControllerRun).not.toHaveBeenCalled();
+    });
+    expect(screen.getByText('工作仍在其他分頁進行中。')).toBeInTheDocument();
+    expect(mockSetAgentRunState).toHaveBeenCalledWith(null);
+    expect(mockClaimCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('falls back to claimCheckpoint when Web Locks are unavailable and shows an error if claim fails', async () => {
+    mockGetInterruptedForSession.mockResolvedValueOnce(interruptedCheckpoint);
+    mockClaimCheckpoint.mockResolvedValueOnce(null);
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+
+    render(<ChatContainer {...defaultProps} />);
+    await screen.findByTestId('resume-run-banner');
+
+    await clickResume();
+
+    await waitFor(() => {
+      expect(mockClaimCheckpoint).toHaveBeenCalledWith('run-interrupted');
+      expect(mockControllerRun).not.toHaveBeenCalled();
+    });
+    expect(screen.getByText('無法取得續跑權限，可能已有其他分頁接手此工作。')).toBeInTheDocument();
+  });
+
+  it('disables resume and clears workspace when the checkpoint project is missing', async () => {
+    const checkpoint = buildInterruptedCheckpoint({ projectId: 'project-missing' });
+    mockGetInterruptedForSession.mockResolvedValueOnce(checkpoint);
+    mockGetProject.mockResolvedValueOnce(undefined);
+
+    render(
+      <ChatContainer
+        {...defaultProps}
+        session={createMockChatSession({ activeProjectId: 'project-missing', title: 'New Chat' })}
+      />,
+    );
+    await screen.findByTestId('resume-run-banner');
+
+    expect(
+      screen.getByText('原本的 HTML 專案已不存在，只能捨棄並封存這次中斷紀錄。'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '繼續' })).toBeDisabled();
+
+    await clickDiscard();
+
+    await waitFor(() => {
+      expect(mockUpdateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activeProjectId: null,
+          title: 'Resume this task',
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: 'user', content: 'Resume this task' }),
+            expect.objectContaining({ role: 'model', content: 'First completed turn' }),
+            expect.objectContaining({
+              role: 'model',
+              content: '⚠️ 上次工作已中斷（第 2/5 回合）。',
+              synthetic: true,
+            }),
+          ]),
+        }),
+      );
+      expect(mockSetActiveProject).toHaveBeenCalledWith(null);
+      expect(mockSetProjectWorkspaceOpen).toHaveBeenCalledWith(false);
+      expect(mockClearProjectWorkspace).toHaveBeenCalled();
+      expect(mockDeleteCheckpoint).toHaveBeenCalledWith('run-interrupted');
+    });
+    expect(screen.queryByTestId('resume-run-banner')).not.toBeInTheDocument();
+  });
+
+  it('disables resume once the checkpoint already reached max turns', async () => {
+    mockGetInterruptedForSession.mockResolvedValueOnce(
+      buildInterruptedCheckpoint({ turnIndex: 5, maxTurns: 5 }),
+    );
+
+    render(<ChatContainer {...defaultProps} />);
+    await screen.findByTestId('resume-run-banner');
+
+    expect(
+      screen.getByText('這次工作已達最大回合數，只能捨棄並封存中斷前的紀錄。'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '繼續' })).toBeDisabled();
+  });
+
+  it('discards interrupted work before sending a new message and archives the interruption', async () => {
+    mockGetInterruptedForSession.mockResolvedValue(interruptedCheckpoint);
+
+    render(
+      <ChatContainer {...defaultProps} session={createMockChatSession({ title: 'New Chat' })} />,
+    );
     await screen.findByTestId('resume-run-banner');
 
     await sendMessage('New message after crash');
 
     await waitFor(() => {
+      expect(mockUpdateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Resume this task',
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: 'user', content: 'Resume this task' }),
+            expect.objectContaining({ role: 'model', content: 'First completed turn' }),
+            expect.objectContaining({
+              role: 'model',
+              content: '⚠️ 上次工作已中斷（第 2/5 回合）。',
+              synthetic: true,
+            }),
+          ]),
+        }),
+      );
       expect(mockDeleteCheckpoint).toHaveBeenCalledWith('run-interrupted');
       expect(mockSetAgentRunState).toHaveBeenCalledWith(null);
       expect(defaultProps.onNewMessage).toHaveBeenCalledWith(

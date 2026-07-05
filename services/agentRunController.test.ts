@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentRunCheckpoint } from '../types';
 
 const {
   mockStreamChat,
@@ -145,7 +146,6 @@ const installStreamChatTurns = (
     } = { params, completeCb: () => {} };
     invocations.push(captured);
 
-    // Capture onComplete so the test can trigger it with the right text.
     captured.completeCb = (text: string) => {
       (params.onComplete as (meta: unknown, fullText: string) => void)(
         {
@@ -162,7 +162,6 @@ const installStreamChatTurns = (
       );
     };
 
-    // Drive onChunk + onComplete synchronously to mimic the streaming contract.
     if (typeof params.onChunk === 'function') {
       (params.onChunk as (chunk: string) => void)(turn.text);
     }
@@ -171,6 +170,39 @@ const installStreamChatTurns = (
 
   return invocations;
 };
+
+const buildCheckpoint = (overrides: Partial<AgentRunCheckpoint> = {}): AgentRunCheckpoint => ({
+  schemaVersion: 1,
+  runId: overrides.runId ?? 'run-resume-1',
+  sessionId: overrides.sessionId ?? 'session-1',
+  assistantId: overrides.assistantId ?? 'assistant-1',
+  projectId: overrides.projectId ?? 'project-1',
+  status: overrides.status ?? 'running',
+  turnIndex: overrides.turnIndex ?? 1,
+  maxTurns: overrides.maxTurns ?? 3,
+  originalMessage: overrides.originalMessage ?? 'kick off',
+  committedHistoryDelta: overrides.committedHistoryDelta ?? [
+    {
+      role: 'model',
+      content: 'existing model turn',
+      agentTurnLog: 'tools: inspect',
+    },
+  ],
+  partialText: overrides.partialText ?? 'partial from interrupted turn',
+  toolTrace: overrides.toolTrace ?? ['inspect'],
+  todoSummary: overrides.todoSummary ?? baseProjectSummary.todoSummary,
+  snapshotVersion: overrides.snapshotVersion ?? 7,
+  firstTurnPackSet: overrides.firstTurnPackSet ?? ['inspect', 'todo_finalize'],
+  tokenTotals: overrides.tokenTotals ?? {
+    promptTokenCount: 20,
+    candidatesTokenCount: 8,
+  },
+  agentHarnessEnabled: overrides.agentHarnessEnabled ?? true,
+  sharedMode: overrides.sharedMode ?? false,
+  createdAt: overrides.createdAt ?? 1_720_000_000_000,
+  updatedAt: overrides.updatedAt ?? 1_720_000_000_000,
+  heartbeatAt: overrides.heartbeatAt ?? 1_720_000_000_000,
+});
 
 const buildOptions = (
   overrides: Partial<ConstructorParameters<typeof AgentRunController>[0]> = {},
@@ -221,6 +253,172 @@ describe('AgentRunController', () => {
     );
   });
 
+  it('AC#1 checkpoint: saves the initial running payload before the first LLM call', async () => {
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      expect(mockSaveCheckpoint).toHaveBeenCalledTimes(1);
+      (params.onComplete as (meta: unknown, fullText: string) => void)(
+        {
+          promptTokenCount: 10,
+          candidatesTokenCount: 5,
+          provider: 'gemini',
+          model: 'gemini-2.5-flash',
+          finishReason: 'complete',
+          projectSummary: completeProjectSummary,
+          toolSequence: ['reportTurnOutcome'],
+          selectedPackSet: ['inspect'],
+        },
+        'turn-text',
+      );
+    });
+
+    const opts = buildOptions();
+    const controller = new AgentRunController(opts);
+    const runId = controller.getState().runId;
+
+    await controller.run();
+
+    expect(mockSaveCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schemaVersion: 1,
+        runId,
+        sessionId: 'session-1',
+        assistantId: 'assistant-1',
+        projectId: 'project-1',
+        status: 'running',
+        turnIndex: 0,
+        maxTurns: 5,
+        originalMessage: 'kick off',
+        committedHistoryDelta: [],
+        partialText: undefined,
+        toolTrace: [],
+        tokenTotals: {
+          promptTokenCount: 0,
+          candidatesTokenCount: 0,
+        },
+        agentHarnessEnabled: true,
+        sharedMode: false,
+      }),
+    );
+  });
+
+  it('AC#2/AC#3 checkpoint: flushes streaming progress and committed turn state updates', async () => {
+    installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'tool-budget-exhausted',
+        text: 'first-turn-output',
+        toolSequence: ['readFile'],
+        projectSummary: baseProjectSummary,
+        promptTokenCount: 10,
+        candidatesTokenCount: 5,
+      }),
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        text: 'second-turn-output',
+        toolSequence: ['reportTurnOutcome'],
+        projectSummary: completeProjectSummary,
+        promptTokenCount: 4,
+        candidatesTokenCount: 2,
+      }),
+    ]);
+
+    const opts = buildOptions({ maxTurns: 2 });
+    const controller = new AgentRunController(opts);
+    const runId = controller.getState().runId;
+
+    await controller.run();
+
+    expect(mockUpdateCheckpoint).toHaveBeenNthCalledWith(
+      1,
+      runId,
+      expect.objectContaining({
+        status: 'running',
+        turnIndex: 0,
+        partialText: 'first-turn-output',
+        committedHistoryDelta: [],
+        toolTrace: [],
+        tokenTotals: {
+          promptTokenCount: 0,
+          candidatesTokenCount: 0,
+        },
+      }),
+    );
+
+    expect(mockUpdateCheckpoint).toHaveBeenNthCalledWith(
+      2,
+      runId,
+      expect.objectContaining({
+        status: 'running',
+        turnIndex: 1,
+        partialText: undefined,
+        committedHistoryDelta: [
+          expect.objectContaining({
+            role: 'model',
+            content: 'first-turn-output',
+          }),
+        ],
+        toolTrace: ['readFile'],
+        firstTurnPackSet: ['inspect'],
+        tokenTotals: {
+          promptTokenCount: 10,
+          candidatesTokenCount: 5,
+        },
+      }),
+    );
+  });
+
+  it('AC#3 checkpoint: emits fallback heartbeat updates when no chunks arrive', async () => {
+    vi.useFakeTimers();
+
+    let completeTurn: (() => void) | undefined;
+    mockStreamChat.mockImplementationOnce(
+      async (params: Record<string, unknown>) =>
+        new Promise<void>(resolve => {
+          completeTurn = () => {
+            (params.onComplete as (meta: unknown, fullText: string) => void)(
+              {
+                promptTokenCount: 10,
+                candidatesTokenCount: 5,
+                provider: 'gemini',
+                model: 'gemini-2.5-flash',
+                finishReason: 'complete',
+                projectSummary: completeProjectSummary,
+                toolSequence: ['reportTurnOutcome'],
+                selectedPackSet: ['inspect'],
+              },
+              'turn-without-chunks',
+            );
+            resolve();
+          };
+        }),
+    );
+
+    const opts = buildOptions();
+    const controller = new AgentRunController(opts);
+    const runId = controller.getState().runId;
+    const runPromise = controller.run();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(mockUpdateCheckpoint).toHaveBeenCalledWith(
+      runId,
+      expect.objectContaining({
+        status: 'running',
+        turnIndex: 0,
+        partialText: undefined,
+        committedHistoryDelta: [],
+        toolTrace: [],
+        tokenTotals: {
+          promptTokenCount: 0,
+          candidatesTokenCount: 0,
+        },
+      }),
+    );
+
+    completeTurn?.();
+    await runPromise;
+    vi.useRealTimers();
+  });
+
   it('AC#8 true-complete: terminates "complete" when G4 verify passes', async () => {
     installStreamChatTurns([
       buildStreamChatInvocation({
@@ -236,25 +434,31 @@ describe('AgentRunController', () => {
 
     expect(result.state.status).toBe('complete');
     expect(result.state.finishReason).toBe('complete');
-    // Exactly one turn — no continuation needed.
     expect(mockStreamChat).toHaveBeenCalledTimes(1);
-    // G4 verify called getProjectSummary directly.
     expect(mockExecuteHtmlProjectToolCall).toHaveBeenCalledWith(
       { name: 'getProjectSummary', args: { projectId: 'project-1' } },
       expect.objectContaining({ activeProjectId: 'project-1' }),
+    );
+    expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+      controller.getState().runId,
+      expect.objectContaining({
+        status: 'complete',
+        turnIndex: 0,
+        tokenTotals: {
+          promptTokenCount: 10,
+          candidatesTokenCount: 5,
+        },
+      }),
     );
     expect(opts.callbacks.onTurnComplete).toHaveBeenCalledTimes(1);
   });
 
   it('AC#8 false-complete: continues when reportTurnOutcome says complete but todos remain', async () => {
-    // Turn 0: model reports complete (reportTurnOutcome) but the live summary
-    // from getProjectSummary still shows open todos → verify FAILS → continue.
-    // Turn 1: now genuinely complete.
     installStreamChatTurns([
       buildStreamChatInvocation({
         finishReason: 'complete',
         toolSequence: ['reportTurnOutcome'],
-        projectSummary: baseProjectSummary, // still has pending todo
+        projectSummary: baseProjectSummary,
       }),
       buildStreamChatInvocation({
         finishReason: 'complete',
@@ -263,7 +467,6 @@ describe('AgentRunController', () => {
       }),
     ]);
 
-    // Make verify authoritative: turn 0 verify → still pending, turn 1 → complete.
     mockExecuteHtmlProjectToolCall
       .mockResolvedValueOnce({
         workspace: { activeProjectId: 'project-1', activityMessage: 'ok', preview: null },
@@ -284,6 +487,36 @@ describe('AgentRunController', () => {
     expect(result.state.status).toBe('complete');
     expect(result.state.turnIndex).toBe(1);
     expect(result.state.autoContinued).toBe(true);
+  });
+
+  it('AC#8 premise: no-project harness runs until budget because there is no early terminal branch', async () => {
+    installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        toolSequence: ['reportTurnOutcome'],
+        projectSummary: null,
+      }),
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        toolSequence: ['reportTurnOutcome'],
+        projectSummary: null,
+      }),
+    ]);
+
+    const opts = buildOptions({ activeProjectId: null, maxTurns: 2 });
+    const controller = new AgentRunController(opts);
+    const result = await controller.run();
+
+    expect(mockStreamChat).toHaveBeenCalledTimes(2);
+    expect(mockExecuteHtmlProjectToolCall).not.toHaveBeenCalled();
+    expect(mockSaveCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: null,
+        originalMessage: 'kick off',
+      }),
+    );
+    expect(result.state.status).toBe('complete');
+    expect(result.state.turnIndex).toBe(2);
   });
 
   it('AC#7 loop detection: 2 consecutive turns with identical last-4 tools + 0 todo delta → failed', async () => {
@@ -311,7 +544,6 @@ describe('AgentRunController', () => {
   });
 
   it('Budget: reaches maxTurns and terminates as complete at run level', async () => {
-    // Always non-terminal finishReason so we exercise the budget path.
     installStreamChatTurns([
       buildStreamChatInvocation({
         finishReason: 'tool-budget-exhausted',
@@ -320,7 +552,7 @@ describe('AgentRunController', () => {
       }),
       buildStreamChatInvocation({
         finishReason: 'tool-budget-exhausted',
-        toolSequence: ['readFile', 'writeFiles'], // different last-4 → no loop
+        toolSequence: ['readFile', 'writeFiles'],
         projectSummary: baseProjectSummary,
       }),
     ]);
@@ -335,8 +567,6 @@ describe('AgentRunController', () => {
   });
 
   it('AC#4 abort: stop() mid-run → status "stopped", finishReason "aborted", no half-turn write', async () => {
-    // Turn 0 returns a normal completion (no completion signals), then we stop
-    // before turn 1's streamChat runs.
     installStreamChatTurns([
       buildStreamChatInvocation({
         finishReason: 'tool-budget-exhausted',
@@ -351,8 +581,6 @@ describe('AgentRunController', () => {
 
     const controller = new AgentRunController(opts);
 
-    // Stop immediately after turn 0 completes (before turn 1 starts). We hook
-    // into onTurnComplete to fire stop().
     opts.callbacks.onTurnComplete = vi.fn(() => {
       controller.stop('user-stop');
     });
@@ -362,18 +590,33 @@ describe('AgentRunController', () => {
     expect(controller.getState().status).toBe('stopped');
     expect(controller.getState().finishReason).toBe('aborted');
     expect(controller.getState().abortReason).toBe('user-stop');
-    // Only the first turn ran — stop() prevented the second turn's streamChat.
     expect(mockStreamChat).toHaveBeenCalledTimes(1);
-    // Turn 0 completed normally (non-aborted) and emitted its own summary;
-    // no second turn summary fires because stop() terminated before turn 1.
     expect(opts.callbacks.onTurnComplete).toHaveBeenCalledTimes(1);
     expect(opts.callbacks.onTurnComplete).toHaveBeenCalledWith(
       0,
       expect.objectContaining({ finishReason: 'tool-budget-exhausted' }),
     );
-    // No continuation synthetic message was injected (only happens at the
-    // top of turn N+1, which never started).
+    expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+      controller.getState().runId,
+      expect.objectContaining({ status: 'stopped' }),
+    );
     expect(mockBuildSyntheticMessage).not.toHaveBeenCalled();
+  });
+
+  it('checkpoint: marks failed status when streamChat throws', async () => {
+    mockStreamChat.mockRejectedValueOnce(new Error('stream failed'));
+
+    const opts = buildOptions();
+    const controller = new AgentRunController(opts);
+
+    await controller.run();
+
+    expect(controller.getState().status).toBe('failed');
+    expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+      controller.getState().runId,
+      expect.objectContaining({ status: 'failed' }),
+    );
+    expect(opts.callbacks.onError).toHaveBeenCalledWith(expect.any(Error));
   });
 
   it('AC#6 packSetOverride: turnIndex>0 calls streamChat with packSetOverride (bypass)', async () => {
@@ -395,12 +638,90 @@ describe('AgentRunController', () => {
     const controller = new AgentRunController(opts);
     await controller.run();
 
-    // Turn 0: no packSetOverride (normal classification).
     const turn0Params = mockStreamChat.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(turn0Params?.packSetOverride).toBeUndefined();
-    // Turn 1: packSetOverride derived from turn 0's effective pack set.
     const turn1Params = mockStreamChat.mock.calls[1]?.[0] as Record<string, unknown>;
     expect(turn1Params?.packSetOverride).toEqual(['inspect', 'todo_finalize', 'preview_recheck']);
+  });
+
+  it('resumeFrom: preserves checkpoint state, carries token totals, and reuses the first-turn pack set', async () => {
+    installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        text: 'resumed-turn-output',
+        toolSequence: ['reportTurnOutcome'],
+        projectSummary: completeProjectSummary,
+        selectedPackSet: ['should-not-be-used'],
+        promptTokenCount: 7,
+        candidatesTokenCount: 3,
+      }),
+    ]);
+
+    const resumeFrom = buildCheckpoint();
+    const opts = buildOptions({
+      resumeFrom,
+      maxTurns: 99,
+      history: [{ role: 'user', content: 'existing session message' }],
+    });
+    const controller = new AgentRunController(opts);
+
+    expect(controller.getState()).toEqual(
+      expect.objectContaining({
+        runId: resumeFrom.runId,
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        assistantId: 'assistant-1',
+        turnIndex: 1,
+        maxTurns: 3,
+        snapshotVersion: 7,
+        todoSummary: baseProjectSummary.todoSummary,
+        autoContinued: true,
+        toolTrace: ['inspect'],
+        startedAt: resumeFrom.createdAt,
+      }),
+    );
+
+    const result = await controller.run();
+
+    expect(mockCreateSnapshot).not.toHaveBeenCalled();
+    expect(mockSaveCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: resumeFrom.runId,
+        committedHistoryDelta: resumeFrom.committedHistoryDelta,
+        partialText: resumeFrom.partialText,
+        firstTurnPackSet: resumeFrom.firstTurnPackSet,
+        tokenTotals: resumeFrom.tokenTotals,
+        createdAt: resumeFrom.createdAt,
+      }),
+    );
+    const resumedTurnParams = mockStreamChat.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(resumedTurnParams?.packSetOverride).toEqual(['inspect', 'todo_finalize']);
+    expect(mockBuildSyntheticMessage).toHaveBeenCalledWith(
+      'user',
+      CONTINUATION_PROMPT,
+      'continuation prompt',
+    );
+    expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+      resumeFrom.runId,
+      expect.objectContaining({
+        status: 'complete',
+        committedHistoryDelta: expect.arrayContaining([
+          expect.objectContaining({ content: 'existing model turn' }),
+          expect.objectContaining({ content: CONTINUATION_PROMPT }),
+          expect.objectContaining({ content: 'resumed-turn-output' }),
+        ]),
+        tokenTotals: {
+          promptTokenCount: 27,
+          candidatesTokenCount: 11,
+        },
+      }),
+    );
+    expect(result.tokenInfo).toEqual(
+      expect.objectContaining({
+        promptTokenCount: 27,
+        candidatesTokenCount: 11,
+      }),
+    );
   });
 
   it('G9 feature flag: agentHarnessEnabled=false → exactly ONE streamChat call', async () => {
@@ -417,9 +738,7 @@ describe('AgentRunController', () => {
     const result = await controller.run();
 
     expect(mockStreamChat).toHaveBeenCalledTimes(1);
-    // Legacy single-turn: never produces autoContinued.
     expect(result.state.autoContinued).toBe(false);
-    // Budget reached counts as run-level complete.
     expect(result.state.status).toBe('complete');
   });
 
@@ -442,17 +761,13 @@ describe('AgentRunController', () => {
     const controller = new AgentRunController(opts);
     const result = await controller.run();
 
-    // buildSyntheticMessage should have been invoked with the continuation prompt
-    // exactly once (for turn 1's user-side injection).
     expect(mockBuildSyntheticMessage).toHaveBeenCalledWith(
       'user',
       CONTINUATION_PROMPT,
       'continuation prompt',
     );
-    // Final history contains the synthetic user message.
     const syntheticMessages = result.finalHistory.filter(m => m.synthetic === true);
     expect(syntheticMessages.length).toBeGreaterThanOrEqual(1);
-    // The synthetic message should appear before the second model turn.
     const syntheticIdx = result.finalHistory.findIndex(m => m.synthetic === true);
     const lastModelIdx = result.finalHistory
       .map((m, i) => (m.role === 'model' ? i : -1))
@@ -461,7 +776,7 @@ describe('AgentRunController', () => {
     expect(syntheticIdx).toBeLessThan(lastModelIdx ?? Number.POSITIVE_INFINITY);
   });
 
-  it('sharedMode: default budget 1 → one turn only (no auto-continue)', async () => {
+  it('sharedMode: persists the shared flag in checkpoints and uses a default budget of 1', async () => {
     installStreamChatTurns([
       buildStreamChatInvocation({
         finishReason: 'tool-budget-exhausted',
@@ -474,6 +789,12 @@ describe('AgentRunController', () => {
     const controller = new AgentRunController(opts);
     const result = await controller.run();
 
+    expect(mockSaveCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sharedMode: true,
+        maxTurns: 1,
+      }),
+    );
     expect(mockStreamChat).toHaveBeenCalledTimes(1);
     expect(result.state.maxTurns).toBe(1);
     expect(result.state.status).toBe('complete');
