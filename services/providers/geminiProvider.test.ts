@@ -238,7 +238,15 @@ describe('GeminiProvider', () => {
     const responses = await collectResponses(provider);
 
     expect(create).toHaveBeenCalledTimes(1);
-    expect(sendMessageStream).toHaveBeenCalledWith({ message: 'Hi' });
+    expect(sendMessageStream).toHaveBeenCalledWith({
+      message: 'Hi',
+      config: expect.objectContaining({
+        systemInstruction: 'You are helpful.',
+        temperature: 0.7,
+        maxOutputTokens: 4096,
+        abortSignal: undefined,
+      }),
+    });
     expect(responses[0]?.text).toBe('hello');
     expect(responses.at(-1)?.isComplete).toBe(true);
   });
@@ -311,6 +319,44 @@ describe('GeminiProvider', () => {
     });
   });
 
+  it('downgrades forced tool choice to AUTO after the first tool round', async () => {
+    const provider = new GeminiProvider();
+    const { create, sendMessage } = await setupProvider(provider, {
+      sendMessageResponses: [
+        {
+          functionCalls: [
+            { id: 'call-1', name: 'render_preview', args: { projectId: 'project-1' } },
+          ],
+        },
+        {
+          text: 'Preview ready',
+          functionCalls: [],
+          usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 8 },
+        },
+      ],
+    });
+
+    const executeTool = vi.fn().mockResolvedValue({ ok: true });
+
+    await collectResponses(provider, {
+      tools: [...TOOL_DEFINITIONS],
+      toolChoice: { mode: 'requireSpecific', name: 'render_preview' },
+      executeTool,
+    });
+
+    const createConfig = create.mock.calls[0]?.[0]?.config;
+    expect(createConfig.toolConfig.functionCallingConfig).toEqual({
+      mode: FunctionCallingConfigMode.ANY,
+      allowedFunctionNames: ['render_preview'],
+    });
+
+    const followupConfig = sendMessage.mock.calls[1]?.[0]?.config;
+    expect(followupConfig.toolConfig.functionCallingConfig).toEqual({
+      mode: FunctionCallingConfigMode.AUTO,
+    });
+    expect(followupConfig.abortSignal).toBeUndefined();
+  });
+
   it('streams a text-only response even when tools are available', async () => {
     const provider = new GeminiProvider();
     const { sendMessage, sendMessageStream } = await setupProvider(provider, {
@@ -329,7 +375,20 @@ describe('GeminiProvider', () => {
       executeTool,
     });
 
-    expect(sendMessage).toHaveBeenCalledWith({ message: 'Hi' });
+    expect(sendMessage).toHaveBeenCalledWith({
+      message: 'Hi',
+      config: expect.objectContaining({
+        systemInstruction: 'You are helpful.',
+        temperature: 0.7,
+        maxOutputTokens: 4096,
+        abortSignal: undefined,
+        toolConfig: {
+          functionCallingConfig: {
+            mode: FunctionCallingConfigMode.AUTO,
+          },
+        },
+      }),
+    });
     expect(sendMessageStream).not.toHaveBeenCalled();
     expect(executeTool).not.toHaveBeenCalled();
     expect(responses).toEqual([

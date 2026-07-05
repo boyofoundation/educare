@@ -51,6 +51,8 @@ vi.mock('./htmlProjectAgentTelemetry', () => ({
 
 describe('streamChat', () => {
   beforeEach(() => {
+    mockHasKnowledgeChunks.mockReturnValue(false);
+
     vi.resetModules();
     vi.clearAllMocks();
     mockInitializeProviders.mockResolvedValue(undefined);
@@ -170,6 +172,10 @@ describe('streamChat', () => {
       },
     );
     expect(provider.streamChat).toHaveBeenCalledTimes(1);
+    expect(observedChatParams[0]?.toolChoice).toEqual({
+      mode: 'requireSpecific',
+      name: 'getProjectSummary',
+    });
     // 7 pack tools + 4 harness-resident tools (reportTurnOutcome,
     // getPreviewRuntimeErrors, listSnapshots, revertToSnapshot) auto-attached (T4/G2)
     expect(observedChatParams[0]?.tools).toHaveLength(11);
@@ -256,6 +262,51 @@ describe('streamChat', () => {
     expect(mockExecuteHtmlProjectToolCall).toHaveBeenCalledTimes(1);
   });
 
+  it('forces createProject on first HTML build turns without an active project', async () => {
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        yield {
+          text: 'created',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 4,
+            candidatesTokenCount: 2,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 0,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Build me a brand new expense tracker webpage.',
+      assistantId: 'assistant-1',
+      knowledgeChunks: [],
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+      onProjectToolActivity: vi.fn(),
+    });
+
+    expect(observedChatParams[0]?.toolChoice).toEqual({
+      mode: 'requireSpecific',
+      name: 'createProject',
+    });
+  });
+
   it('uses packSetOverride directly and bypasses intent classification', async () => {
     const observedChatParams: Array<Record<string, unknown>> = [];
     const provider = {
@@ -316,10 +367,112 @@ describe('streamChat', () => {
       const toolNames = (observedChatParams[0]?.tools as Array<{ name: string }> | undefined)?.map(
         t => t.name,
       );
+      expect(observedChatParams[0]?.toolChoice).toEqual({
+        mode: 'requireSpecific',
+        name: 'getProjectSummary',
+      });
       expect(toolNames).toEqual(expect.arrayContaining(['writeFiles', 'readFile']));
     } finally {
       classifySpy.mockRestore();
     }
+  });
+
+  it('forces an HTML project tool even when knowledge search is also enabled', async () => {
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        yield {
+          text: 'inspected',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 4,
+            candidatesTokenCount: 2,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 0,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+
+    mockGetActiveProvider.mockReturnValue(provider);
+    mockHasKnowledgeChunks.mockReturnValue(true);
+
+    const { streamChat } = await import('./llmService');
+
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Please finish this and recheck preview before we wrap up.',
+      assistantId: 'assistant-1',
+      activeProjectId: 'project-123',
+      knowledgeChunks: [{ fileName: 'guide.md', content: 'guide', relevanceScore: 0.9 }],
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+      onProjectToolActivity: vi.fn(),
+    });
+
+    expect(observedChatParams[0]?.toolChoice).toEqual({
+      mode: 'requireSpecific',
+      name: 'getProjectSummary',
+    });
+    const toolNames = (observedChatParams[0]?.tools as Array<{ name: string }> | undefined)?.map(
+      t => t.name,
+    );
+    expect(toolNames).toEqual(
+      expect.arrayContaining(['knowledgeSearch', 'getProjectSummary', 'checkProjectTodos']),
+    );
+  });
+
+  it('forces listProjects when reopening canvas work without an active project', async () => {
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        yield {
+          text: 'listed',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 4,
+            candidatesTokenCount: 2,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 0,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Can you reopen the earlier canvas prototype?',
+      assistantId: 'assistant-1',
+      knowledgeChunks: [],
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+      onProjectToolActivity: vi.fn(),
+    });
+
+    expect(observedChatParams[0]?.toolChoice).toEqual({
+      mode: 'requireSpecific',
+      name: 'listProjects',
+    });
   });
 
   it('threads params.signal into the provider chatParams', async () => {
@@ -363,6 +516,7 @@ describe('streamChat', () => {
     });
 
     expect(observedChatParams[0]?.signal).toBe(controller.signal);
+    expect(observedChatParams[0]?.toolChoice).toBeUndefined();
   });
 
   it('passes finishReason and projectSummary through onComplete metadata', async () => {

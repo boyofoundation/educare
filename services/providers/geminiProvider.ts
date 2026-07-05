@@ -210,17 +210,11 @@ export class GeminiProvider implements LLMProvider {
     return `${params.systemPrompt}\n\n${ragPreamble}`;
   }
 
-  private async createChat(
+  private buildChatConfig(
     params: ChatParams,
     finalSystemPrompt: string,
-    model: string,
-  ): Promise<Chat> {
-    const MAX_HISTORY_MESSAGES = 20;
-    const truncatedHistory =
-      params.history.length > MAX_HISTORY_MESSAGES
-        ? params.history.slice(-MAX_HISTORY_MESSAGES)
-        : params.history;
-
+    forceAutoToolChoice = false,
+  ) {
     const { visibleTools, toolChoice } = resolveToolPolicy(params);
     const functionDeclarations: FunctionDeclaration[] | undefined = visibleTools?.map(tool => ({
       name: tool.name,
@@ -228,12 +222,13 @@ export class GeminiProvider implements LLMProvider {
       parameters: tool.parameters,
     }));
 
-    const ai = await this.getAi();
-    if (!ai) {
-      throw new Error('請先在設定中配置 Gemini API KEY 才能使用聊天功能。');
-    }
-
     const functionCallingConfig = (() => {
+      if (forceAutoToolChoice) {
+        return {
+          mode: FunctionCallingConfigMode.AUTO,
+        };
+      }
+
       switch (toolChoice.mode) {
         case 'none':
           return {
@@ -256,21 +251,41 @@ export class GeminiProvider implements LLMProvider {
       }
     })();
 
+    return {
+      systemInstruction: finalSystemPrompt,
+      temperature: (params.temperature as number | undefined) || this.config.temperature || 0.7,
+      maxOutputTokens: (params.maxTokens as number | undefined) || this.config.maxTokens || 4096,
+      abortSignal: params.signal,
+      ...(functionDeclarations?.length
+        ? {
+            tools: [{ functionDeclarations }],
+            toolConfig: {
+              functionCallingConfig,
+            },
+          }
+        : {}),
+    };
+  }
+
+  private async createChat(
+    params: ChatParams,
+    finalSystemPrompt: string,
+    model: string,
+  ): Promise<Chat> {
+    const MAX_HISTORY_MESSAGES = 20;
+    const truncatedHistory =
+      params.history.length > MAX_HISTORY_MESSAGES
+        ? params.history.slice(-MAX_HISTORY_MESSAGES)
+        : params.history;
+
+    const ai = await this.getAi();
+    if (!ai) {
+      throw new Error('請先在設定中配置 Gemini API KEY 才能使用聊天功能。');
+    }
+
     return ai.chats.create({
       model,
-      config: {
-        systemInstruction: finalSystemPrompt,
-        temperature: (params.temperature as number | undefined) || this.config.temperature || 0.7,
-        maxOutputTokens: (params.maxTokens as number | undefined) || this.config.maxTokens || 4096,
-        ...(functionDeclarations?.length
-          ? {
-              tools: [{ functionDeclarations }],
-              toolConfig: {
-                functionCallingConfig,
-              },
-            }
-          : {}),
-      },
+      config: this.buildChatConfig(params, finalSystemPrompt),
       history: truncatedHistory.map(msg => ({
         role: msg.role,
         parts: [{ text: msg.content }],
@@ -357,7 +372,7 @@ export class GeminiProvider implements LLMProvider {
       if (params.tools?.length && params.executeTool) {
         let response = await chat.sendMessage({
           message: params.message,
-          config: params.signal ? { abortSignal: params.signal } : undefined,
+          config: this.buildChatConfig(params, finalSystemPrompt),
         });
         let toolRoundCount = 0;
         let usage = buildGeminiUsageMetadata(response);
@@ -537,7 +552,7 @@ export class GeminiProvider implements LLMProvider {
 
           response = await chat.sendMessage({
             message: toolResponses,
-            config: params.signal ? { abortSignal: params.signal } : undefined,
+            config: this.buildChatConfig(params, finalSystemPrompt, true),
           });
           const latestUsage = buildGeminiUsageMetadata(response);
           if (latestUsage?.source === 'api') {
@@ -557,7 +572,7 @@ export class GeminiProvider implements LLMProvider {
 
       const stream = await chat.sendMessageStream({
         message: params.message,
-        config: params.signal ? { abortSignal: params.signal } : undefined,
+        config: this.buildChatConfig(params, finalSystemPrompt),
       });
       let aggregatedResponse: GenerateContentResponse | null = null;
 

@@ -131,6 +131,55 @@ describe('AnthropicProvider', () => {
     });
   });
 
+  it('downgrades forced tool choice to auto after the first tool round', async () => {
+    const provider = new AnthropicProvider();
+    await provider.initialize({
+      apiKey: 'anthropic-test-key',
+      model: 'claude-opus-4-8',
+      maxToolRounds: 20,
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          content: [
+            {
+              type: 'tool_use',
+              id: 'call-1',
+              name: 'render_preview',
+              input: { projectId: 'project-1' },
+            },
+          ],
+          usage: { input_tokens: 2, output_tokens: 1 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          content: [{ type: 'text', text: 'done' }],
+          usage: { input_tokens: 3, output_tokens: 2 },
+        }),
+      );
+
+    const executeTool = vi.fn().mockResolvedValue({ ok: true });
+
+    for await (const chunk of provider.streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'hello',
+      tools: [...TOOL_DEFINITIONS],
+      toolChoice: { mode: 'requireSpecific', name: 'render_preview' },
+      executeTool,
+    })) {
+      void chunk;
+    }
+
+    const firstBody = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
+    const secondBody = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string);
+    expect(firstBody.tool_choice).toEqual({ type: 'tool', name: 'render_preview' });
+    expect(secondBody.tool_choice).toEqual({ type: 'auto' });
+  });
+
   it('supports multiple tool rounds before yielding final text', async () => {
     const provider = new AnthropicProvider();
     await provider.initialize({

@@ -272,6 +272,34 @@ export const streamChat = async (params: StreamChatParams) => {
     const visibleHtmlProjectToolNames = new Set(
       htmlProjectToolEnabled ? getHtmlProjectToolNamesForPacks(selectedPackSet) : [],
     );
+    const forcedHtmlProjectToolName = (() => {
+      if (!htmlProjectToolEnabled) {
+        return undefined;
+      }
+
+      if (!resolvedActiveProjectId && selectedPackSet.includes('bootstrap')) {
+        return effectiveIntentDecision.intent === 'resume_project'
+          ? 'listProjects'
+          : 'createProject';
+      }
+
+      if (visibleHtmlProjectToolNames.has('getProjectSummary')) {
+        return 'getProjectSummary';
+      }
+
+      return [...visibleHtmlProjectToolNames].find(
+        toolName =>
+          ![
+            'reportTurnOutcome',
+            'getPreviewRuntimeErrors',
+            'listSnapshots',
+            'revertToSnapshot',
+          ].includes(toolName),
+      );
+    })();
+    const htmlProjectToolChoice = forcedHtmlProjectToolName
+      ? ({ mode: 'requireSpecific', name: forcedHtmlProjectToolName } as const)
+      : undefined;
 
     const finalSystemPrompt = [
       systemPrompt,
@@ -372,6 +400,7 @@ export const streamChat = async (params: StreamChatParams) => {
       tools: tools.length > 0 ? tools : undefined,
       executeTool: tools.length > 0 ? executeTool : undefined,
       signal,
+      toolChoice: htmlProjectToolChoice,
     };
 
     for await (const response of activeProvider.streamChat(chatParams)) {

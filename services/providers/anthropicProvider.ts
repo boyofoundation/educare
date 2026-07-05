@@ -132,7 +132,12 @@ export class AnthropicProvider implements LLMProvider {
 
   private buildToolChoice(
     toolChoice: ReturnType<typeof resolveToolPolicy>['toolChoice'],
+    forceAuto = false,
   ): Record<string, string> {
+    if (forceAuto) {
+      return { type: 'auto' };
+    }
+
     switch (toolChoice.mode) {
       case 'none':
         return { type: 'none' };
@@ -401,7 +406,7 @@ export class AnthropicProvider implements LLMProvider {
               description: tool.prompt ? `${tool.description} ${tool.prompt}` : tool.description,
               input_schema: tool.parameters,
             })),
-            tool_choice: this.buildToolChoice(toolChoice),
+            tool_choice: this.buildToolChoice(toolChoice, true),
           },
           params.signal,
         );
