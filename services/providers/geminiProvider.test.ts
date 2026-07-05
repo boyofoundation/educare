@@ -252,6 +252,17 @@ describe('GeminiProvider', () => {
     });
 
     const createConfig = create.mock.calls[0]?.[0]?.config;
+    expect(createConfig.tools[0].functionDeclarations).toEqual([
+      expect.objectContaining({
+        name: 'render_preview',
+        parameters: TOOL_DEFINITIONS[0].parameters,
+      }),
+      expect.objectContaining({
+        name: 'search_docs',
+        parameters: TOOL_DEFINITIONS[1].parameters,
+      }),
+    ]);
+    expect(createConfig.tools[0].functionDeclarations[0]?.parametersJsonSchema).toBeUndefined();
     expect(createConfig.toolConfig.functionCallingConfig.mode).toBe(FunctionCallingConfigMode.AUTO);
     expect(createConfig.toolConfig.functionCallingConfig.allowedFunctionNames).toBeUndefined();
   });
@@ -267,7 +278,13 @@ describe('GeminiProvider', () => {
 
     const createConfig = create.mock.calls[0]?.[0]?.config;
     expect(createConfig.tools[0].functionDeclarations).toHaveLength(1);
-    expect(createConfig.tools[0].functionDeclarations[0]?.name).toBe('render_preview');
+    expect(createConfig.tools[0].functionDeclarations[0]).toEqual(
+      expect.objectContaining({
+        name: 'render_preview',
+        parameters: TOOL_DEFINITIONS[0].parameters,
+      }),
+    );
+    expect(createConfig.tools[0].functionDeclarations[0]?.parametersJsonSchema).toBeUndefined();
     expect(createConfig.toolConfig.functionCallingConfig.mode).toBe(FunctionCallingConfigMode.AUTO);
     expect(createConfig.toolConfig.functionCallingConfig.allowedFunctionNames).toBeUndefined();
   });
@@ -282,6 +299,12 @@ describe('GeminiProvider', () => {
     });
 
     const createConfig = create.mock.calls[0]?.[0]?.config;
+    expect(createConfig.tools[0].functionDeclarations[0]).toEqual(
+      expect.objectContaining({
+        name: 'render_preview',
+        parameters: TOOL_DEFINITIONS[0].parameters,
+      }),
+    );
     expect(createConfig.toolConfig.functionCallingConfig).toEqual({
       mode: FunctionCallingConfigMode.ANY,
       allowedFunctionNames: ['render_preview'],

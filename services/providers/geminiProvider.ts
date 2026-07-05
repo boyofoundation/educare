@@ -225,7 +225,7 @@ export class GeminiProvider implements LLMProvider {
     const functionDeclarations: FunctionDeclaration[] | undefined = visibleTools?.map(tool => ({
       name: tool.name,
       description: tool.prompt ? `${tool.description} ${tool.prompt}` : tool.description,
-      parametersJsonSchema: tool.parameters,
+      parameters: tool.parameters,
     }));
 
     const ai = await this.getAi();
