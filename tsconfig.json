@@ -21,5 +21,13 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "components", "**/*.test.ts", "**/*.test.tsx", "vite.config.ts"]
+  "include": [
+    "src",
+    "components",
+    "services",
+    "*.d.ts",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "vite.config.ts"
+  ]
 }

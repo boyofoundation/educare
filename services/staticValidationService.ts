@@ -354,7 +354,7 @@ const validateJsonContent = (content: string, path: string): HtmlProjectStaticDi
 // ---------------------------------------------------------------------------
 
 interface Parse5NodeLike {
-  nodeName: string;
+  nodeName?: string;
   tagName?: string;
   attrs?: Array<{ name: string; value: string }>;
   sourceCodeLocation?: {
@@ -363,14 +363,13 @@ interface Parse5NodeLike {
     endLine?: number;
     endCol?: number;
   };
-  childNodes?: Parse5NodeLike[];
+  childNodes?: Parse5TreeLike[];
   value?: string; // text node
-  parentNode?: Parse5NodeLike;
+  parentNode?: Parse5TreeLike;
 }
 
-interface Parse5DocumentLike {
-  childNodes?: Parse5NodeLike[];
-}
+/** parse5 文件/片段節點 (共用同 shape,以 childNodes 為進入點) */
+type Parse5TreeLike = Parse5NodeLike;
 
 type InlineKind = 'script' | 'style';
 
@@ -381,11 +380,11 @@ type InlineKind = 'script' | 'style';
  * 反映「真正放程式碼的那一行」,而不是標籤本身所在行)。
  */
 const collectInlineFragments = (
-  doc: Parse5DocumentLike,
+  doc: Parse5TreeLike | null | undefined,
   kind: InlineKind,
   collect: (fragment: string, startLine: number, startCol: number) => void,
 ): void => {
-  const walk = (node: Parse5NodeLike | undefined): void => {
+  const walk = (node: Parse5TreeLike | undefined): void => {
     if (!node) {
       return;
     }
@@ -427,7 +426,7 @@ const collectInlineFragments = (
       }
     }
   };
-  walk(doc);
+  walk(doc ?? undefined);
 };
 
 const translateInlineDiagnostic = (
@@ -453,7 +452,7 @@ const validateHtmlContent = (
   const diagnostics: HtmlProjectStaticDiagnostic[] = [];
 
   // 1) parse5 結構驗證
-  let doc: Parse5DocumentLike | null = null;
+  let doc: Parse5TreeLike | null = null;
   try {
     const onParseError = (error: { code: string; startLine?: number; startCol?: number }) => {
       const severity = classifyHtmlParseError(error.code);
@@ -482,7 +481,7 @@ const validateHtmlContent = (
     doc = parsers.parse5.parse(content, {
       sourceCodeLocationInfo: true,
       onParseError,
-    }) as Parse5DocumentLike;
+    }) as Parse5TreeLike;
   } catch (rawErr) {
     if (rawErr instanceof Error) {
       diagnostics.push({

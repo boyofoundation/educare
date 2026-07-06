@@ -24,6 +24,12 @@ import {
 } from './htmlProjectStore';
 import { getTemplateFiles, type HtmlProjectTemplate } from './htmlProjectTemplates';
 import { previewRuntimeDiagnostics } from './previewRuntimeDiagnostics';
+import {
+  formatStaticDiagnosticsForLlm,
+  preloadStaticValidationParsers,
+  validateProjectFiles,
+  type StaticValidationFileInput,
+} from './staticValidationService';
 
 const HTML_PROJECT_TOOL_NAMES = [
   'createProject',
@@ -305,6 +311,52 @@ const evaluateDynamicCodeWarning = (content: string): DynamicCodeWarningResult =
     return { warnings: [DYNAMIC_CODE_WARNING_MESSAGE] };
   }
   return {};
+};
+
+// ---------------------------------------------------------------------------
+// Static validation (Phase 1 MVP) — non-blocking 靜態語法驗證
+// 寫入完成後跑 acorn/css-tree/parse5,把診斷以 result.staticDiagnostics
+// 回傳 LLM;ok 時完全省略欄位以節省 token(見計畫 Step 6)。
+// ---------------------------------------------------------------------------
+
+interface StaticValidationToolPayload {
+  /** 格式化後的診斷字串 (LLM-friendly)。ok 時省略。 */
+  staticDiagnostics?: string;
+  /** 結構化 summary 供 telemetry / UI。ok 時省略。 */
+  staticValidation?: {
+    ok: boolean;
+    errorCount: number;
+    warningCount: number;
+    durationMs: number;
+  };
+  /** summary 尾端中文一句,有 error 時附加,給 createWorkspaceUpdate 進 UI。 */
+  summarySuffix: string;
+}
+
+const buildStaticValidationSuffix = (errorCount: number): string =>
+  errorCount > 0 ? `靜態驗證發現 ${errorCount} 項錯誤，見 staticDiagnostics。` : '';
+
+const runStaticValidation = async (
+  files: StaticValidationFileInput[],
+): Promise<StaticValidationToolPayload> => {
+  // 預熱 parser bundle (no-op 若已載入),讓 handler 內的 stats 不被首次 import 影響
+  await preloadStaticValidationParsers();
+  const result = await validateProjectFiles(files);
+  if (result.ok) {
+    return { summarySuffix: '' };
+  }
+  const errorCount = result.diagnostics.filter(d => d.severity === 'error').length;
+  const warningCount = result.diagnostics.filter(d => d.severity === 'warning').length;
+  return {
+    staticDiagnostics: formatStaticDiagnosticsForLlm(result.diagnostics),
+    staticValidation: {
+      ok: false,
+      errorCount,
+      warningCount,
+      durationMs: result.stats.durationMs,
+    },
+    summarySuffix: buildStaticValidationSuffix(errorCount),
+  };
 };
 
 const summarizeTodoSummary = ({
@@ -1246,17 +1298,34 @@ const handleWriteFiles = async (
     }
   }
 
+  // Phase 1 靜態驗證 (MVP):非阻塞,落檔後對每檔跑 acorn/css-tree/parse5
+  const staticValidation = await runStaticValidation(
+    files.map(file => ({
+      path: file.path,
+      kind: file.kind,
+      content: file.content,
+      encoding: file.encoding,
+    })),
+  );
+  const finalSummary = summary + staticValidation.summarySuffix;
+
   return {
     toolName: 'writeFiles',
-    summary,
+    summary: finalSummary,
     result: {
       projectId: project.id,
       updated: result.updated,
       previewVersion: result.previewVersion,
       ...(warnings.length > 0 ? { warnings } : {}),
       ...(moduleSyntaxSkipped ? { moduleSyntaxSkipped: true } : {}),
+      ...(staticValidation.staticDiagnostics
+        ? { staticDiagnostics: staticValidation.staticDiagnostics }
+        : {}),
+      ...(staticValidation.staticValidation
+        ? { staticValidation: staticValidation.staticValidation }
+        : {}),
     },
-    workspace: createWorkspaceUpdate(project.id, summary, preview),
+    workspace: createWorkspaceUpdate(project.id, finalSummary, preview),
   };
 };
 
@@ -1383,9 +1452,20 @@ const handleReplaceInFile = async (
   // G11 防禦性檢查
   const warningResult = evaluateDynamicCodeWarning(updatedContent);
 
+  // Phase 1 靜態驗證 (MVP):對編輯後的「全文」驗證,行號即真實檔案行號,無偏移
+  const staticValidation = await runStaticValidation([
+    {
+      path: file.path,
+      kind: file.kind,
+      content: updatedContent,
+      encoding: file.encoding,
+    },
+  ]);
+  const finalSummary = summary + staticValidation.summarySuffix;
+
   return {
     toolName: 'replaceInFile',
-    summary,
+    summary: finalSummary,
     result: {
       projectId: project.id,
       path: file.path,
@@ -1395,8 +1475,14 @@ const handleReplaceInFile = async (
       matchCount,
       ...(warningResult.warnings ? { warnings: warningResult.warnings } : {}),
       ...(warningResult.moduleSyntaxSkipped ? { moduleSyntaxSkipped: true } : {}),
+      ...(staticValidation.staticDiagnostics
+        ? { staticDiagnostics: staticValidation.staticDiagnostics }
+        : {}),
+      ...(staticValidation.staticValidation
+        ? { staticValidation: staticValidation.staticValidation }
+        : {}),
     },
-    workspace: createWorkspaceUpdate(project.id, summary, preview),
+    workspace: createWorkspaceUpdate(project.id, finalSummary, preview),
   };
 };
 
@@ -1573,9 +1659,20 @@ const handleModifyLinesInFile = async (
   // G11 防禦性檢查
   const warningResult = evaluateDynamicCodeWarning(updatedContent);
 
+  // Phase 1 靜態驗證 (MVP):對編輯後的全文驗證
+  const staticValidation = await runStaticValidation([
+    {
+      path: file.path,
+      kind: file.kind,
+      content: updatedContent,
+      encoding: file.encoding,
+    },
+  ]);
+  const finalSummary = summary + staticValidation.summarySuffix;
+
   return {
     toolName: 'modifyLinesInFile',
-    summary,
+    summary: finalSummary,
     result: {
       projectId: project.id,
       path: file.path,
@@ -1589,8 +1686,14 @@ const handleModifyLinesInFile = async (
       totalLinesAfter,
       ...(warningResult.warnings ? { warnings: warningResult.warnings } : {}),
       ...(warningResult.moduleSyntaxSkipped ? { moduleSyntaxSkipped: true } : {}),
+      ...(staticValidation.staticDiagnostics
+        ? { staticDiagnostics: staticValidation.staticDiagnostics }
+        : {}),
+      ...(staticValidation.staticValidation
+        ? { staticValidation: staticValidation.staticValidation }
+        : {}),
     },
-    workspace: createWorkspaceUpdate(project.id, summary, preview),
+    workspace: createWorkspaceUpdate(project.id, finalSummary, preview),
   };
 };
 
