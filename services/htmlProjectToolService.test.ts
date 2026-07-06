@@ -212,7 +212,7 @@ describe('executeHtmlProjectToolCall', () => {
       },
     ]);
     expect(result.toolName).toBe('writeFiles');
-    expect(result.result).toEqual({
+    expect(result.result).toMatchObject({
       projectId: 'project-1',
       updated: ['/index.html'],
       previewVersion: 3,

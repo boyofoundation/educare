@@ -71,6 +71,17 @@ export default defineConfig(() => {
               return 'ai-libs';
             }
 
+            // 靜態驗證 parser — 隔離到獨立 chunk 延遲載入
+            // (見 .omc/plans/static-validation-phase1-mvp.md 驗收 8)
+            if (
+              id.includes('node_modules/acorn') ||
+              id.includes('node_modules/css-tree') ||
+              id.includes('node_modules/csstree-validator') ||
+              id.includes('node_modules/parse5')
+            ) {
+              return 'static-validation';
+            }
+
             // 文件處理 - 按需分割
             if (id.includes('pdfjs-dist')) {
               return 'pdf-worker';
