@@ -22,6 +22,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   const [systemPrompt, setSystemPrompt] = useState('');
   const [ragChunks, setRagChunks] = useState<RagChunk[]>([]);
   const [agentHarnessEnabled, setAgentHarnessEnabled] = useState(true);
+  const [subagentDelegationEnabled, setSubagentDelegationEnabled] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [highlightFields, setHighlightFields] = useState(false);
 
@@ -35,12 +36,14 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setSystemPrompt(assistant.systemPrompt);
       setRagChunks(assistant.ragChunks || []);
       setAgentHarnessEnabled(assistant.agentHarnessEnabled ?? true);
+      setSubagentDelegationEnabled(assistant.subagentDelegationEnabled ?? false);
     } else {
       setName('');
       setDescription('');
       setSystemPrompt('您是一個有用且專業的 AI 助理。');
       setRagChunks([]);
       setAgentHarnessEnabled(true);
+      setSubagentDelegationEnabled(false);
     }
   }, [assistant]);
 
@@ -65,6 +68,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         ragChunks: ragChunks,
         createdAt: assistant?.createdAt || Date.now(),
         agentHarnessEnabled,
+        subagentDelegationEnabled,
       };
 
       // 只保存到本地，不自動上傳到 Turso
@@ -180,6 +184,35 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             <span id='agent-harness-help' className='mt-1 text-xs text-gray-500 leading-relaxed'>
               開啟後,模型會依 todo 進度與預覽診斷自動續跑(預設最多 5
               回合);關閉則退回單回合行為。Shared mode 不受此設定影響(續跑預算 = 1)。
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div className='mb-6'>
+        <label
+          htmlFor='subagent-delegation-enabled'
+          className='flex items-start gap-3 cursor-pointer select-none'
+        >
+          <input
+            id='subagent-delegation-enabled'
+            type='checkbox'
+            checked={subagentDelegationEnabled}
+            onChange={e => setSubagentDelegationEnabled(e.target.checked)}
+            disabled={isSaving}
+            className='mt-1 h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0'
+            aria-describedby='subagent-delegation-help'
+          />
+          <span className='flex flex-col'>
+            <span className='text-sm font-semibold text-gray-300'>
+              Subagent delegation (平行子代理人委派)
+            </span>
+            <span
+              id='subagent-delegation-help'
+              className='mt-1 text-xs text-gray-500 leading-relaxed'
+            >
+              開啟後,主模型可把研究或受限 HTML 工作委派給 1-4 個子代理人並行處理。這會增加 token
+              成本,且 shared mode 會在執行時強制停用。
             </span>
           </span>
         </label>

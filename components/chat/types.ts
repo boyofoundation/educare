@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { ChatMessage, ChatSession, RagChunk } from '../../types';
+import { ChatMessage, ChatSession, RagChunk, SubagentRunRecord } from '../../types';
 import type { ProviderUsageMetadata } from '../../services/llmAdapter';
 
 export interface ChatTokenInfo {
@@ -8,6 +8,10 @@ export interface ChatTokenInfo {
   usage?: ProviderUsageMetadata;
   provider?: string;
   model?: string;
+}
+
+export interface SubagentActivityCardProps {
+  runs: SubagentRunRecord[];
 }
 
 export interface MessageBubbleProps {
@@ -54,6 +58,8 @@ export interface ChatContainerProps {
   headerActions?: ReactNode;
   /** G9: 由父層 (AppShell) 從 assistant.agentHarnessEnabled 傳入;預設 true。 */
   agentHarnessEnabled?: boolean;
+  /** 子代理人委派開關。由父層從 assistant.subagentDelegationEnabled 傳入。 */
+  subagentDelegationEnabled?: boolean;
 }
 
 export interface WelcomeMessageProps {
@@ -69,4 +75,5 @@ export interface ThinkingIndicatorProps {
 export interface StreamingResponseProps {
   content: string;
   assistantName?: string;
+  subagentBatches?: Record<string, SubagentRunRecord[]>;
 }

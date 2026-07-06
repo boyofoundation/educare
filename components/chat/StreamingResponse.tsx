@@ -2,11 +2,12 @@ import React from 'react';
 import { StreamingResponseProps } from './types';
 import { GeminiIcon } from '../ui/Icons';
 import ReactMarkdown from 'react-markdown';
+import SubagentActivityCard from './SubagentActivityCard';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
 
-const StreamingResponse: React.FC<StreamingResponseProps> = ({ content }) => {
+const StreamingResponse: React.FC<StreamingResponseProps> = ({ content, subagentBatches }) => {
   const renderMessageContent = (content: string) => {
     return (
       <ReactMarkdown
@@ -114,7 +115,11 @@ const StreamingResponse: React.FC<StreamingResponseProps> = ({ content }) => {
             <GeminiIcon className='w-5 h-5 text-cyan-400' />
           </div>
         </div>
-        <div className='flex flex-col group'>
+        <div className='flex flex-col group gap-3'>
+          {subagentBatches &&
+            Object.entries(subagentBatches).map(([batchId, runs]) => (
+              <SubagentActivityCard key={batchId} runs={runs} />
+            ))}
           <div className='bg-gray-800/80 backdrop-blur-sm text-gray-100 px-5 py-3 rounded-2xl rounded-bl-md shadow-lg border border-gray-700/50 relative'>
             <div className='text-sm leading-relaxed'>
               {renderMessageContent(content)}

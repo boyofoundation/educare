@@ -363,6 +363,50 @@ describe('StreamingResponse', () => {
     });
   });
 
+  describe('Subagent Activity Rendering', () => {
+    it('renders delegated batches above the streaming bubble', () => {
+      // Arrange
+      const subagentBatches = {
+        'batch-1': [
+          {
+            id: 'run-complete',
+            batchId: 'batch-1',
+            name: 'Completed researcher',
+            task: 'Review retrieved sources',
+            status: 'complete' as const,
+            output: 'Completed summary',
+            toolSequence: ['Read', 'Search'],
+            durationMs: 1200,
+          },
+        ],
+        'batch-2': [
+          {
+            id: 'run-running',
+            batchId: 'batch-2',
+            name: 'Active planner',
+            task: 'Draft next action items',
+            status: 'running' as const,
+            output: 'Partial plan',
+            toolSequence: ['Plan'],
+            durationMs: 250,
+          },
+        ],
+      };
+
+      // Act
+      render(
+        <StreamingResponse content='Streaming with delegation' subagentBatches={subagentBatches} />,
+      );
+
+      // Assert
+      expect(screen.getAllByText('Subagent activity')).toHaveLength(2);
+      expect(screen.getByText('Completed researcher')).toBeInTheDocument();
+      expect(screen.getByText('Active planner')).toBeInTheDocument();
+      expect(screen.getByText('Completed summary')).toBeInTheDocument();
+      expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
+    });
+  });
+
   describe('Edge Cases', () => {
     it('should handle very long streaming content', () => {
       // Arrange

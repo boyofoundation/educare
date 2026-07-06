@@ -364,7 +364,10 @@ export class GeminiProvider implements LLMProvider {
 
     const model = params.model || this.config.model || 'gemini-2.5-flash';
     const finalSystemPrompt = this.buildFinalSystemPrompt(params);
-    const MAX_GEMINI_TOOL_ROUNDS = Math.max(1, Math.round(Number(this.config.maxToolRounds ?? 20)));
+    const MAX_GEMINI_TOOL_ROUNDS = Math.max(
+      1,
+      Math.round(Number(params.maxToolRounds ?? this.config.maxToolRounds ?? 20)),
+    );
 
     try {
       const chat = await this.createChat(params, finalSystemPrompt, model);

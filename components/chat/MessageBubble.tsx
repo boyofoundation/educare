@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { MessageBubbleProps } from './types';
 import { UserIcon, GeminiIcon } from '../ui/Icons';
 import ReactMarkdown from 'react-markdown';
+import SubagentActivityCard from './SubagentActivityCard';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeHighlightCodeLines from 'rehype-highlight-code-lines';
@@ -228,7 +229,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
               <GeminiIcon className='w-5 h-5 text-cyan-400' />
             </div>
           </div>
-          <div className='flex flex-col group'>
+          <div className='flex flex-col group gap-3'>
+            {message.subagentRuns && message.subagentRuns.length > 0 && (
+              <SubagentActivityCard runs={message.subagentRuns} />
+            )}
             <div className='bg-gray-800/80 backdrop-blur-sm text-gray-100 px-5 py-3 rounded-2xl rounded-bl-md shadow-lg border border-gray-700/50 relative'>
               <div className='text-sm leading-relaxed'>{renderMessageContent(message.content)}</div>
               {/* Message actions */}

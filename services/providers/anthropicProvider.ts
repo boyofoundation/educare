@@ -214,7 +214,10 @@ export class AnthropicProvider implements LLMProvider {
       let promptTokenCount = response.usage?.input_tokens || 0;
       let candidatesTokenCount = response.usage?.output_tokens || 0;
       let usage = buildAnthropicUsageMetadata(response.usage);
-      const maxToolRounds = Math.max(1, Math.round(Number(this.config.maxToolRounds ?? 20)));
+      const maxToolRounds = Math.max(
+        1,
+        Math.round(Number(params.maxToolRounds ?? this.config.maxToolRounds ?? 20)),
+      );
       let toolRoundCount = 0;
       let conversationMessages = [...messages];
       // ⑥ Round-tag array for context eviction (mirrors T1). 0 = initial build

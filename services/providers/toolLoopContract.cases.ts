@@ -31,6 +31,11 @@ export interface ToolLoopContractCase {
   /** Configure the provider mocks (fetch + executeTool) to reproduce the case. */
   setup: (mock: ToolLoopContractMock) => void;
   expectedFinishReason: FinishReason;
+  expectedToolRoundCount?: number;
+  chatParamsOverride?: {
+    maxToolRounds?: number;
+  };
+  requiresProviderDefaultRoundAssertion?: boolean;
   /** Always false today; the harness must never throw on these terminals (G13). */
   shouldThrow?: false;
 }
@@ -97,6 +102,43 @@ export const TOOL_LOOP_CONTRACT_CASES: ToolLoopContractCase[] = [
       );
     },
     expectedFinishReason: 'tool-budget-exhausted',
+    shouldThrow: false,
+  },
+  {
+    id: 'per-call-max-tool-rounds-override',
+    scenario:
+      'Nested callers can clamp the tool budget per request; maxToolRounds=2 must stop at round 2 even when provider defaults are higher.',
+    setup: ({ fetch }) => {
+      fetch.mockImplementation(() =>
+        Promise.resolve(
+          createJsonResponse(
+            buildToolCallResponse('loop-call', 'search_docs', { query: 'override' }),
+          ),
+        ),
+      );
+    },
+    expectedFinishReason: 'tool-budget-exhausted',
+    expectedToolRoundCount: 2,
+    chatParamsOverride: {
+      maxToolRounds: 2,
+    },
+    shouldThrow: false,
+  },
+  {
+    id: 'provider-default-max-tool-rounds',
+    scenario:
+      'When maxToolRounds is omitted, the tool loop must fall back to the provider default/configured round budget instead of silently using the nested override path.',
+    setup: ({ fetch }) => {
+      fetch.mockImplementation(() =>
+        Promise.resolve(
+          createJsonResponse(
+            buildToolCallResponse('loop-call', 'search_docs', { query: 'default-budget' }),
+          ),
+        ),
+      );
+    },
+    expectedFinishReason: 'tool-budget-exhausted',
+    requiresProviderDefaultRoundAssertion: true,
     shouldThrow: false,
   },
   {

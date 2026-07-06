@@ -174,4 +174,35 @@ describe('AssistantEditor', () => {
 
     expect(screen.getByText('Chunks: 1')).toBeInTheDocument();
   });
+
+  it('hydrates and saves the subagent delegation toggle', () => {
+    render(
+      <AssistantEditor
+        {...props}
+        assistant={{
+          ...TEST_ASSISTANTS.basic,
+          subagentDelegationEnabled: true,
+        }}
+      />,
+    );
+
+    const toggle = screen.getByLabelText(/Subagent delegation/);
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: '保存助理' }));
+
+    expect(props.onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subagentDelegationEnabled: false,
+      }),
+    );
+  });
+
+  it('shows delegation guidance about token cost and shared mode', () => {
+    render(<AssistantEditor {...props} />);
+
+    expect(screen.getByText(/增加 token 成本/)).toBeInTheDocument();
+    expect(screen.getByText(/shared mode 會在執行時強制停用/)).toBeInTheDocument();
+  });
 });

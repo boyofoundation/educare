@@ -900,12 +900,24 @@ describe('GeminiProvider', () => {
 
         let sendMessageResponses: MockResponse[] = [];
         let executeToolValue: unknown = { ok: true };
+        let providerParams: Record<string, unknown> = {};
 
         switch (testCase.id) {
           case 'budget-exhausted-no-throw':
             // Provider default maxToolRounds is 20; flood past it.
             sendMessageResponses = Array.from({ length: 22 }, () =>
               toolCallResponse('loop-call', 'search_docs', { query: 'loop' }),
+            );
+            break;
+          case 'per-call-max-tool-rounds-override':
+            sendMessageResponses = Array.from({ length: 4 }, () =>
+              toolCallResponse('loop-call', 'search_docs', { query: 'override' }),
+            );
+            providerParams = { maxToolRounds: testCase.chatParamsOverride?.maxToolRounds };
+            break;
+          case 'provider-default-max-tool-rounds':
+            sendMessageResponses = Array.from({ length: 22 }, () =>
+              toolCallResponse('loop-call', 'search_docs', { query: 'default-budget' }),
             );
             break;
           case 'pure-text-complete':
@@ -933,11 +945,18 @@ describe('GeminiProvider', () => {
 
         const responses = await collectResponses(provider, {
           ...sharedParams,
+          ...providerParams,
           executeTool,
         });
 
         expect(sendMessage).toHaveBeenCalled();
         expect(responses.at(-1)?.metadata?.finishReason).toBe(testCase.expectedFinishReason);
+        if (testCase.expectedToolRoundCount !== undefined) {
+          expect(responses.at(-1)?.metadata?.toolRoundCount).toBe(testCase.expectedToolRoundCount);
+        }
+        if (testCase.requiresProviderDefaultRoundAssertion) {
+          expect(responses.at(-1)?.metadata?.toolRoundCount).toBe(20);
+        }
       },
     );
   });

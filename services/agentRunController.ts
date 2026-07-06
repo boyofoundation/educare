@@ -11,6 +11,9 @@ import {
   type HtmlProjectToolPackName,
   type HtmlProjectWorkspaceUpdate,
   type RagChunk,
+  type SubagentActivityUpdate,
+  type SubagentRunRecord,
+  type TokenUsageTotals,
 } from '../types';
 import type { ProviderUsageMetadata } from './llmAdapter';
 import { buildSyntheticMessage, serializeAgentTurnLog } from './conversationUtils';
@@ -34,6 +37,44 @@ export const CONTINUATION_PROMPT =
 const G4_RUNTIME_DIAGNOSTICS_WAIT_MS = 500;
 const CHECKPOINT_PARTIAL_FLUSH_MS = 2_000;
 const CHECKPOINT_HEARTBEAT_MS = 5_000;
+const SUBAGENT_DELEGATE_TOOL_NAME = 'delegateToSubagents';
+
+const addOptionalTokenCount = (
+  current: number | undefined,
+  delta: number | undefined,
+): number | undefined => {
+  if (typeof current === 'undefined' && typeof delta === 'undefined') {
+    return undefined;
+  }
+
+  return (current ?? 0) + (delta ?? 0);
+};
+
+const mergeTokenUsageTotals = (
+  current: TokenUsageTotals | undefined,
+  delta: TokenUsageTotals | undefined,
+): TokenUsageTotals | undefined => {
+  if (!delta) {
+    return current;
+  }
+
+  return {
+    inputTokens: (current?.inputTokens ?? 0) + delta.inputTokens,
+    outputTokens: (current?.outputTokens ?? 0) + delta.outputTokens,
+    totalTokens: (current?.totalTokens ?? 0) + delta.totalTokens,
+    cacheCreationInputTokens: addOptionalTokenCount(
+      current?.cacheCreationInputTokens,
+      delta.cacheCreationInputTokens,
+    ),
+    cacheReadInputTokens: addOptionalTokenCount(
+      current?.cacheReadInputTokens,
+      delta.cacheReadInputTokens,
+    ),
+    cachedInputTokens: addOptionalTokenCount(current?.cachedInputTokens, delta.cachedInputTokens),
+    reasoningTokens: addOptionalTokenCount(current?.reasoningTokens, delta.reasoningTokens),
+    toolUseTokens: addOptionalTokenCount(current?.toolUseTokens, delta.toolUseTokens),
+  };
+};
 
 /**
  * Snapshot note recorded at run start (G11).
@@ -55,11 +96,13 @@ export interface AgentRunTurnSummary {
   todoSummary?: HtmlProjectTodoSummary;
   previewDiagnosticState: HtmlProjectRuntimeDiagnosticStatus;
   autoContinued: boolean;
+  subagentRuns?: SubagentRunRecord[];
 }
 
 export interface AgentRunControllerCallbacks {
   onChunk: (text: string, turnIndex: number) => void;
   onProjectToolActivity?: (update: HtmlProjectWorkspaceUpdate) => void;
+  onSubagentActivity?: (update: SubagentActivityUpdate) => void;
   onTurnStart?: (turnIndex: number, maxTurns: number) => void;
   onTurnComplete?: (turnIndex: number, summary: AgentRunTurnSummary) => void;
   onStateChange?: (state: AgentRunState) => void;
@@ -77,6 +120,7 @@ export interface AgentRunControllerOptions {
   knowledgeChunks?: RagChunk[];
   /** G9 feature flag — when false, run EXACTLY ONE turn (legacy single-turn behavior). */
   agentHarnessEnabled: boolean;
+  subagentDelegationEnabled?: boolean;
   /** shared mode → default budget 1 (auto-continue effectively off). */
   sharedMode?: boolean;
   /** override run budget; default 5 (sharedMode default 1). */
@@ -99,6 +143,7 @@ export interface AgentRunResult {
     usage?: ProviderUsageMetadata;
     provider?: string;
     model?: string;
+    subagentUsageTotals?: TokenUsageTotals;
   };
   telemetry: HtmlProjectAgentTelemetryEvent;
 }
@@ -180,6 +225,9 @@ export class AgentRunController {
     const resumeFrom = options.resumeFrom;
     const sessionId = state.sessionId;
     const originalMessage = resumeFrom?.originalMessage ?? options.message;
+    const effectiveDelegation =
+      (resumeFrom?.subagentDelegationEnabled ?? options.subagentDelegationEnabled ?? false) &&
+      !(options.sharedMode ?? false);
     const checkpointHistory = resumeFrom?.committedHistoryDelta
       ? [...resumeFrom.committedHistoryDelta]
       : [];
@@ -208,6 +256,7 @@ export class AgentRunController {
     let finalUsage: ProviderUsageMetadata | undefined;
     let finalProvider: string | undefined;
     let finalModel: string | undefined;
+    let finalSubagentUsageTotals: TokenUsageTotals | undefined;
     let firstTurnPackSet = resumeFrom?.firstTurnPackSet
       ? [...resumeFrom.firstTurnPackSet]
       : undefined;
@@ -245,6 +294,7 @@ export class AgentRunController {
         candidatesTokenCount: totalCandidatesTokens,
       },
       agentHarnessEnabled: options.agentHarnessEnabled,
+      subagentDelegationEnabled: effectiveDelegation,
       sharedMode: options.sharedMode ?? false,
       createdAt: resumeFrom?.createdAt ?? state.startedAt,
       updatedAt: Date.now(),
@@ -275,6 +325,7 @@ export class AgentRunController {
           promptTokenCount: totalPromptTokens,
           candidatesTokenCount: totalCandidatesTokens,
         },
+        subagentDelegationEnabled: effectiveDelegation,
         heartbeatAt: now,
         updatedAt: now,
       });
@@ -298,6 +349,7 @@ export class AgentRunController {
           promptTokenCount: totalPromptTokens,
           candidatesTokenCount: totalCandidatesTokens,
         },
+        subagentDelegationEnabled: effectiveDelegation,
         heartbeatAt: Date.now(),
         updatedAt: Date.now(),
       });
@@ -350,6 +402,8 @@ export class AgentRunController {
           toolSequence: string[];
           projectSummary: HtmlProjectSummary | null;
           selectedPackSet?: HtmlProjectToolPackName[];
+          subagentRuns?: SubagentRunRecord[];
+          subagentUsageTotals?: TokenUsageTotals;
         } = {
           finishReason: 'complete',
           text: '',
@@ -371,18 +425,22 @@ export class AgentRunController {
             knowledgeChunks: options.knowledgeChunks,
             signal: this.internalAbort.signal,
             packSetOverride: isContinuation ? firstTurnPackSet : undefined,
+            subagentDelegationEnabled: effectiveDelegation,
             onChunk: text => {
               this.latestPartialText += text;
               callbacks.onChunk(text, state.turnIndex);
               void flushCheckpointProgress();
             },
             onProjectToolActivity: callbacks.onProjectToolActivity,
+            onSubagentActivity: callbacks.onSubagentActivity,
             onComplete: (meta, text) => {
               turn.text = text;
               turn.finishReason = meta.finishReason ?? 'complete';
               turn.toolSequence = meta.toolSequence ?? [];
               turn.projectSummary = meta.projectSummary ?? null;
               turn.selectedPackSet = meta.selectedPackSet;
+              turn.subagentRuns = meta.subagentRuns;
+              turn.subagentUsageTotals = meta.subagentUsageTotals;
               totalPromptTokens += meta.promptTokenCount;
               totalCandidatesTokens += meta.candidatesTokenCount;
               if (meta.usage) {
@@ -393,6 +451,12 @@ export class AgentRunController {
               }
               if (meta.model) {
                 finalModel = meta.model;
+              }
+              if (meta.subagentUsageTotals) {
+                finalSubagentUsageTotals = mergeTokenUsageTotals(
+                  finalSubagentUsageTotals,
+                  meta.subagentUsageTotals,
+                );
               }
             },
           });
@@ -433,6 +497,7 @@ export class AgentRunController {
             turn.text,
             turn.toolSequence,
             turn.projectSummary,
+            turn.subagentRuns,
           );
           callbacks.onTurnComplete?.(state.turnIndex, failSummary);
           break;
@@ -472,12 +537,19 @@ export class AgentRunController {
         // last-4 tool sequences AND 0 todo `completed` delta → 'failed'.
         const lastFour = turn.toolSequence.slice(-4);
         const currentTodoCompleted = turn.projectSummary?.todoSummary.completed ?? 0;
+        const delegateOnlyLoopCandidate =
+          lastFour.length === 4 &&
+          lastFour.every(tool => tool === SUBAGENT_DELEGATE_TOOL_NAME) &&
+          lastFourToolsPrev?.length === 4 &&
+          lastFourToolsPrev.every(tool => tool === SUBAGENT_DELEGATE_TOOL_NAME);
+
         if (
           lastFourToolsPrev !== null &&
           lastFour.length === 4 &&
           lastFourToolsPrev.length === 4 &&
           lastFourToolsPrev.every((tool, idx) => tool === lastFour[idx]) &&
-          currentTodoCompleted === lastTodoCompletedCount
+          currentTodoCompleted === lastTodoCompletedCount &&
+          !delegateOnlyLoopCandidate
         ) {
           state.status = 'failed';
           state.finishReason = 'stop-route';
@@ -491,6 +563,7 @@ export class AgentRunController {
             turn.text,
             turn.toolSequence,
             turn.projectSummary,
+            turn.subagentRuns,
           );
           callbacks.onTurnComplete?.(state.turnIndex, loopSummary);
           break;
@@ -535,6 +608,7 @@ export class AgentRunController {
           role: 'model',
           content: turn.text,
           agentTurnLog,
+          subagentRuns: turn.subagentRuns,
         };
         const committedMessages = synthetic ? [synthetic, modelMessage] : [modelMessage];
         checkpointHistory.push(...committedMessages);
@@ -550,6 +624,7 @@ export class AgentRunController {
           turn.text,
           turn.toolSequence,
           turn.projectSummary,
+          turn.subagentRuns,
         );
         callbacks.onTurnComplete?.(state.turnIndex, turnSummary);
 
@@ -599,6 +674,7 @@ export class AgentRunController {
         usage: finalUsage,
         provider: finalProvider,
         model: finalModel,
+        subagentUsageTotals: finalSubagentUsageTotals,
       },
       telemetry,
     };
@@ -718,6 +794,7 @@ export class AgentRunController {
     text: string,
     toolSequence: string[],
     projectSummary: HtmlProjectSummary | null,
+    subagentRuns?: SubagentRunRecord[],
   ): AgentRunTurnSummary {
     return {
       turnIndex,
@@ -727,6 +804,7 @@ export class AgentRunController {
       todoSummary: projectSummary?.todoSummary,
       previewDiagnosticState: this.state.previewDiagnosticState,
       autoContinued: turnIndex > 0,
+      subagentRuns,
     };
   }
 

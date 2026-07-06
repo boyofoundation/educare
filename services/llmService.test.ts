@@ -7,6 +7,7 @@ const {
   mockBuildKnowledgeSearchResponse,
   mockExecuteHtmlProjectToolCall,
   mockRecordHtmlProjectTelemetryEvent,
+  mockRunSubagentBatch,
 } = vi.hoisted(() => ({
   mockInitializeProviders: vi.fn(),
   mockGetActiveProvider: vi.fn(),
@@ -14,6 +15,7 @@ const {
   mockBuildKnowledgeSearchResponse: vi.fn(),
   mockExecuteHtmlProjectToolCall: vi.fn(),
   mockRecordHtmlProjectTelemetryEvent: vi.fn(),
+  mockRunSubagentBatch: vi.fn(),
 }));
 
 vi.mock('./providerRegistry', () => ({
@@ -49,6 +51,17 @@ vi.mock('./htmlProjectAgentTelemetry', () => ({
   recordHtmlProjectTelemetryEvent: mockRecordHtmlProjectTelemetryEvent,
 }));
 
+vi.mock('./subagentService', () => ({
+  SUBAGENT_DELEGATE_TOOL_NAME: 'delegateToSubagents',
+  SUBAGENT_DELEGATION_SYSTEM_PROMPT: 'Subagent prompt',
+  buildSubagentDelegationToolDefinition: () => ({
+    name: 'delegateToSubagents',
+    description: 'Delegate subagent tasks',
+    parameters: { type: 'object', properties: { tasks: { type: 'array' } }, required: ['tasks'] },
+  }),
+  runSubagentBatch: mockRunSubagentBatch,
+}));
+
 describe('streamChat', () => {
   beforeEach(() => {
     mockHasKnowledgeChunks.mockReturnValue(false);
@@ -58,6 +71,12 @@ describe('streamChat', () => {
     mockInitializeProviders.mockResolvedValue(undefined);
     mockHasKnowledgeChunks.mockReturnValue(false);
     mockBuildKnowledgeSearchResponse.mockReturnValue({ matches: [] });
+    mockRunSubagentBatch.mockResolvedValue({
+      ok: true,
+      batchId: 'batch-1',
+      results: [],
+      usageTotals: undefined,
+    });
     mockExecuteHtmlProjectToolCall.mockResolvedValue({
       workspace: {
         activeProjectId: 'project-123',
@@ -610,5 +629,317 @@ describe('streamChat', () => {
       projectId: 'project-123',
       todoSummary: { allComplete: true, completed: 2 },
     });
+  });
+
+  it('exposes delegateToSubagents only when subagent delegation is enabled', async () => {
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        yield {
+          text: 'delegated',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 1,
+            candidatesTokenCount: 1,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 0,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+
+    mockGetActiveProvider.mockReturnValue(provider);
+    const { streamChat } = await import('./llmService');
+
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'parallel research please',
+      assistantId: 'assistant-1',
+      knowledgeChunks: [],
+      subagentDelegationEnabled: true,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    const toolNames = (observedChatParams[0]?.tools as Array<{ name: string }>).map(
+      tool => tool.name,
+    );
+    expect(toolNames).toContain('delegateToSubagents');
+
+    observedChatParams.length = 0;
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'parallel research please',
+      assistantId: 'assistant-1',
+      knowledgeChunks: [],
+      subagentDelegationEnabled: false,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+    const toolNamesWithoutDelegation = (
+      (observedChatParams[0]?.tools as Array<{ name: string }> | undefined) ?? []
+    ).map(tool => tool.name);
+    expect(toolNamesWithoutDelegation).not.toContain('delegateToSubagents');
+  });
+
+  it('forwards subagent batch results through onSubagentActivity and onComplete metadata', async () => {
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<unknown>;
+        const result = await executeTool({
+          name: 'delegateToSubagents',
+          args: {
+            tasks: [{ name: 'Spec', systemPrompt: 'Do work', task: 'Investigate' }],
+          },
+        });
+        expect(result).toMatchObject({ ok: true, batchId: 'batch-1' });
+        yield {
+          text: 'done',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 4,
+            candidatesTokenCount: 2,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 1,
+            repeatedRecoverableErrors: [],
+            finishReason: 'complete',
+          },
+        };
+      }),
+    };
+
+    mockRunSubagentBatch.mockImplementation(async (_tasks, _env, callbacks) => {
+      callbacks?.onActivity?.({
+        batchId: 'batch-1',
+        runs: [
+          {
+            id: 'run-1',
+            batchId: 'batch-1',
+            name: 'Spec',
+            task: 'Investigate',
+            status: 'complete',
+            output: 'Subagent output',
+            toolSequence: ['searchKnowledgeBase'],
+            durationMs: 12,
+          },
+        ],
+      });
+      return {
+        ok: true,
+        batchId: 'batch-1',
+        results: [
+          {
+            name: 'Spec',
+            status: 'complete',
+            output: 'Subagent output',
+            toolSequence: ['searchKnowledgeBase'],
+          },
+        ],
+        usageTotals: {
+          inputTokens: 3,
+          outputTokens: 2,
+          totalTokens: 5,
+        },
+      };
+    });
+
+    mockGetActiveProvider.mockReturnValue(provider);
+    const { streamChat } = await import('./llmService');
+    const onSubagentActivity = vi.fn();
+    const onComplete = vi.fn();
+
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'parallel research please',
+      assistantId: 'assistant-1',
+      knowledgeChunks: [],
+      subagentDelegationEnabled: true,
+      onChunk: vi.fn(),
+      onSubagentActivity,
+      onComplete,
+    });
+
+    expect(onSubagentActivity).toHaveBeenCalledWith({
+      batchId: 'batch-1',
+      runs: [
+        expect.objectContaining({
+          id: 'run-1',
+          batchId: 'batch-1',
+          name: 'Spec',
+          status: 'complete',
+        }),
+      ],
+    });
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subagentRuns: [expect.objectContaining({ id: 'run-1', batchId: 'batch-1' })],
+        subagentUsageTotals: {
+          inputTokens: 3,
+          outputTokens: 2,
+          totalTokens: 5,
+        },
+      }),
+      '',
+    );
+  });
+
+  it('aggregates subagent usage totals across multiple delegate batches in one turn', async () => {
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<unknown>;
+
+        await executeTool({
+          name: 'delegateToSubagents',
+          args: {
+            tasks: [{ name: 'Batch one', systemPrompt: 'Do work', task: 'Investigate one' }],
+          },
+        });
+        await executeTool({
+          name: 'delegateToSubagents',
+          args: {
+            tasks: [{ name: 'Batch two', systemPrompt: 'Do work', task: 'Investigate two' }],
+          },
+        });
+
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 2,
+            candidatesTokenCount: 1,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 2,
+            repeatedRecoverableErrors: [],
+            finishReason: 'complete',
+          },
+        };
+      }),
+    };
+
+    mockRunSubagentBatch
+      .mockImplementationOnce(async (_tasks, _env, callbacks) => {
+        callbacks?.onActivity?.({
+          batchId: 'batch-1',
+          runs: [
+            {
+              id: 'run-1',
+              batchId: 'batch-1',
+              name: 'Batch one',
+              task: 'Investigate one',
+              status: 'complete',
+              output: 'Result one',
+              toolSequence: ['searchKnowledgeBase'],
+              durationMs: 10,
+            },
+          ],
+        });
+        return {
+          ok: true,
+          batchId: 'batch-1',
+          results: [
+            {
+              name: 'Batch one',
+              status: 'complete',
+              output: 'Result one',
+              toolSequence: ['searchKnowledgeBase'],
+            },
+          ],
+          usageTotals: {
+            inputTokens: 3,
+            outputTokens: 2,
+            totalTokens: 5,
+          },
+        };
+      })
+      .mockImplementationOnce(async (_tasks, _env, callbacks) => {
+        callbacks?.onActivity?.({
+          batchId: 'batch-2',
+          runs: [
+            {
+              id: 'run-2',
+              batchId: 'batch-2',
+              name: 'Batch two',
+              task: 'Investigate two',
+              status: 'complete',
+              output: 'Result two',
+              toolSequence: ['readFile'],
+              durationMs: 11,
+            },
+          ],
+        });
+        return {
+          ok: true,
+          batchId: 'batch-2',
+          results: [
+            {
+              name: 'Batch two',
+              status: 'complete',
+              output: 'Result two',
+              toolSequence: ['readFile'],
+            },
+          ],
+          usageTotals: {
+            inputTokens: 7,
+            outputTokens: 5,
+            totalTokens: 12,
+          },
+        };
+      });
+
+    mockGetActiveProvider.mockReturnValue(provider);
+    const { streamChat } = await import('./llmService');
+    const onComplete = vi.fn();
+
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'parallel research twice please',
+      assistantId: 'assistant-1',
+      knowledgeChunks: [],
+      subagentDelegationEnabled: true,
+      onChunk: vi.fn(),
+      onComplete,
+    });
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subagentRuns: [
+          expect.objectContaining({ id: 'run-1', batchId: 'batch-1' }),
+          expect.objectContaining({ id: 'run-2', batchId: 'batch-2' }),
+        ],
+        subagentUsageTotals: {
+          inputTokens: 10,
+          outputTokens: 7,
+          totalTokens: 17,
+        },
+      }),
+      '',
+    );
   });
 });

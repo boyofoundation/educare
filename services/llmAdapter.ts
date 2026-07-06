@@ -72,6 +72,11 @@ export interface ChatParams {
   toolChoice?: ToolChoicePolicy;
   executeTool?: (call: ToolCall) => Promise<unknown> | unknown;
   /**
+   * Per-call tool-round override for nested/subagent runs. When omitted,
+   * providers fall back to their configured maxToolRounds.
+   */
+  maxToolRounds?: number;
+  /**
    * 續跑回合直接指定的 pack 集合 (G2)。由 controller 在續跑回合傳入,
    * 繞過 intent 分類器,避免續跑被重路由。
    */

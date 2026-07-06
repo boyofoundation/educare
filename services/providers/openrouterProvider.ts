@@ -83,7 +83,8 @@ export class OpenRouterProvider implements LLMProvider {
         params,
         defaultTemperature: (this.config.temperature as number | undefined) || 0.7,
         defaultMaxTokens: (this.config.maxTokens as number | undefined) || 4096,
-        defaultMaxToolRounds: (this.config.maxToolRounds as number | undefined) || 20,
+        defaultMaxToolRounds:
+          (params.maxToolRounds ?? (this.config.maxToolRounds as number | undefined)) || 20,
       });
     } catch (error) {
       console.error('OpenRouter streaming error:', error);

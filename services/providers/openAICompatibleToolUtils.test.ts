@@ -1252,12 +1252,22 @@ describe('streamOpenAICompatibleChat', () => {
           headers: { Authorization: 'Bearer test' },
           providerName: 'openai',
           model: 'gpt-4o',
-          params: { ...sharedParams, executeTool },
+          params: {
+            ...sharedParams,
+            ...testCase.chatParamsOverride,
+            executeTool,
+          },
         })) {
           responses.push(chunk);
         }
 
         expect(responses.at(-1)?.metadata?.finishReason).toBe(testCase.expectedFinishReason);
+        if (testCase.expectedToolRoundCount !== undefined) {
+          expect(responses.at(-1)?.metadata?.toolRoundCount).toBe(testCase.expectedToolRoundCount);
+        }
+        if (testCase.requiresProviderDefaultRoundAssertion) {
+          expect(responses.at(-1)?.metadata?.toolRoundCount).toBe(20);
+        }
       },
     );
   });

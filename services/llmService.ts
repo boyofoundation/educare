@@ -8,6 +8,10 @@ import {
   type HtmlProjectSummary,
   type HtmlProjectToolPackName,
   type HtmlProjectWorkspaceUpdate,
+  type SubagentActivityUpdate,
+  type SubagentRunRecord,
+  type SubagentTaskSpec,
+  type TokenUsageTotals,
 } from '../types';
 import { ToolCall, type ProviderUsageMetadata } from './llmAdapter';
 import { providerManager, initializeProviders } from './providerRegistry';
@@ -28,6 +32,12 @@ import {
 } from './htmlProjectToolService';
 import { buildHtmlProjectSystemPrompt, classifyHtmlProjectIntent } from './htmlProjectPrompting';
 import { recordHtmlProjectTelemetryEvent } from './htmlProjectAgentTelemetry';
+import {
+  buildSubagentDelegationToolDefinition,
+  runSubagentBatch,
+  SUBAGENT_DELEGATE_TOOL_NAME,
+  SUBAGENT_DELEGATION_SYSTEM_PROMPT,
+} from './subagentService';
 
 export interface StreamChatParams {
   systemPrompt: string;
@@ -38,6 +48,7 @@ export interface StreamChatParams {
   sessionId?: string | null;
   activeProjectId?: string | null;
   knowledgeChunks?: RagChunk[];
+  subagentDelegationEnabled?: boolean;
   /**
    * AbortSignal (G4/G17). Threaded into the provider's chatParams; providers
    * check `signal.aborted` per round and yield finishReason='aborted' within
@@ -54,6 +65,7 @@ export interface StreamChatParams {
   packSetOverride?: HtmlProjectToolPackName[];
   onChunk: (text: string) => void;
   onProjectToolActivity?: (update: HtmlProjectWorkspaceUpdate) => void;
+  onSubagentActivity?: (update: SubagentActivityUpdate) => void;
   onComplete: (
     metadata: {
       promptTokenCount: number;
@@ -69,6 +81,8 @@ export interface StreamChatParams {
       toolSequence?: string[];
       /** Effective selected pack set (mirrored from telemetry for controller use). */
       selectedPackSet?: HtmlProjectToolPackName[];
+      subagentRuns?: SubagentRunRecord[];
+      subagentUsageTotals?: TokenUsageTotals;
     },
     fullText: string,
   ) => void;
@@ -153,6 +167,43 @@ const createRoutingRecoverableToolError = (
   details,
 });
 
+const addOptionalTokenCount = (
+  current: number | undefined,
+  delta: number | undefined,
+): number | undefined => {
+  if (typeof current === 'undefined' && typeof delta === 'undefined') {
+    return undefined;
+  }
+
+  return (current ?? 0) + (delta ?? 0);
+};
+
+const mergeSubagentUsageTotals = (
+  current: TokenUsageTotals | undefined,
+  delta: TokenUsageTotals | undefined,
+): TokenUsageTotals | undefined => {
+  if (!delta) {
+    return current;
+  }
+
+  return {
+    inputTokens: (current?.inputTokens ?? 0) + delta.inputTokens,
+    outputTokens: (current?.outputTokens ?? 0) + delta.outputTokens,
+    totalTokens: (current?.totalTokens ?? 0) + delta.totalTokens,
+    cacheCreationInputTokens: addOptionalTokenCount(
+      current?.cacheCreationInputTokens,
+      delta.cacheCreationInputTokens,
+    ),
+    cacheReadInputTokens: addOptionalTokenCount(
+      current?.cacheReadInputTokens,
+      delta.cacheReadInputTokens,
+    ),
+    cachedInputTokens: addOptionalTokenCount(current?.cachedInputTokens, delta.cachedInputTokens),
+    reasoningTokens: addOptionalTokenCount(current?.reasoningTokens, delta.reasoningTokens),
+    toolUseTokens: addOptionalTokenCount(current?.toolUseTokens, delta.toolUseTokens),
+  };
+};
+
 export const streamChat = async (params: StreamChatParams) => {
   const {
     systemPrompt,
@@ -165,8 +216,10 @@ export const streamChat = async (params: StreamChatParams) => {
     knowledgeChunks = [],
     signal,
     packSetOverride,
+    subagentDelegationEnabled = false,
     onChunk,
     onProjectToolActivity,
+    onSubagentActivity,
     onComplete,
   } = params;
 
@@ -192,6 +245,9 @@ export const streamChat = async (params: StreamChatParams) => {
   let projectSummary: HtmlProjectSummary | null = null;
   let latestPreviewOutcome: HtmlProjectPreviewOutcome | undefined;
   let finishReason: FinishReason | undefined;
+  const subagentRunsByBatch = new Map<string, SubagentRunRecord[]>();
+  let subagentRuns: SubagentRunRecord[] | undefined;
+  let subagentUsageTotals: TokenUsageTotals | undefined;
 
   const knowledgeToolEnabled = hasKnowledgeChunks(knowledgeChunks);
 
@@ -220,6 +276,8 @@ export const streamChat = async (params: StreamChatParams) => {
     repeatedRecoverableErrors: [],
     toolRounds: 0,
   };
+
+  const delegationToolDefinition = buildSubagentDelegationToolDefinition();
 
   try {
     if (
@@ -311,6 +369,7 @@ export const streamChat = async (params: StreamChatParams) => {
             projectSummary,
           })
         : '',
+      subagentDelegationEnabled ? SUBAGENT_DELEGATION_SYSTEM_PROMPT : '',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -323,6 +382,37 @@ export const streamChat = async (params: StreamChatParams) => {
           knowledgeChunks,
           call.args as unknown as KnowledgeSearchArgs,
         );
+      }
+
+      if (subagentDelegationEnabled && call.name === SUBAGENT_DELEGATE_TOOL_NAME) {
+        const result = await runSubagentBatch(
+          ((call.args as { tasks?: SubagentTaskSpec[] }).tasks ?? []) as SubagentTaskSpec[],
+          {
+            assistantId,
+            sessionId,
+            activeProjectId: resolvedActiveProjectId,
+            history,
+            knowledgeChunks,
+            signal,
+          },
+          {
+            onActivity: update => {
+              subagentRunsByBatch.set(update.batchId, update.runs);
+              subagentRuns = undefined;
+              onSubagentActivity?.(update);
+            },
+            onProjectToolActivity,
+          },
+        );
+
+        if (result.ok) {
+          telemetryEvent.subagentTaskCount =
+            (telemetryEvent.subagentTaskCount ?? 0) + result.results.length;
+          subagentUsageTotals = mergeSubagentUsageTotals(subagentUsageTotals, result.usageTotals);
+          subagentRuns = [...subagentRunsByBatch.values()].flatMap(runs => runs);
+        }
+
+        return result;
       }
 
       if (
@@ -372,6 +462,7 @@ export const streamChat = async (params: StreamChatParams) => {
           visibleToolNames: [
             ...(knowledgeToolEnabled ? [KNOWLEDGE_SEARCH_TOOL_NAME] : []),
             ...htmlProjectToolDefinitions.map(tool => tool.name),
+            ...(subagentDelegationEnabled ? [SUBAGENT_DELEGATE_TOOL_NAME] : []),
           ],
           selectedPackSet: [...selectedPackSet],
           intent: effectiveIntentDecision.intent,
@@ -390,6 +481,7 @@ export const streamChat = async (params: StreamChatParams) => {
           ]
         : []),
       ...htmlProjectToolDefinitions,
+      ...(subagentDelegationEnabled ? [delegationToolDefinition] : []),
     ];
 
     const chatParams = {
@@ -444,6 +536,8 @@ export const streamChat = async (params: StreamChatParams) => {
         projectSummary,
         toolSequence: telemetryEvent.toolSequence,
         selectedPackSet: selectedPackSet,
+        subagentRuns,
+        subagentUsageTotals,
       },
       fullResponseText,
     );

@@ -2279,4 +2279,15 @@ describe('harness tool definitions', () => {
     expect(names).toContain('listSnapshots');
     expect(names).toContain('revertToSnapshot');
   });
+
+  it('exports write-pack names as a subset of known HTML project packs', async () => {
+    const { getHtmlProjectToolPackNames, HTML_PROJECT_WRITE_PACK_NAMES } = await import(
+      './htmlProjectToolService'
+    );
+    const packNames = new Set(getHtmlProjectToolPackNames());
+    expect(HTML_PROJECT_WRITE_PACK_NAMES.length).toBeGreaterThan(0);
+    for (const packName of HTML_PROJECT_WRITE_PACK_NAMES) {
+      expect(packNames.has(packName)).toBe(true);
+    }
+  });
 });

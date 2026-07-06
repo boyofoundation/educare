@@ -449,7 +449,10 @@ export async function* streamOpenAICompatibleChat(
   let candidatesTokenCount = 0;
   let usage: ProviderUsageMetadata | undefined;
   const { visibleTools } = resolveToolPolicy(params);
-  const MAX_OPENAI_COMPATIBLE_TOOL_ROUNDS = Math.max(1, Math.round(defaultMaxToolRounds));
+  const MAX_OPENAI_COMPATIBLE_TOOL_ROUNDS = Math.max(
+    1,
+    Math.round(params.maxToolRounds ?? defaultMaxToolRounds),
+  );
 
   if (visibleTools?.length && params.executeTool) {
     let toolRoundCount = 0;

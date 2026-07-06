@@ -426,6 +426,76 @@ describe('ChatContainer', () => {
     });
   });
 
+  it('renders live subagent activity and persists subagentRuns into the committed assistant message', async () => {
+    mockControllerRun.mockImplementationOnce(async () => {
+      const options = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+        callbacks?: {
+          onSubagentActivity?: (update: {
+            batchId: string;
+            runs: Array<{
+              id: string;
+              batchId: string;
+              name: string;
+              task: string;
+              status: 'running' | 'complete';
+              output: string;
+              toolSequence: string[];
+              durationMs: number;
+            }>;
+          }) => void;
+        };
+      };
+      options?.callbacks?.onSubagentActivity?.({
+        batchId: 'batch-1',
+        runs: [
+          {
+            id: 'run-1',
+            batchId: 'batch-1',
+            name: 'Researcher',
+            task: 'Inspect docs',
+            status: 'running',
+            output: 'Partial delegated work',
+            toolSequence: ['searchKnowledgeBase'],
+            durationMs: 5,
+          },
+        ],
+      });
+      return buildRunResult('Delegated answer');
+    });
+
+    render(<ChatContainer {...defaultProps} />);
+
+    await sendMessage('Delegate this');
+
+    await waitFor(() => {
+      expect(screen.getByText('Subagent activity')).toBeInTheDocument();
+      expect(screen.getByText('Researcher')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(defaultProps.onNewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'model',
+              content: 'Delegated answer',
+              subagentRuns: [
+                expect.objectContaining({
+                  id: 'run-1',
+                  batchId: 'batch-1',
+                  name: 'Researcher',
+                }),
+              ],
+            }),
+          ]),
+        }),
+        'Delegate this',
+        'Delegated answer',
+        expect.objectContaining({ promptTokenCount: 10, candidatesTokenCount: 15 }),
+      );
+    });
+  });
+
   it('calls controller.stop when the Stop button is clicked during a run', async () => {
     // Run that stays pending (we control resolution) so the Stop button stays visible.
     let resolveRun: (value: AgentRunResult) => void = () => undefined;

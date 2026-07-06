@@ -13,7 +13,12 @@ import {
   getInterruptedForSession,
 } from '../../services/agentRunCheckpointService';
 import { htmlProjectStore } from '../../services/htmlProjectStore';
-import type { AgentRunCheckpoint, AgentRunState, ChatMessage } from '../../types';
+import type {
+  AgentRunCheckpoint,
+  AgentRunState,
+  ChatMessage,
+  SubagentRunRecord,
+} from '../../types';
 import { HtmlProjectWorkspaceUpdate } from '../../types';
 import { applyTokenUsageToSession } from '../../services/sessionTokenUsage';
 
@@ -76,6 +81,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   isWorkspaceOpen = false,
   headerActions,
   agentHarnessEnabled = true,
+  subagentDelegationEnabled = false,
 }) => {
   const actions = useContext(AppContext)?.actions ?? null;
   const [input, setInput] = useState('');
@@ -85,6 +91,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const [isThinking, setIsThinking] = useState(false);
   const [currentSession, setCurrentSession] = useState(session);
   const [runState, setRunState] = useState<AgentRunState | null>(null);
+  const [subagentBatches, setSubagentBatches] = useState<Record<string, SubagentRunRecord[]>>({});
   const [interruptedCheckpoint, setInterruptedCheckpoint] = useState<AgentRunCheckpoint | null>(
     null,
   );
@@ -94,6 +101,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const sessionRef = useRef(session);
   const controllerRef = useRef<AgentRunController | null>(null);
   const isThinkingRef = useRef(isThinking);
+  const subagentBatchesRef = useRef<Record<string, SubagentRunRecord[]>>({});
 
   useEffect(() => {
     isThinkingRef.current = isThinking;
@@ -113,8 +121,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   }, [currentSession]);
 
   useEffect(() => {
+    subagentBatchesRef.current = subagentBatches;
+  }, [subagentBatches]);
+
+  useEffect(() => {
     scrollToBottom();
-  }, [currentSession.messages, streamingResponse, isThinking]);
+  }, [currentSession.messages, streamingResponse, isThinking, subagentBatches]);
 
   useEffect(() => {
     let active = true;
@@ -240,6 +252,17 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
   };
 
+  const handleSubagentActivity = (update: { batchId: string; runs: SubagentRunRecord[] }) => {
+    setSubagentBatches(prev => {
+      const next = {
+        ...prev,
+        [update.batchId]: update.runs,
+      };
+      subagentBatchesRef.current = next;
+      return next;
+    });
+  };
+
   const persistCheckpointArchive = async (
     checkpoint: AgentRunCheckpoint,
     options?: { clearProject?: boolean },
@@ -286,6 +309,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setIsThinking(true);
     setStreamingResponse('');
     setRunState(null);
+    setSubagentBatches({});
     setResumeError(null);
     actions?.setAgentRunState?.(null);
 
@@ -326,6 +350,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         message,
         knowledgeChunks: ragChunks,
         agentHarnessEnabled: resumeCheckpoint?.agentHarnessEnabled ?? agentHarnessEnabled,
+        subagentDelegationEnabled:
+          resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
         sharedMode: resumeCheckpoint?.sharedMode ?? sharedMode,
         resumeFrom: resumeCheckpoint,
         callbacks: {
@@ -336,6 +362,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             setStreamingResponse(prev => prev + chunk);
           },
           onProjectToolActivity: handleProjectToolActivity,
+          onSubagentActivity: handleSubagentActivity,
           onStateChange: nextState => {
             setRunState(nextState);
             actions?.setAgentRunState?.(nextState);
@@ -362,7 +389,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         setStatusText('');
 
         const baseSession = sessionRef.current;
-        const newAiMessage = { role: 'model' as const, content: fullModelResponse };
+        const newAiMessage = {
+          role: 'model' as const,
+          content: fullModelResponse,
+          subagentRuns: Object.values(subagentBatchesRef.current).flatMap(runs => runs),
+        };
         const finalSession = applyTokenUsageToSession(
           {
             ...baseSession,
@@ -374,6 +405,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         sessionRef.current = finalSession;
         setCurrentSession(finalSession);
         setStreamingResponse('');
+        setSubagentBatches({});
         await onNewMessage(finalSession, message, fullModelResponse, tokenInfo);
         await deleteCheckpoint(result.state.runId);
         setInterruptedCheckpoint(null);
@@ -633,7 +665,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             ))}
 
             {isThinking && !streamingResponse && <ThinkingIndicator />}
-            {streamingResponse && <StreamingResponse content={streamingResponse} />}
+            {streamingResponse && (
+              <StreamingResponse content={streamingResponse} subagentBatches={subagentBatches} />
+            )}
           </div>
           <div ref={messagesEndRef} />
         </div>

@@ -737,11 +737,32 @@ describe('AnthropicProvider', () => {
             usage: { input_tokens: 1, output_tokens: 1 },
           });
 
+        let providerParams: Record<string, unknown> = {};
+
         switch (testCase.id) {
           case 'budget-exhausted-no-throw':
             fetchMock.mockImplementation(() =>
               Promise.resolve(
                 toolCallResponse('loop-call', 'render_preview', { projectId: 'loop' }),
+              ),
+            );
+            executeTool.mockResolvedValue({ ok: true });
+            break;
+          case 'per-call-max-tool-rounds-override':
+            fetchMock.mockImplementation(() =>
+              Promise.resolve(
+                toolCallResponse('loop-call', 'render_preview', { projectId: 'override' }),
+              ),
+            );
+            executeTool.mockResolvedValue({ ok: true });
+            providerParams = {
+              maxToolRounds: testCase.chatParamsOverride?.maxToolRounds,
+            };
+            break;
+          case 'provider-default-max-tool-rounds':
+            fetchMock.mockImplementation(() =>
+              Promise.resolve(
+                toolCallResponse('loop-call', 'render_preview', { projectId: 'default-budget' }),
               ),
             );
             executeTool.mockResolvedValue({ ok: true });
@@ -768,12 +789,19 @@ describe('AnthropicProvider', () => {
         const chunks = [];
         for await (const chunk of provider.streamChat({
           ...sharedParams,
+          ...providerParams,
           executeTool,
         })) {
           chunks.push(chunk);
         }
 
         expect(chunks.at(-1)?.metadata?.finishReason).toBe(testCase.expectedFinishReason);
+        if (testCase.expectedToolRoundCount !== undefined) {
+          expect(chunks.at(-1)?.metadata?.toolRoundCount).toBe(testCase.expectedToolRoundCount);
+        }
+        if (testCase.requiresProviderDefaultRoundAssertion) {
+          expect(chunks.at(-1)?.metadata?.toolRoundCount).toBe(3);
+        }
       },
     );
   });

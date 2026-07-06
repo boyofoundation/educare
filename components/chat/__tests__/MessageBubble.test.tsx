@@ -131,6 +131,92 @@ describe('MessageBubble', () => {
         expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Copy this response');
       });
     });
+
+    it('should render persisted subagent runs above the assistant message', () => {
+      // Arrange
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: 'Assistant response with delegated work',
+        subagentRuns: [
+          {
+            id: 'run-1',
+            batchId: 'batch-1',
+            name: 'Persisted researcher',
+            task: 'Investigate prior context',
+            status: 'complete',
+            output: 'Delegated summary',
+            toolSequence: ['Read', 'Search'],
+            durationMs: 1800,
+          },
+          {
+            id: 'run-2',
+            batchId: 'batch-1',
+            name: 'Live planner',
+            task: 'Outline next steps',
+            status: 'running',
+            output: 'Partial plan',
+            toolSequence: ['Plan'],
+            durationMs: 300,
+          },
+        ],
+      });
+
+      // Act
+      render(<MessageBubble message={assistantMessage} index={0} />);
+
+      // Assert
+      expect(screen.getByText('Subagent activity')).toBeInTheDocument();
+      expect(screen.getByText('2 tasks')).toBeInTheDocument();
+      expect(screen.getByText('Persisted researcher')).toBeInTheDocument();
+      expect(screen.getByText('Live planner')).toBeInTheDocument();
+      expect(screen.getByText('Complete')).toBeInTheDocument();
+      expect(screen.getByText('Running')).toBeInTheDocument();
+      expect(screen.getByText('Delegated summary')).toBeInTheDocument();
+      expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
+    });
+
+    it('should render persisted subagent runs above the assistant message', () => {
+      // Arrange
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: 'Assistant response with delegated work',
+        subagentRuns: [
+          {
+            id: 'run-1',
+            batchId: 'batch-1',
+            name: 'Persisted researcher',
+            task: 'Investigate prior context',
+            status: 'complete',
+            output: 'Delegated summary',
+            toolSequence: ['Read', 'Search'],
+            durationMs: 1800,
+          },
+          {
+            id: 'run-2',
+            batchId: 'batch-1',
+            name: 'Live planner',
+            task: 'Outline next steps',
+            status: 'running',
+            output: 'Partial plan',
+            toolSequence: ['Plan'],
+            durationMs: 300,
+          },
+        ],
+      });
+
+      // Act
+      render(<MessageBubble message={assistantMessage} index={0} />);
+
+      // Assert
+      expect(screen.getByText('Subagent activity')).toBeInTheDocument();
+      expect(screen.getByText('2 tasks')).toBeInTheDocument();
+      expect(screen.getByText('Persisted researcher')).toBeInTheDocument();
+      expect(screen.getByText('Live planner')).toBeInTheDocument();
+      expect(screen.getByText('Complete')).toBeInTheDocument();
+      expect(screen.getByText('Running')).toBeInTheDocument();
+      expect(screen.getByText('Delegated summary')).toBeInTheDocument();
+      expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
+    });
   });
 
   describe('Markdown Content Processing', () => {

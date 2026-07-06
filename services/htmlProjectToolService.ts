@@ -84,6 +84,13 @@ const HTML_PROJECT_TOOL_PACKS: Record<HtmlProjectToolPackName, HtmlProjectToolNa
   preview_recheck: ['renderPreview'],
 };
 
+export const HTML_PROJECT_WRITE_PACK_NAMES: HtmlProjectToolPackName[] = [
+  'bootstrap',
+  'edit',
+  'todo_finalize',
+  'preview_recheck',
+];
+
 interface HtmlProjectToolContext {
   assistantId: string;
   sessionId?: string | null;

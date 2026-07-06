@@ -117,6 +117,12 @@ const buildStreamChatInvocation = (
     selectedPackSet: string[];
     promptTokenCount: number;
     candidatesTokenCount: number;
+    subagentRuns: Array<Record<string, unknown>>;
+    subagentUsageTotals: {
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+    };
   }> = {},
 ) => ({
   finishReason: overrides.finishReason ?? 'complete',
@@ -126,6 +132,8 @@ const buildStreamChatInvocation = (
   selectedPackSet: overrides.selectedPackSet ?? ['inspect'],
   promptTokenCount: overrides.promptTokenCount ?? 10,
   candidatesTokenCount: overrides.candidatesTokenCount ?? 5,
+  subagentRuns: overrides.subagentRuns,
+  subagentUsageTotals: overrides.subagentUsageTotals,
 });
 
 const installStreamChatTurns = (
@@ -157,6 +165,8 @@ const installStreamChatTurns = (
           projectSummary: turn.projectSummary,
           toolSequence: turn.toolSequence,
           selectedPackSet: turn.selectedPackSet,
+          subagentRuns: turn.subagentRuns,
+          subagentUsageTotals: turn.subagentUsageTotals,
         },
         text,
       );
@@ -188,6 +198,7 @@ const buildCheckpoint = (overrides: Partial<AgentRunCheckpoint> = {}): AgentRunC
       agentTurnLog: 'tools: inspect',
     },
   ],
+  subagentDelegationEnabled: overrides.subagentDelegationEnabled ?? true,
   partialText: overrides.partialText ?? 'partial from interrupted turn',
   toolTrace: overrides.toolTrace ?? ['inspect'],
   todoSummary: overrides.todoSummary ?? baseProjectSummary.todoSummary,
@@ -217,6 +228,7 @@ const buildOptions = (
   callbacks: {
     onChunk: vi.fn(),
     onProjectToolActivity: vi.fn(),
+    onSubagentActivity: vi.fn(),
     onTurnStart: vi.fn(),
     onTurnComplete: vi.fn(),
     onStateChange: vi.fn(),
@@ -543,6 +555,43 @@ describe('AgentRunController', () => {
     expect(mockStreamChat).toHaveBeenCalledTimes(2);
   });
 
+  it('does not treat delegate-only repeated last-4 traces as a loop failure', async () => {
+    installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'tool-budget-exhausted',
+        toolSequence: [
+          'delegateToSubagents',
+          'delegateToSubagents',
+          'delegateToSubagents',
+          'delegateToSubagents',
+        ],
+        projectSummary: null,
+      }),
+      buildStreamChatInvocation({
+        finishReason: 'tool-budget-exhausted',
+        toolSequence: [
+          'delegateToSubagents',
+          'delegateToSubagents',
+          'delegateToSubagents',
+          'delegateToSubagents',
+        ],
+        projectSummary: null,
+      }),
+    ]);
+
+    const controller = new AgentRunController(
+      buildOptions({
+        activeProjectId: null,
+        maxTurns: 2,
+      }),
+    );
+    const result = await controller.run();
+
+    expect(result.state.status).toBe('complete');
+    expect(result.state.loopDetected).toBeUndefined();
+    expect(mockStreamChat).toHaveBeenCalledTimes(2);
+  });
+
   it('Budget: reaches maxTurns and terminates as complete at run level', async () => {
     installStreamChatTurns([
       buildStreamChatInvocation({
@@ -798,5 +847,84 @@ describe('AgentRunController', () => {
     expect(mockStreamChat).toHaveBeenCalledTimes(1);
     expect(result.state.maxTurns).toBe(1);
     expect(result.state.status).toBe('complete');
+  });
+
+  it('forces delegation off in shared mode and persists the effective checkpoint flag', async () => {
+    const invocations = installStreamChatTurns([buildStreamChatInvocation()]);
+    const controller = new AgentRunController(
+      buildOptions({
+        sharedMode: true,
+        subagentDelegationEnabled: true,
+      }),
+    );
+
+    await controller.run();
+
+    expect(invocations[0]?.params.subagentDelegationEnabled).toBe(false);
+    expect(mockSaveCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subagentDelegationEnabled: false,
+      }),
+    );
+    expect(mockUpdateCheckpoint).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        subagentDelegationEnabled: false,
+      }),
+    );
+  });
+
+  it('restores checkpoint delegation flag and persists subagent runs on committed messages', async () => {
+    const subagentRuns = [
+      {
+        id: 'run-1',
+        batchId: 'batch-1',
+        name: 'Spec',
+        task: 'Investigate',
+        status: 'complete',
+        output: 'delegated',
+        toolSequence: ['searchKnowledgeBase'],
+        durationMs: 12,
+      },
+    ];
+    const resumeFrom = buildCheckpoint({
+      subagentDelegationEnabled: true,
+    });
+    const invocations = installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        projectSummary: completeProjectSummary,
+        toolSequence: ['delegateToSubagents'],
+        subagentRuns,
+        subagentUsageTotals: {
+          inputTokens: 3,
+          outputTokens: 2,
+          totalTokens: 5,
+        },
+      }),
+    ]);
+
+    const controller = new AgentRunController(
+      buildOptions({
+        resumeFrom,
+        sharedMode: false,
+        subagentDelegationEnabled: false,
+      }),
+    );
+
+    const result = await controller.run();
+
+    expect(invocations[0]?.params.subagentDelegationEnabled).toBe(true);
+    expect(result.historyDelta.at(-1)).toEqual(
+      expect.objectContaining({
+        role: 'model',
+        subagentRuns,
+      }),
+    );
+    expect(result.tokenInfo.subagentUsageTotals).toEqual({
+      inputTokens: 3,
+      outputTokens: 2,
+      totalTokens: 5,
+    });
   });
 });

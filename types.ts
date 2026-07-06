@@ -29,6 +29,44 @@ export interface Assistant {
    * 關閉時退回現行單回合行為。shared mode 預設續跑預算 = 1。
    */
   agentHarnessEnabled?: boolean;
+  /**
+   * 子代理人委派開關。預設 false: 僅在明確 opt-in 時暴露 delegateToSubagents。
+   * shared mode 會在 controller/llmService 上游強制停用。
+   */
+  subagentDelegationEnabled?: boolean;
+}
+
+export type SubagentRunStatus = 'running' | 'complete' | 'failed' | 'aborted';
+
+export interface SubagentTaskSpec {
+  name: string;
+  systemPrompt: string;
+  task: string;
+  context?: string;
+  includeHistoryLastN?: number;
+  allowKnowledgeSearch?: boolean;
+  includeProjectFiles?: string[];
+  htmlPacks?: HtmlProjectToolPackName[];
+  maxToolRounds?: number;
+}
+
+export interface SubagentRunRecord {
+  id: string;
+  batchId: string;
+  name: string;
+  task: string;
+  status: SubagentRunStatus;
+  output: string;
+  toolSequence: string[];
+  tokenUsage?: TokenUsageTotals;
+  durationMs: number;
+  truncated?: boolean;
+  error?: string;
+}
+
+export interface SubagentActivityUpdate {
+  batchId: string;
+  runs: SubagentRunRecord[];
 }
 
 export interface ChatMessage {
@@ -44,6 +82,10 @@ export interface ChatMessage {
    * 在 UI 中摺疊顯示,且為 compaction 時最優先丟棄的對象。
    */
   synthetic?: boolean;
+  /**
+   * 子代理人批次執行紀錄。用於串流卡片與歷史訊息重建。
+   */
+  subagentRuns?: SubagentRunRecord[];
 }
 
 /**
@@ -350,6 +392,7 @@ export interface HtmlProjectAgentTelemetryEvent {
   autoContinued?: boolean;
   abortReason?: string;
   runtimeDiagnosticState?: HtmlProjectRuntimeDiagnosticStatus;
+  subagentTaskCount?: number;
 }
 
 export interface HtmlProjectWorkspaceUpdate {
@@ -450,6 +493,7 @@ export interface AgentRunCheckpoint {
     candidatesTokenCount: number;
   };
   agentHarnessEnabled: boolean;
+  subagentDelegationEnabled?: boolean;
   sharedMode: boolean;
   createdAt: number;
   updatedAt: number;

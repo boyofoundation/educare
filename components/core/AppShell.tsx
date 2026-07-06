@@ -148,6 +148,7 @@ function AppContent(): React.JSX.Element {
             onNewMessage={handleNewMessage}
             sharedMode={!!state.isShared}
             agentHarnessEnabled={state.currentAssistant.agentHarnessEnabled ?? true}
+            subagentDelegationEnabled={state.currentAssistant.subagentDelegationEnabled ?? false}
           />
         )}
 
@@ -247,6 +248,9 @@ function AppContent(): React.JSX.Element {
                 onNewMessage={handleNewMessage}
                 sharedMode={!!state.isShared}
                 agentHarnessEnabled={state.currentAssistant.agentHarnessEnabled ?? true}
+                subagentDelegationEnabled={
+                  state.currentAssistant.subagentDelegationEnabled ?? false
+                }
                 isWorkspaceOpen={Boolean(state.isProjectWorkspaceOpen && state.activeProjectId)}
                 headerActions={
                   !state.isProjectWorkspaceOpen && state.activeProjectId ? (
