@@ -25,7 +25,6 @@ export interface ChatInputProps {
   onChange: (value: string) => void;
   onSend: () => void;
   isLoading: boolean;
-  statusText: string;
   disabled?: boolean;
   isWorkspaceOpen?: boolean;
   /** G5: 當 agent run 進行中為 true,顯示「停止」鈕並鎖定輸入。 */

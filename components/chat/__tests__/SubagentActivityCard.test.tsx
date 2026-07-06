@@ -44,16 +44,16 @@ describe('SubagentActivityCard', () => {
     render(<SubagentActivityCard runs={runs} />);
 
     // Assert
-    expect(screen.getByText('Subagent activity')).toBeInTheDocument();
-    expect(screen.getByText('4 tasks')).toBeInTheDocument();
+    expect(screen.getByText('子代理活動')).toBeInTheDocument();
+    expect(screen.getByText('4 項任務')).toBeInTheDocument();
     expect(screen.getByText('Runner')).toBeInTheDocument();
     expect(screen.getByText('Completer')).toBeInTheDocument();
     expect(screen.getByText('Failure handler')).toBeInTheDocument();
     expect(screen.getByText('Abort guard')).toBeInTheDocument();
-    expect(screen.getByText('Running')).toBeInTheDocument();
-    expect(screen.getByText('Complete')).toBeInTheDocument();
-    expect(screen.getByText('Failed')).toBeInTheDocument();
-    expect(screen.getByText('Aborted')).toBeInTheDocument();
+    expect(screen.getByText('執行中')).toBeInTheDocument();
+    expect(screen.getByText('完成')).toBeInTheDocument();
+    expect(screen.getByText('失敗')).toBeInTheDocument();
+    expect(screen.getByText('已中止')).toBeInTheDocument();
   });
 
   it('starts running runs collapsed and toggles details on click', () => {
@@ -71,13 +71,13 @@ describe('SubagentActivityCard', () => {
 
     // Assert
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByText('Tool trace')).not.toBeInTheDocument();
+    expect(screen.queryByText('工具軌跡')).not.toBeInTheDocument();
     expect(screen.queryByText('Partial findings')).not.toBeInTheDocument();
 
     fireEvent.click(toggle);
 
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByText('Tool trace')).toBeInTheDocument();
+    expect(screen.getByText('工具軌跡')).toBeInTheDocument();
     expect(screen.getByText('Search → Read')).toBeInTheDocument();
     expect(screen.getByText('Partial findings')).toBeInTheDocument();
 
@@ -104,9 +104,7 @@ describe('SubagentActivityCard', () => {
     // Assert
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Delegation failed')).toBeInTheDocument();
-    expect(screen.getByText('_No output captured._')).toBeInTheDocument();
-    expect(
-      screen.getByText('Output truncated to keep the parent turn concise.'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('（未擷取輸出）')).toBeInTheDocument();
+    expect(screen.getByText('輸出已截斷，以避免父回合內容過長。')).toBeInTheDocument();
   });
 });

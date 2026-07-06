@@ -1,30 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MessageBubbleProps } from './types';
 import { UserIcon, GeminiIcon } from '../ui/Icons';
-import ReactMarkdown from 'react-markdown';
 import SubagentActivityCard from './SubagentActivityCard';
 import ToolCallCard from './ToolCallCard';
-import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
-import rehypeHighlightCodeLines from 'rehype-highlight-code-lines';
-import 'highlight.js/styles/github-dark.css';
+import MarkdownContent from './MarkdownContent';
 
 const EMPTY_MESSAGE_FALLBACK = '（本次回覆沒有內容）';
-
-const getPlainText = (children: React.ReactNode): string => {
-  if (typeof children === 'string') {
-    return children;
-  }
-  if (Array.isArray(children)) {
-    return children.map(getPlainText).join('');
-  }
-  if (React.isValidElement(children)) {
-    const element = children as React.ReactElement<{ children?: React.ReactNode }>;
-    const innerChildren = element.props.children ?? '';
-    return getPlainText(innerChildren as React.ReactNode);
-  }
-  return '';
-};
 
 const formatTimestamp = (timestamp?: number): string | null => {
   if (typeof timestamp !== 'number') {
@@ -55,7 +36,7 @@ const formatTimestamp = (timestamp?: number): string | null => {
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index }) => {
   const [syntheticExpanded, setSyntheticExpanded] = useState(false);
-  const [copyFeedback, setCopyFeedback] = useState<{ target: string; label: string } | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const copyFeedbackTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -66,24 +47,21 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
     };
   }, []);
 
-  const setCopyFeedbackLabel = (target: string, label: string) => {
+  const handleCopy = async (text: string) => {
     if (copyFeedbackTimerRef.current !== null) {
       window.clearTimeout(copyFeedbackTimerRef.current);
     }
 
-    setCopyFeedback({ target, label });
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyFeedback('✓ 已複製');
+    } catch {
+      setCopyFeedback('複製失敗');
+    }
+
     copyFeedbackTimerRef.current = window.setTimeout(() => {
       setCopyFeedback(null);
     }, 1500);
-  };
-
-  const handleCopy = async (text: string, target: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopyFeedbackLabel(target, '✓ 已複製');
-    } catch {
-      setCopyFeedbackLabel(target, '複製失敗');
-    }
   };
 
   if (message.synthetic) {
@@ -136,126 +114,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
   const displayContent = message.content.trim() === '' ? EMPTY_MESSAGE_FALLBACK : message.content;
   const timestampLabel = formatTimestamp(message.timestamp);
   const isUser = message.role === 'user';
-  const messageCopyTarget = `${message.role}-message-copy`;
-  const messageCopyLabel =
-    copyFeedback?.target === messageCopyTarget
-      ? copyFeedback.label
-      : isUser
-        ? '複製訊息'
-        : '複製回應';
-
-  const renderMessageContent = (content: string) => {
-    return (
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight, [rehypeHighlightCodeLines]]}
-        components={{
-          code(props) {
-            const { className, children, ...rest } = props as React.ComponentProps<'code'> & {
-              node?: {
-                position?: {
-                  start?: { line?: number };
-                  end?: { line?: number };
-                };
-              };
-            };
-            const match = /language-(\w+)/.exec(className || '');
-            const language = match ? match[1] : '';
-            const position = rest.node?.position;
-            const startLine = position?.start?.line || 0;
-            const endLine = position?.end?.line || 0;
-            const isMultiline = Boolean(match) || endLine - startLine > 0;
-
-            if (isMultiline) {
-              const codeText = getPlainText(children);
-              const codeCopyTarget = `code-copy:${language}:${codeText}`;
-              const codeCopyLabel =
-                copyFeedback?.target === codeCopyTarget ? copyFeedback.label : '複製';
-
-              return (
-                <div className='my-2 overflow-hidden rounded-xl border border-gray-700/70 bg-gray-900'>
-                  <div className='flex items-center justify-between gap-3 border-b border-gray-700/70 bg-gray-800/80 px-4 py-2 text-xs'>
-                    <span className='text-gray-300'>{language || 'code'}</span>
-                    <button
-                      type='button'
-                      onClick={() => void handleCopy(codeText, codeCopyTarget)}
-                      className='rounded-md px-2 py-1 text-gray-300 transition hover:bg-gray-700/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70'
-                      title={codeCopyLabel}
-                    >
-                      {codeCopyLabel}
-                    </button>
-                  </div>
-                  <pre className='w-full overflow-x-auto p-4 text-sm'>
-                    <code className={className} {...rest}>
-                      {children}
-                    </code>
-                  </pre>
-                </div>
-              );
-            }
-
-            return (
-              <code
-                className='rounded bg-gray-700 px-1.5 py-0.5 text-sm font-mono text-cyan-300'
-                {...rest}
-              >
-                {children}
-              </code>
-            );
-          },
-          h1: ({ children }) => <h1 className='mb-2 text-xl font-bold text-white'>{children}</h1>,
-          h2: ({ children }) => (
-            <h2 className='mb-2 text-lg font-semibold text-white'>{children}</h2>
-          ),
-          h3: ({ children }) => (
-            <h3 className='mb-1 text-base font-medium text-white'>{children}</h3>
-          ),
-          p: ({ children }) => <p className='mb-2 leading-relaxed'>{children}</p>,
-          ul: ({ children }) => (
-            <ul className='mb-2 list-inside list-disc space-y-1'>{children}</ul>
-          ),
-          ol: ({ children }) => (
-            <ol className='mb-2 list-inside list-decimal space-y-1'>{children}</ol>
-          ),
-          li: ({ children }) => <li className='text-sm'>{children}</li>,
-          blockquote: ({ children }) => (
-            <blockquote className='my-2 rounded-r border-l-4 border-cyan-500 bg-gray-800/50 py-2 pl-4'>
-              {children}
-            </blockquote>
-          ),
-          a: ({ children, href }) => (
-            <a
-              href={href}
-              target='_blank'
-              rel='noopener noreferrer'
-              className='text-cyan-400 underline hover:text-cyan-300'
-            >
-              {children}
-            </a>
-          ),
-          strong: ({ children }) => (
-            <strong className='font-semibold text-white'>{children}</strong>
-          ),
-          em: ({ children }) => <em className='italic'>{children}</em>,
-          table: ({ children }) => (
-            <div className='my-2 overflow-x-auto'>
-              <table className='min-w-full border-collapse border border-gray-600'>
-                {children}
-              </table>
-            </div>
-          ),
-          th: ({ children }) => (
-            <th className='border border-gray-600 bg-gray-700 px-4 py-2 text-left font-semibold'>
-              {children}
-            </th>
-          ),
-          td: ({ children }) => <td className='border border-gray-600 px-4 py-2'>{children}</td>,
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-    );
-  };
+  const copyLabel = copyFeedback ?? (isUser ? '複製訊息' : '複製回應');
 
   const actionRow = (
     <div
@@ -270,18 +129,18 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
       )}
       <button
         type='button'
-        onClick={() => void handleCopy(displayContent, messageCopyTarget)}
+        onClick={() => void handleCopy(displayContent)}
         className='rounded-md px-2 py-1 text-gray-400 opacity-100 transition hover:bg-gray-700/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100'
-        title={messageCopyLabel}
+        title={copyLabel}
       >
-        {messageCopyLabel}
+        {copyLabel}
       </button>
     </div>
   );
 
   if (isUser) {
     return (
-      <div className='flex justify-end'>
+      <div className='flex justify-end' aria-label='使用者訊息'>
         <div className='flex w-full max-w-3xl flex-row-reverse gap-3'>
           <div className='flex-shrink-0'>
             <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 shadow-lg ring-2 ring-cyan-400/20'>
@@ -290,7 +149,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
           </div>
           <div className='group flex min-w-0 flex-col items-end'>
             <div className='w-full max-w-[85%] rounded-2xl rounded-br-md bg-gradient-to-br from-cyan-500 to-blue-600 px-5 py-3 text-white shadow-lg md:max-w-[65ch]'>
-              <div className='text-sm leading-relaxed'>{renderMessageContent(displayContent)}</div>
+              <div className='text-sm leading-relaxed'>
+                <MarkdownContent content={displayContent} />
+              </div>
             </div>
             {actionRow}
           </div>
@@ -300,7 +161,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
   }
 
   return (
-    <div className='flex justify-start'>
+    <div className='flex justify-start' aria-label={message.isError ? '系統錯誤訊息' : '助理回覆'}>
       <div className='flex w-full max-w-3xl gap-3'>
         <div className='flex-shrink-0'>
           <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-gray-700 to-gray-600 shadow-lg ring-2 ring-gray-600/30'>
@@ -339,7 +200,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
                 <span>系統錯誤</span>
               </div>
             )}
-            <div className='text-sm leading-relaxed'>{renderMessageContent(displayContent)}</div>
+            <div className='text-sm leading-relaxed'>
+              <MarkdownContent content={displayContent} />
+            </div>
           </div>
           {actionRow}
         </div>

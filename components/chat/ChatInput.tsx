@@ -11,7 +11,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onChange,
   onSend,
   isLoading,
-  statusText,
   disabled = false,
   isWorkspaceOpen: _isWorkspaceOpen = false,
   isRunning = false,
@@ -56,17 +55,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
   return (
     <div className='border-t border-gray-700/30 bg-gradient-to-r from-gray-800/90 to-gray-850/90 p-3 backdrop-blur-sm md:p-6'>
       <div className='mx-auto max-w-3xl'>
-        {statusText && (
-          <div className='mb-4 rounded-lg border border-gray-600/30 bg-gray-700/30 p-3 backdrop-blur-sm'>
-            <div className='flex items-center gap-3'>
-              <div className='relative'>
-                <div className='h-3 w-3 rounded-full bg-cyan-400 animate-pulse' />
-                <div className='absolute inset-0 h-3 w-3 rounded-full bg-cyan-400 opacity-75 animate-ping' />
-              </div>
-              <span className='text-sm font-medium text-cyan-300'>{statusText}</span>
-            </div>
-          </div>
-        )}
         <div className='flex items-end gap-2 md:gap-4'>
           <div className='relative flex-1'>
             <textarea

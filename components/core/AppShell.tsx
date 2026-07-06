@@ -251,9 +251,11 @@ function AppContent(): React.JSX.Element {
                 subagentDelegationEnabled={
                   state.currentAssistant.subagentDelegationEnabled ?? false
                 }
+                hideHeader={state.isMobile || state.isTablet}
                 isWorkspaceOpen={Boolean(state.isProjectWorkspaceOpen && state.activeProjectId)}
                 headerActions={
-                  !state.isProjectWorkspaceOpen && state.activeProjectId ? (
+                  state.isMobile || state.isTablet ? undefined : !state.isProjectWorkspaceOpen &&
+                    state.activeProjectId ? (
                     <button
                       type='button'
                       onClick={() => actions.setProjectWorkspaceOpen(true)}

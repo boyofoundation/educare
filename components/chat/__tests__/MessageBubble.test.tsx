@@ -165,12 +165,12 @@ describe('MessageBubble', () => {
       render(<MessageBubble message={assistantMessage} index={0} />);
 
       // Assert
-      expect(screen.getByText('Subagent activity')).toBeInTheDocument();
-      expect(screen.getByText('2 tasks')).toBeInTheDocument();
+      expect(screen.getByText('子代理活動')).toBeInTheDocument();
+      expect(screen.getByText('2 項任務')).toBeInTheDocument();
       expect(screen.getByText('Persisted researcher')).toBeInTheDocument();
       expect(screen.getByText('Live planner')).toBeInTheDocument();
-      expect(screen.getByText('Complete')).toBeInTheDocument();
-      expect(screen.getByText('Running')).toBeInTheDocument();
+      expect(screen.getByText('完成')).toBeInTheDocument();
+      expect(screen.getByText('執行中')).toBeInTheDocument();
       expect(screen.getByText('Delegated summary')).toBeInTheDocument();
       expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
     });
@@ -202,12 +202,12 @@ describe('MessageBubble', () => {
 
       render(<MessageBubble message={assistantMessage} index={0} />);
 
-      expect(screen.getByText('Tool activity')).toBeInTheDocument();
-      expect(screen.getByText('2 calls')).toBeInTheDocument();
+      expect(screen.getByText('工具活動')).toBeInTheDocument();
+      expect(screen.getByText('2 次呼叫')).toBeInTheDocument();
       expect(screen.getByText('writeFiles')).toBeInTheDocument();
       expect(screen.getByText('lintProject')).toBeInTheDocument();
-      expect(screen.getByText('OK')).toBeInTheDocument();
-      expect(screen.getByText('Recoverable')).toBeInTheDocument();
+      expect(screen.getByText('成功')).toBeInTheDocument();
+      expect(screen.getByText('可恢復')).toBeInTheDocument();
       expect(screen.getByText('Updated /index.html')).toBeInTheDocument();
       expect(
         screen.getByText('lintProject could not find 1 requested path(s).'),
@@ -248,12 +248,12 @@ describe('MessageBubble', () => {
       render(<MessageBubble message={assistantMessage} index={0} />);
 
       // Assert
-      expect(screen.getByText('Subagent activity')).toBeInTheDocument();
-      expect(screen.getByText('2 tasks')).toBeInTheDocument();
+      expect(screen.getByText('子代理活動')).toBeInTheDocument();
+      expect(screen.getByText('2 項任務')).toBeInTheDocument();
       expect(screen.getByText('Persisted researcher')).toBeInTheDocument();
       expect(screen.getByText('Live planner')).toBeInTheDocument();
-      expect(screen.getByText('Complete')).toBeInTheDocument();
-      expect(screen.getByText('Running')).toBeInTheDocument();
+      expect(screen.getByText('完成')).toBeInTheDocument();
+      expect(screen.getByText('執行中')).toBeInTheDocument();
       expect(screen.getByText('Delegated summary')).toBeInTheDocument();
       expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
     });

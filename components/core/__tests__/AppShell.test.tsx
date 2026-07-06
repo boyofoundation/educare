@@ -203,6 +203,7 @@ vi.mock('../../chat', () => ({
     session,
     onNewMessage,
     headerActions,
+    hideHeader,
   }: {
     assistantName: string;
     session: ChatSession | null;
@@ -213,9 +214,15 @@ vi.mock('../../chat', () => ({
       tokenInfo?: { promptTokenCount: number; candidatesTokenCount: number },
     ) => void;
     headerActions?: React.ReactNode;
+    hideHeader?: boolean;
   }) =>
     React.createElement('div', { 'data-testid': 'chat-container' }, [
       React.createElement('span', { key: 'name' }, `Chatting with ${assistantName}`),
+      React.createElement(
+        'span',
+        { key: 'hide-header' },
+        `hideHeader:${String(Boolean(hideHeader))}`,
+      ),
       ...(headerActions
         ? [React.createElement('div', { key: 'header-actions' }, headerActions)]
         : []),
@@ -740,6 +747,23 @@ describe('AppShell', () => {
 
       expect(chatPane).toHaveClass('w-full');
       expect(chatPane).not.toHaveClass('lg:w-[55%]');
+    });
+
+    it('should pass hideHeader=true to ChatContainer on mobile chat layouts', async () => {
+      Object.defineProperty(window, 'innerWidth', {
+        value: 375,
+        writable: true,
+      });
+
+      render(<AppShell />);
+
+      await act(async () => {
+        fireEvent(window, new Event('resize'));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('hideHeader:true')).toBeInTheDocument();
+      });
     });
 
     it('should keep assistant-owned HTML projects reopenable after deleting the active chat session', async () => {

@@ -64,7 +64,7 @@ describe('StreamingResponse', () => {
       render(<StreamingResponse content='Test content' />);
 
       // Assert
-      const mainContainer = screen.getByTestId('markdown-content').closest('.max-w-4xl');
+      const mainContainer = screen.getByTestId('markdown-content').closest('.max-w-3xl');
       expect(mainContainer).toBeInTheDocument();
     });
   });
@@ -104,7 +104,7 @@ describe('StreamingResponse', () => {
         'items-center',
         'justify-center',
         'shadow-lg',
-        'ring-2',
+        'ring-1',
         'ring-cyan-400/30',
       );
     });
@@ -120,15 +120,13 @@ describe('StreamingResponse', () => {
       expect(cursor).toBeInTheDocument();
     });
 
-    it('should show streaming indicator dot', () => {
-      // Arrange & Act
+    it('should not show the removed floating streaming indicator dot', () => {
       render(<StreamingResponse content='Test content' />);
 
-      // Assert
       const streamingDot = document.querySelector(
         '.-top-2.-right-2.w-4.h-4.bg-cyan-500.rounded-full.animate-pulse',
       );
-      expect(streamingDot).toBeInTheDocument();
+      expect(streamingDot).not.toBeInTheDocument();
     });
 
     it('should display real-time typing message', () => {
@@ -145,7 +143,7 @@ describe('StreamingResponse', () => {
 
       // Assert
       const typingIndicator = screen.getByText('正在輸入...');
-      expect(typingIndicator).toHaveClass('text-xs', 'text-gray-400', 'mt-1', 'px-2', 'opacity-60');
+      expect(typingIndicator).toHaveClass('text-xs', 'text-gray-300', 'mt-1', 'px-2', 'opacity-70');
     });
   });
 
@@ -220,12 +218,10 @@ describe('StreamingResponse', () => {
       );
     });
 
-    it('should have group hover effects container', () => {
-      // Arrange & Act
+    it('should render within the streaming metadata column', () => {
       render(<StreamingResponse content='Test content' />);
 
-      // Assert
-      const groupContainer = screen.getByTestId('markdown-content').closest('.group');
+      const groupContainer = screen.getByTestId('markdown-content').closest('.flex.flex-col');
       expect(groupContainer).toBeInTheDocument();
     });
 
@@ -314,15 +310,13 @@ describe('StreamingResponse', () => {
       expect(cursor).toBeInTheDocument();
     });
 
-    it('should have streaming dot animation', () => {
-      // Arrange & Act
+    it('should not render the removed streaming dot animation', () => {
       render(<StreamingResponse content='Test' />);
 
-      // Assert
       const streamingDot = document.querySelector(
         '.bg-cyan-500.animate-pulse.shadow-lg.ring-2.ring-cyan-400\\/30',
       );
-      expect(streamingDot).toBeInTheDocument();
+      expect(streamingDot).not.toBeInTheDocument();
     });
 
     it('should use consistent cyan color theme', () => {
@@ -337,7 +331,7 @@ describe('StreamingResponse', () => {
       expect(cursor).toBeInTheDocument();
 
       const streamingDot = document.querySelector('.bg-cyan-500');
-      expect(streamingDot).toBeInTheDocument();
+      expect(streamingDot).not.toBeInTheDocument();
     });
   });
 
@@ -374,7 +368,7 @@ describe('StreamingResponse', () => {
             name: 'Completed researcher',
             task: 'Review retrieved sources',
             status: 'complete' as const,
-            output: 'Completed summary',
+            output: '已完成摘要',
             toolSequence: ['Read', 'Search'],
             durationMs: 1200,
           },
@@ -399,10 +393,10 @@ describe('StreamingResponse', () => {
       );
 
       // Assert
-      expect(screen.getAllByText('Subagent activity')).toHaveLength(2);
+      expect(screen.getAllByText('子代理活動')).toHaveLength(2);
       expect(screen.getByText('Completed researcher')).toBeInTheDocument();
       expect(screen.getByText('Active planner')).toBeInTheDocument();
-      expect(screen.getByText('Completed summary')).toBeInTheDocument();
+      expect(screen.getByText('已完成摘要')).toBeInTheDocument();
       expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
     });
 
@@ -432,12 +426,12 @@ describe('StreamingResponse', () => {
         />,
       );
 
-      expect(screen.getByText('Tool activity')).toBeInTheDocument();
-      expect(screen.getByText('2 calls')).toBeInTheDocument();
+      expect(screen.getByText('工具活動')).toBeInTheDocument();
+      expect(screen.getByText('2 次呼叫')).toBeInTheDocument();
       expect(screen.getByText('getProjectSummary')).toBeInTheDocument();
       expect(screen.getByText('lintProject')).toBeInTheDocument();
-      expect(screen.getByText('Running')).toBeInTheDocument();
-      expect(screen.getByText('Recoverable')).toBeInTheDocument();
+      expect(screen.getByText('執行中')).toBeInTheDocument();
+      expect(screen.getByText('可恢復')).toBeInTheDocument();
       expect(screen.queryByText('Inspecting project context')).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /getProjectSummary/i }));
       expect(screen.getByText('Inspecting project context')).toBeInTheDocument();
@@ -515,14 +509,12 @@ describe('StreamingResponse', () => {
       // ReactMarkdown should handle proper heading structure
     });
 
-    it('should not interfere with screen reader flow', () => {
-      // Arrange & Act
+    it('should expose the streaming region semantics for screen readers', () => {
       render(<StreamingResponse content='Accessible content' />);
 
-      // Assert
-      // The component should not have any elements that would confuse screen readers
-      const interactiveElements = screen.queryAllByRole('button');
-      expect(interactiveElements).toHaveLength(0);
+      const streamingRegion = screen.getByText('正在輸入...').closest('[aria-live="polite"]');
+      expect(streamingRegion).toHaveAttribute('aria-busy', 'true');
+      expect(screen.queryAllByRole('button')).toHaveLength(0);
     });
   });
 
@@ -532,9 +524,8 @@ describe('StreamingResponse', () => {
       render(<StreamingResponse content='Active stream' />);
 
       // Assert
-      // Multiple visual indicators should be present
       expect(screen.getByText('正在輸入...')).toBeInTheDocument();
-      expect(document.querySelector('.animate-pulse')).toBeInTheDocument();
+      expect(document.querySelector('.ml-1.animate-pulse')).toBeInTheDocument();
     });
 
     it('should differentiate from completed messages', () => {
@@ -542,11 +533,11 @@ describe('StreamingResponse', () => {
       render(<StreamingResponse content='Streaming content' />);
 
       // Assert
-      // Streaming response should have unique indicators
-      const streamingDot = document.querySelector('.-top-2.-right-2.animate-pulse');
-      expect(streamingDot).toBeInTheDocument();
-
       const typingCursor = document.querySelector('.ml-1.animate-pulse');
+      expect(typingCursor).toBeInTheDocument();
+
+      const streamingDot = document.querySelector('.-top-2.-right-2.animate-pulse');
+      expect(streamingDot).not.toBeInTheDocument();
       expect(typingCursor).toBeInTheDocument();
     });
 

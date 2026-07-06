@@ -44,7 +44,7 @@ describe('ThinkingIndicator', () => {
       // Assert
       const container = screen.getByText('AI 正在思考...').closest('.flex.justify-start');
       expect(container).toBeInTheDocument();
-      expect(container?.querySelector('.max-w-4xl')).toBeInTheDocument();
+      expect(container?.querySelector('.max-w-3xl')).toBeInTheDocument();
     });
 
     it('should render with assistant-style layout (left-aligned)', () => {
@@ -85,7 +85,7 @@ describe('ThinkingIndicator', () => {
         'items-center',
         'justify-center',
         'shadow-lg',
-        'ring-2',
+        'ring-1',
         'ring-gray-600/30',
       );
     });
@@ -201,12 +201,17 @@ describe('ThinkingIndicator', () => {
 
   describe('Props Handling', () => {
     it('should accept assistantName prop but not display it', () => {
-      // Arrange & Act - Component accepts assistantName but doesn't use it based on the code
       render(<ThinkingIndicator assistantName='Test Assistant' />);
 
-      // Assert
       expect(screen.getByText('AI 正在思考...')).toBeInTheDocument();
       expect(screen.queryByText('Test Assistant')).not.toBeInTheDocument();
+    });
+
+    it('should render provided status text inside the indicator bubble', () => {
+      render(<ThinkingIndicator statusText='整理工具結果中...' />);
+
+      expect(screen.getByText('整理工具結果中...')).toBeInTheDocument();
+      expect(screen.queryByText('AI 正在思考...')).not.toBeInTheDocument();
     });
 
     it('should render the same regardless of assistantName prop', () => {

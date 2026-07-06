@@ -465,24 +465,53 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
       >
         {/* Top Bar with Hamburger Menu */}
         {(state.isMobile || state.isTablet) && !state.isSidebarOpen && (
-          <div className='flex items-center p-4 border-b border-gray-700/50 bg-gray-800/80 backdrop-blur-sm'>
-            <button
-              onClick={actions.toggleSidebar}
-              className='p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-700/50 transition-colors mr-3'
-              aria-label='開啟選單'
-              aria-expanded={state.isSidebarOpen}
-              aria-haspopup='true'
-            >
-              <svg className='w-6 h-6' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                <path
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  strokeWidth={2}
-                  d='M4 6h16M4 12h16M4 18h16'
-                />
-              </svg>
-            </button>
-            <h2 className='text-lg font-semibold text-white'>{title}</h2>
+          <div className='flex items-center justify-between gap-3 border-b border-gray-700/50 bg-gray-800/80 p-4 backdrop-blur-sm'>
+            <div className='flex items-center'>
+              <button
+                onClick={actions.toggleSidebar}
+                className='mr-3 rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-700/50 hover:text-white'
+                aria-label='開啟選單'
+                aria-expanded={state.isSidebarOpen}
+                aria-haspopup='true'
+              >
+                <svg className='w-6 h-6' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                  <path
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    strokeWidth={2}
+                    d='M4 6h16M4 12h16M4 18h16'
+                  />
+                </svg>
+              </button>
+              <h2 className='text-lg font-semibold text-white'>{title}</h2>
+            </div>
+            {state.viewMode === 'chat' &&
+              !state.isProjectWorkspaceOpen &&
+              state.activeProjectId && (
+                <button
+                  type='button'
+                  onClick={() => actions.setProjectWorkspaceOpen(true)}
+                  aria-label='顯示 HTML Canvas'
+                  title='顯示 HTML Canvas'
+                  className='inline-flex items-center gap-1.5 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1.5 text-xs font-medium text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-white'
+                >
+                  <svg
+                    className='h-3.5 w-3.5'
+                    fill='none'
+                    stroke='currentColor'
+                    viewBox='0 0 24 24'
+                    aria-hidden='true'
+                  >
+                    <path
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                      strokeWidth={2}
+                      d='M13 5l7 7-7 7M5 5v14'
+                    />
+                  </svg>
+                  <span className='hidden sm:inline'>顯示 HTML Canvas</span>
+                </button>
+              )}
           </div>
         )}
 

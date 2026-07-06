@@ -11,7 +11,6 @@ describe('ChatInput', () => {
     onChange: vi.fn(),
     onSend: vi.fn(),
     isLoading: false,
-    statusText: '',
     disabled: false,
   };
 
@@ -139,40 +138,6 @@ describe('ChatInput', () => {
       // Assert
       const sendButton = screen.getByRole('button');
       expect(sendButton).toBeDisabled();
-    });
-  });
-
-  describe('Status Text Display', () => {
-    it('should show status text when provided', () => {
-      // Arrange
-      const statusText = '🤖 生成回答...';
-
-      // Act
-      render(<ChatInput {...mockProps} statusText={statusText} />);
-
-      // Assert
-      expect(screen.getByText(statusText)).toBeInTheDocument();
-    });
-
-    it('should not show status text section when statusText is empty', () => {
-      // Arrange & Act
-      render(<ChatInput {...mockProps} statusText='' />);
-
-      // Assert
-      const statusSection = screen.queryByText(/生成回答/);
-      expect(statusSection).not.toBeInTheDocument();
-    });
-
-    it('should render status text with proper styling', () => {
-      // Arrange
-      const statusText = 'Processing...';
-
-      // Act
-      render(<ChatInput {...mockProps} statusText={statusText} />);
-
-      // Assert
-      const statusElement = screen.getByText(statusText);
-      expect(statusElement).toHaveClass('text-sm', 'text-cyan-300', 'font-medium');
     });
   });
 
