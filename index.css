@@ -1,13 +1,18 @@
 @import 'tailwindcss';
 
 @theme {
+  --font-sans: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, sans-serif;
   --color-gray-900: #121212;
+  --color-gray-850: #181c24;
   --color-gray-800: #1e1e1e;
   --color-gray-700: #2d2d2d;
   --color-gray-600: #3c3c3c;
   --color-gray-400: #a0a0a0;
   --color-cyan-500: #06b6d4;
   --color-cyan-600: #0891b2;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #f43f5e;
 }
 
 /* 自定義滾動條樣式 */
@@ -50,7 +55,9 @@
 }
 
 /* 針對 Firefox 的滾動條樣式 */
-* {
+main,
+aside,
+.chat-scroll {
   scrollbar-width: thin;
   scrollbar-color: #0891b2 rgba(45, 45, 45, 0.3);
 }

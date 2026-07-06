@@ -143,7 +143,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
       <div className='flex justify-end' aria-label='使用者訊息'>
         <div className='flex w-full max-w-3xl flex-row-reverse gap-3'>
           <div className='flex-shrink-0'>
-            <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 shadow-lg ring-2 ring-cyan-400/20'>
+            <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 shadow-lg ring-1 ring-cyan-400/20'>
               <UserIcon className='h-5 w-5 text-white' />
             </div>
           </div>
@@ -164,7 +164,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
     <div className='flex justify-start' aria-label={message.isError ? '系統錯誤訊息' : '助理回覆'}>
       <div className='flex w-full max-w-3xl gap-3'>
         <div className='flex-shrink-0'>
-          <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-gray-700 to-gray-600 shadow-lg ring-2 ring-gray-600/30'>
+          <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-gray-700 to-gray-600 shadow-lg ring-1 ring-gray-600/30'>
             <GeminiIcon className='h-5 w-5 text-cyan-400' />
           </div>
         </div>

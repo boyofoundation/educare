@@ -105,7 +105,7 @@ describe('StreamingResponse', () => {
         'justify-center',
         'shadow-lg',
         'ring-1',
-        'ring-cyan-400/30',
+        'ring-gray-600/30',
       );
     });
   });

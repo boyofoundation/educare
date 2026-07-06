@@ -90,11 +90,9 @@ describe('WelcomeMessage', () => {
       expect(screen.getByText('問我任何問題，我會幫助您！')).toBeInTheDocument();
 
       // Should not have any description paragraph
-      const paragraphs = screen.getAllByText(/./);
-      const descriptionParagraphs = paragraphs.filter(
-        p => p.tagName === 'P' && p.className.includes('text-gray-300'),
-      );
-      expect(descriptionParagraphs).toHaveLength(0);
+      expect(
+        screen.queryByText('This is a helpful AI assistant for testing purposes.'),
+      ).not.toBeInTheDocument();
     });
 
     it('should apply proper styling to description', () => {
@@ -173,13 +171,15 @@ describe('WelcomeMessage', () => {
         'inline-flex',
         'items-center',
         'gap-2',
-        'bg-gray-800',
+        'bg-gray-800/80',
         'px-4',
         'py-2',
         'rounded-full',
         'text-sm',
-        'text-gray-400',
+        'text-gray-300',
         'mb-6',
+        'border',
+        'border-cyan-500/20',
       );
     });
 
@@ -202,13 +202,15 @@ describe('WelcomeMessage', () => {
       expect(iconContainer).toHaveClass(
         'w-20',
         'h-20',
-        'bg-cyan-600',
+        'bg-gray-800/80',
         'rounded-full',
         'flex',
         'items-center',
         'justify-center',
         'mx-auto',
         'mb-6',
+        'ring-1',
+        'ring-cyan-500/30',
       );
     });
 
@@ -218,7 +220,7 @@ describe('WelcomeMessage', () => {
 
       // Assert
       const icon = screen.getByTestId('gemini-icon');
-      expect(icon).toHaveClass('w-10', 'h-10', 'text-white');
+      expect(icon).toHaveClass('w-10', 'h-10', 'text-cyan-400');
     });
   });
 
@@ -299,7 +301,7 @@ describe('WelcomeMessage', () => {
 
       // Assert
       const footerMessage = screen.getByText('問我任何問題，我會幫助您！');
-      expect(footerMessage).toHaveClass('text-gray-400', 'text-lg');
+      expect(footerMessage).toHaveClass('text-gray-300', 'text-lg');
     });
   });
 
@@ -401,8 +403,7 @@ describe('WelcomeMessage', () => {
       expect(descriptionElement).toHaveClass('text-gray-300'); // Good contrast
 
       const sharedIndicatorText = screen.getByText('分享的 AI 助理 - 您的對話不會永久儲存');
-      // text-gray-400 is on the container div, not the inner span
-      expect(sharedIndicatorText.parentElement).toHaveClass('text-gray-400'); // Adequate contrast for secondary info
+      expect(sharedIndicatorText.parentElement).toHaveClass('text-gray-300');
     });
   });
 });

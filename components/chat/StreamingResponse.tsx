@@ -14,7 +14,7 @@ const StreamingResponse: React.FC<StreamingResponseProps> = ({
     <div className='flex justify-start' aria-live='polite' aria-busy='true'>
       <div className='flex w-full max-w-3xl gap-3'>
         <div className='flex-shrink-0'>
-          <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-gray-700 to-gray-600 shadow-lg ring-1 ring-cyan-400/30'>
+          <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-gray-700 to-gray-600 shadow-lg ring-1 ring-gray-600/30'>
             <GeminiIcon className='h-5 w-5 text-cyan-400' />
           </div>
         </div>
