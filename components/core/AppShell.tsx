@@ -147,6 +147,8 @@ function AppContent(): React.JSX.Element {
             ragChunks={state.currentAssistant.ragChunks ?? []}
             onNewMessage={handleNewMessage}
             sharedMode={!!state.isShared}
+            assistantDescription={state.currentAssistant.description}
+            starterPrompts={state.currentAssistant.starterPrompts ?? []}
             agentHarnessEnabled={state.currentAssistant.agentHarnessEnabled ?? true}
             subagentDelegationEnabled={state.currentAssistant.subagentDelegationEnabled ?? false}
           />
@@ -247,6 +249,8 @@ function AppContent(): React.JSX.Element {
                 ragChunks={state.currentAssistant.ragChunks ?? []}
                 onNewMessage={handleNewMessage}
                 sharedMode={!!state.isShared}
+                assistantDescription={state.currentAssistant.description}
+                starterPrompts={state.currentAssistant.starterPrompts ?? []}
                 agentHarnessEnabled={state.currentAssistant.agentHarnessEnabled ?? true}
                 subagentDelegationEnabled={
                   state.currentAssistant.subagentDelegationEnabled ?? false
@@ -492,5 +496,3 @@ export function AppShell(): React.JSX.Element {
     </ErrorBoundary>
   );
 }
-
-export default AppShell;

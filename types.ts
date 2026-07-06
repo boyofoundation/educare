@@ -22,6 +22,7 @@ export interface Assistant {
   description: string; // 給使用者看的友善描述
   systemPrompt: string; // 給 AI 的內部指令
   ragChunks?: RagChunk[];
+  starterPrompts?: string[];
   createdAt: number;
   isShared?: boolean;
   /**

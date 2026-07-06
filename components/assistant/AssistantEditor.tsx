@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Assistant, RagChunk } from '../../types';
 import { RAGFileUpload } from './RAGFileUpload';
 import { useTursoAssistantStatus } from '../../hooks/useTursoAssistantStatus';
@@ -11,6 +11,9 @@ interface AssistantEditorProps {
   onShare?: (assistant: Assistant) => void;
 }
 
+const MAX_STARTER_PROMPTS = 4;
+const MAX_STARTER_PROMPT_LENGTH = 100;
+
 export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   assistant,
   onSave,
@@ -21,6 +24,8 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [ragChunks, setRagChunks] = useState<RagChunk[]>([]);
+  const [starterPrompts, setStarterPrompts] = useState<string[]>([]);
+  const [newStarterPrompt, setNewStarterPrompt] = useState('');
   const [agentHarnessEnabled, setAgentHarnessEnabled] = useState(true);
   const [subagentDelegationEnabled, setSubagentDelegationEnabled] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -35,6 +40,8 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setDescription(assistant.description || '');
       setSystemPrompt(assistant.systemPrompt);
       setRagChunks(assistant.ragChunks || []);
+      setStarterPrompts(assistant.starterPrompts || []);
+      setNewStarterPrompt('');
       setAgentHarnessEnabled(assistant.agentHarnessEnabled ?? true);
       setSubagentDelegationEnabled(assistant.subagentDelegationEnabled ?? false);
     } else {
@@ -42,6 +49,8 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setDescription('');
       setSystemPrompt('您是一個有用且專業的 AI 助理。');
       setRagChunks([]);
+      setStarterPrompts([]);
+      setNewStarterPrompt('');
       setAgentHarnessEnabled(true);
       setSubagentDelegationEnabled(false);
     }
@@ -65,13 +74,13 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         name: name.trim(),
         description: description.trim(),
         systemPrompt: systemPrompt.trim(),
-        ragChunks: ragChunks,
+        ragChunks,
+        starterPrompts,
         createdAt: assistant?.createdAt || Date.now(),
         agentHarnessEnabled,
         subagentDelegationEnabled,
       };
 
-      // 只保存到本地，不自動上傳到 Turso
       console.log('Assistant saved locally. Use migration settings to sync to Turso if needed.');
 
       await onSave(newAssistant);
@@ -86,12 +95,33 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
     setRagChunks(newChunks);
   };
 
+  const handleAddStarterPrompt = () => {
+    const nextPrompt = newStarterPrompt.trim();
+    if (!nextPrompt) {
+      return;
+    }
+    if (starterPrompts.length >= MAX_STARTER_PROMPTS) {
+      alert('建議提問最多只能設定 4 條。');
+      return;
+    }
+    if (nextPrompt.length > MAX_STARTER_PROMPT_LENGTH) {
+      alert(`建議提問請控制在 ${MAX_STARTER_PROMPT_LENGTH} 字以內。`);
+      return;
+    }
+    setStarterPrompts(current => [...current, nextPrompt]);
+    setNewStarterPrompt('');
+  };
+
+  const handleRemoveStarterPrompt = (index: number) => {
+    setStarterPrompts(current => current.filter((_, currentIndex) => currentIndex !== index));
+  };
+
   return (
     <div
       data-testid='assistant-editor'
-      className='flex flex-col h-full bg-gradient-to-br from-gray-800 to-gray-900 p-8 overflow-y-auto chat-scroll'
+      className='chat-scroll flex h-full flex-col overflow-y-auto bg-gradient-to-br from-gray-800 to-gray-900 p-8'
     >
-      <h2 className='text-3xl font-bold mb-8 bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent'>
+      <h2 className='mb-8 bg-gradient-to-r from-white to-gray-300 bg-clip-text text-3xl font-bold text-transparent'>
         {assistant ? '編輯助理' : '新增助理'}
       </h2>
 
@@ -108,7 +138,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       )}
 
       <div className='mb-6'>
-        <label htmlFor='name' className='block text-sm font-semibold text-gray-300 mb-2'>
+        <label htmlFor='name' className='mb-2 block text-sm font-semibold text-gray-300'>
           助理名稱
         </label>
         <input
@@ -116,9 +146,9 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
           id='name'
           value={name}
           onChange={e => setName(e.target.value)}
-          className={`w-full bg-gray-700/80 border-2 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 focus:bg-gray-700 transition-all duration-300 shadow-inner ${
+          className={`w-full rounded-xl border-2 bg-gray-700/80 px-4 py-3 text-white placeholder-gray-400 shadow-inner transition-all duration-300 focus:border-cyan-500/50 focus:bg-gray-700 focus:ring-2 focus:ring-cyan-500/50 ${
             highlightFields
-              ? 'border-cyan-500 ring-4 ring-cyan-500/30 bg-gray-750/90 animate-pulse'
+              ? 'animate-pulse border-cyan-500 bg-gray-750/90 ring-4 ring-cyan-500/30'
               : 'border-gray-600/50'
           }`}
           placeholder='例如：行銷文案寫手'
@@ -126,18 +156,18 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       </div>
 
       <div className='mb-6'>
-        <label htmlFor='description' className='block text-sm font-semibold text-gray-300 mb-2'>
+        <label htmlFor='description' className='mb-2 block text-sm font-semibold text-gray-300'>
           公開描述
-          <span className='text-xs text-gray-500 ml-2'>(分享時顯示給用戶)</span>
+          <span className='ml-2 text-xs text-gray-500'>(分享時顯示給用戶)</span>
         </label>
         <textarea
           id='description'
           value={description}
           onChange={e => setDescription(e.target.value)}
           rows={3}
-          className={`w-full bg-gray-700/80 border-2 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 focus:bg-gray-700 transition-all duration-300 shadow-inner resize-none ${
+          className={`w-full resize-none rounded-xl border-2 bg-gray-700/80 px-4 py-3 text-white placeholder-gray-400 shadow-inner transition-all duration-300 focus:border-cyan-500/50 focus:bg-gray-700 focus:ring-2 focus:ring-cyan-500/50 ${
             highlightFields
-              ? 'border-cyan-500 ring-4 ring-cyan-500/30 bg-gray-750/90 animate-pulse'
+              ? 'animate-pulse border-cyan-500 bg-gray-750/90 ring-4 ring-cyan-500/30'
               : 'border-gray-600/50'
           }`}
           placeholder='簡單描述這個助理能幫助什麼...'
@@ -145,7 +175,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       </div>
 
       <div className='mb-6'>
-        <label htmlFor='systemPrompt' className='block text-sm font-semibold text-gray-300 mb-2'>
+        <label htmlFor='systemPrompt' className='mb-2 block text-sm font-semibold text-gray-300'>
           系統提示
         </label>
         <textarea
@@ -153,20 +183,62 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
           value={systemPrompt}
           onChange={e => setSystemPrompt(e.target.value)}
           rows={8}
-          className={`w-full bg-gray-700/80 border-2 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 focus:bg-gray-700 transition-all duration-300 shadow-inner resize-none ${
+          className={`w-full resize-none rounded-xl border-2 bg-gray-700/80 px-4 py-3 text-white placeholder-gray-400 shadow-inner transition-all duration-300 focus:border-cyan-500/50 focus:bg-gray-700 focus:ring-2 focus:ring-cyan-500/50 ${
             highlightFields
-              ? 'border-cyan-500 ring-4 ring-cyan-500/30 bg-gray-750/90 animate-pulse'
+              ? 'animate-pulse border-cyan-500 bg-gray-750/90 ring-4 ring-cyan-500/30'
               : 'border-gray-600/50'
           }`}
           placeholder='定義助理的角色、個性和指導。'
         />
       </div>
 
+      <div className='mb-6'>
+        <label className='mb-2 block text-sm font-semibold text-gray-300'>
+          建議提問
+          <span className='ml-2 text-xs text-gray-500'>(最多 4 條，每條建議 100 字以內)</span>
+        </label>
+        <div className='space-y-3'>
+          <div className='flex gap-3'>
+            <input
+              type='text'
+              value={newStarterPrompt}
+              onChange={e => setNewStarterPrompt(e.target.value)}
+              className='flex-1 rounded-xl border border-gray-600/50 bg-gray-700/80 px-4 py-3 text-white placeholder-gray-400 shadow-inner transition-all duration-300 focus:border-cyan-500/50 focus:bg-gray-700 focus:ring-2 focus:ring-cyan-500/50'
+              placeholder='例如：幫我整理這份教材的重點'
+            />
+            <button
+              type='button'
+              onClick={handleAddStarterPrompt}
+              className='rounded-xl border border-cyan-500/40 bg-cyan-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-cyan-500'
+            >
+              新增
+            </button>
+          </div>
+          <ul className='space-y-2'>
+            {starterPrompts.map((prompt, index) => (
+              <li
+                key={`${prompt}-${index}`}
+                className='flex items-center justify-between rounded-xl border border-gray-700/50 bg-gray-800/60 px-4 py-3 text-sm text-gray-200'
+              >
+                <span>{prompt}</span>
+                <button
+                  type='button'
+                  onClick={() => handleRemoveStarterPrompt(index)}
+                  className='rounded-lg px-3 py-1 text-xs text-rose-200 transition hover:bg-rose-500/10 hover:text-rose-100'
+                >
+                  刪除
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+
       {/* G9: Agentic harness 開關 */}
       <div className='mb-6'>
         <label
           htmlFor='agent-harness-enabled'
-          className='flex items-start gap-3 cursor-pointer select-none'
+          className='flex cursor-pointer select-none items-start gap-3'
         >
           <input
             id='agent-harness-enabled'
@@ -181,7 +253,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             <span className='text-sm font-semibold text-gray-300'>
               Agentic harness (自動跨回合續跑)
             </span>
-            <span id='agent-harness-help' className='mt-1 text-xs text-gray-500 leading-relaxed'>
+            <span id='agent-harness-help' className='mt-1 text-xs leading-relaxed text-gray-500'>
               開啟後,模型會依 todo 進度與預覽診斷自動續跑(預設最多 5
               回合);關閉則退回單回合行為。Shared mode 不受此設定影響(續跑預算 = 1)。
             </span>
@@ -192,7 +264,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       <div className='mb-6'>
         <label
           htmlFor='subagent-delegation-enabled'
-          className='flex items-start gap-3 cursor-pointer select-none'
+          className='flex cursor-pointer select-none items-start gap-3'
         >
           <input
             id='subagent-delegation-enabled'
@@ -209,7 +281,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             </span>
             <span
               id='subagent-delegation-help'
-              className='mt-1 text-xs text-gray-500 leading-relaxed'
+              className='mt-1 text-xs leading-relaxed text-gray-500'
             >
               開啟後,主模型可把研究或受限 HTML 工作委派給 1-4 個子代理人並行處理。這會增加 token
               成本,且 shared mode 會在執行時強制停用。
@@ -224,7 +296,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         disabled={isSaving}
       />
 
-      <div className='mt-auto flex justify-between items-center'>
+      <div className='mt-auto flex items-center justify-between'>
         {/* Left side - Share section (only show for existing assistants) */}
         <div className='flex-1'>
           {assistant && (
@@ -237,14 +309,14 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
                     }
                   }}
                   disabled={!canShare}
-                  className={`px-6 py-3 rounded-xl font-semibold flex items-center space-x-2 shadow-lg transition-all duration-300 ${
+                  className={`flex items-center space-x-2 rounded-xl px-6 py-3 font-semibold shadow-lg transition-all duration-300 ${
                     canShare
-                      ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white hover:shadow-xl transform hover:-translate-y-0.5 cursor-pointer'
-                      : 'bg-gray-600 text-gray-400 cursor-not-allowed opacity-50'
+                      ? 'cursor-pointer bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:-translate-y-0.5 hover:from-blue-500 hover:to-purple-500 hover:shadow-xl'
+                      : 'cursor-not-allowed bg-gray-600 text-gray-400 opacity-50'
                   }`}
                   title={canShare ? '分享助理' : '需要先遷移到 Turso 才能分享'}
                 >
-                  <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                  <svg className='h-4 w-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
                     <path
                       strokeLinecap='round'
                       strokeLinejoin='round'
@@ -264,19 +336,19 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
           <button
             data-testid='cancel-button'
             onClick={onCancel}
-            className='px-6 py-3 rounded-xl bg-gray-600/80 hover:bg-gray-500 text-white font-semibold transition-all duration-300 hover:shadow-lg hover:transform hover:-translate-y-0.5'
+            className='rounded-xl bg-gray-600/80 px-6 py-3 font-semibold text-white transition-all duration-300 hover:-translate-y-0.5 hover:bg-gray-500 hover:shadow-lg'
           >
             取消
           </button>
           <button
             data-testid='save-button'
             onClick={handleSave}
-            className='px-8 py-3 rounded-xl bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-white font-bold transition-all duration-300 hover:shadow-xl hover:transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none'
+            className='rounded-xl bg-gradient-to-r from-cyan-600 to-cyan-500 px-8 py-3 font-bold text-white transition-all duration-300 hover:-translate-y-0.5 hover:from-cyan-500 hover:to-cyan-400 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:transform-none'
             disabled={isSaving}
           >
             {isSaving ? (
               <span className='flex items-center gap-2'>
-                <div className='w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin'></div>
+                <div className='h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent'></div>
                 處理中...
               </span>
             ) : (

@@ -90,6 +90,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   hideHeader = false,
   sharedMode = false,
   assistantDescription,
+  starterPrompts = [],
   isWorkspaceOpen: _isWorkspaceOpen = false,
   headerActions,
   agentHarnessEnabled = true,
@@ -710,6 +711,31 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     controllerRef.current?.stop('user-stop');
   };
 
+  const handlePromptSelect = async (prompt: string) => {
+    if (isLoading) {
+      return;
+    }
+
+    setInput(prompt);
+    const baseSession = sessionRef.current;
+    const newUserMessage: ChatMessage = {
+      role: 'user',
+      content: prompt,
+      timestamp: Date.now(),
+    };
+    const updatedSession = {
+      ...baseSession,
+      messages: [...baseSession.messages, newUserMessage],
+    };
+
+    await executeRun({
+      message: prompt,
+      displaySession: updatedSession,
+      historyMessages: baseSession.messages.filter(messageItem => !isSyntheticMessage(messageItem)),
+    });
+    setInput('');
+  };
+
   const isRunning = runState?.status === 'running';
   const interruptedTurnLabel = interruptedCheckpoint
     ? `${Math.min(interruptedCheckpoint.turnIndex + 1, interruptedCheckpoint.maxTurns)}/${interruptedCheckpoint.maxTurns}`
@@ -840,6 +866,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                 assistantName={assistantName}
                 assistantDescription={assistantDescription}
                 sharedMode={sharedMode}
+                starterPrompts={starterPrompts}
+                onPromptSelect={prompt => {
+                  void handlePromptSelect(prompt);
+                }}
               />
             )}
 
@@ -852,12 +882,17 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               atBottomStateChange={() => {
                 updatePinnedState();
               }}
-              initialItemCount={Math.max(currentSession.messages.length, 1)}
-              itemContent={(index: number, msg: ChatMessage) => (
-                <div className='mb-6'>
-                  <MessageBubble message={msg} index={index} assistantName={assistantName} />
-                </div>
-              )}
+              initialItemCount={currentSession.messages.length}
+              itemContent={(index: number, msg: ChatMessage) => {
+                if (!msg) {
+                  return null;
+                }
+                return (
+                  <div className='mb-6'>
+                    <MessageBubble message={msg} index={index} assistantName={assistantName} />
+                  </div>
+                );
+              }}
             />
 
             {isThinking && !streamingResponse && (

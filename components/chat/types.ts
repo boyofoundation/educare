@@ -53,6 +53,7 @@ export interface ChatContainerProps {
   hideHeader?: boolean;
   sharedMode?: boolean;
   assistantDescription?: string;
+  starterPrompts?: string[];
   isWorkspaceOpen?: boolean;
   headerActions?: ReactNode;
   /** G9: 由父層 (AppShell) 從 assistant.agentHarnessEnabled 傳入;預設 true。 */
@@ -65,6 +66,8 @@ export interface WelcomeMessageProps {
   assistantName: string;
   assistantDescription?: string;
   sharedMode?: boolean;
+  starterPrompts?: string[];
+  onPromptSelect?: (prompt: string) => void;
 }
 
 export interface ThinkingIndicatorProps {

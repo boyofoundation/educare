@@ -6,6 +6,8 @@ const WelcomeMessage: React.FC<WelcomeMessageProps> = ({
   assistantName,
   assistantDescription,
   sharedMode = false,
+  starterPrompts = [],
+  onPromptSelect,
 }) => {
   return (
     <div data-testid='welcome-message' className='py-12 text-center'>
@@ -29,6 +31,20 @@ const WelcomeMessage: React.FC<WelcomeMessageProps> = ({
           {assistantDescription ? '讓我們開始聊天吧！' : '問我任何問題，我會幫助您！'}
         </p>
       </div>
+      {starterPrompts.length > 0 && (
+        <div className='mx-auto mt-6 flex max-w-2xl flex-wrap justify-center gap-3'>
+          {starterPrompts.map(prompt => (
+            <button
+              key={prompt}
+              type='button'
+              onClick={() => onPromptSelect?.(prompt)}
+              className='rounded-full border border-cyan-500/30 bg-gray-800/80 px-4 py-2 text-sm text-cyan-100 transition hover:border-cyan-400 hover:bg-gray-700/80 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70'
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
