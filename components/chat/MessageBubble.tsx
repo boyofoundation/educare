@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { MessageBubbleProps } from './types';
 import { UserIcon, GeminiIcon } from '../ui/Icons';
 import ReactMarkdown from 'react-markdown';
@@ -8,6 +8,8 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeHighlightCodeLines from 'rehype-highlight-code-lines';
 import 'highlight.js/styles/github-dark.css';
+
+const EMPTY_MESSAGE_FALLBACK = '（本次回覆沒有內容）';
 
 const getPlainText = (children: React.ReactNode): string => {
   if (typeof children === 'string') {
@@ -24,14 +26,70 @@ const getPlainText = (children: React.ReactNode): string => {
   return '';
 };
 
+const formatTimestamp = (timestamp?: number): string | null => {
+  if (typeof timestamp !== 'number') {
+    return null;
+  }
+
+  const date = new Date(timestamp);
+  const now = new Date(Date.now());
+  const isSameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+
+  if (isSameDay) {
+    return date.toLocaleTimeString('zh-TW', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  return date.toLocaleString('zh-TW', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
 const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index }) => {
-  // G6: 合成 (synthetic) 訊息預設摺疊,使用者可展開檢視。
   const [syntheticExpanded, setSyntheticExpanded] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<{ target: string; label: string } | null>(null);
+  const copyFeedbackTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyFeedbackTimerRef.current !== null) {
+        window.clearTimeout(copyFeedbackTimerRef.current);
+      }
+    };
+  }, []);
+
+  const setCopyFeedbackLabel = (target: string, label: string) => {
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+    }
+
+    setCopyFeedback({ target, label });
+    copyFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopyFeedback(null);
+    }, 1500);
+  };
+
+  const handleCopy = async (text: string, target: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyFeedbackLabel(target, '✓ 已複製');
+    } catch {
+      setCopyFeedbackLabel(target, '複製失敗');
+    }
+  };
 
   if (message.synthetic) {
     return (
       <div className='flex justify-start' data-testid='synthetic-message'>
-        <div className='max-w-4xl'>
+        <div className='max-w-3xl'>
           <button
             type='button'
             onClick={() => setSyntheticExpanded(open => !open)}
@@ -75,76 +133,93 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
     );
   }
 
+  const displayContent = message.content.trim() === '' ? EMPTY_MESSAGE_FALLBACK : message.content;
+  const timestampLabel = formatTimestamp(message.timestamp);
+  const isUser = message.role === 'user';
+  const messageCopyTarget = `${message.role}-message-copy`;
+  const messageCopyLabel =
+    copyFeedback?.target === messageCopyTarget
+      ? copyFeedback.label
+      : isUser
+        ? '複製訊息'
+        : '複製回應';
+
   const renderMessageContent = (content: string) => {
     return (
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, [rehypeHighlightCodeLines]]}
         components={{
-          // 自定義 code 區塊樣式
           code(props) {
-            const { className, children, ...rest } = props;
+            const { className, children, ...rest } = props as React.ComponentProps<'code'> & {
+              node?: {
+                position?: {
+                  start?: { line?: number };
+                  end?: { line?: number };
+                };
+              };
+            };
             const match = /language-(\w+)/.exec(className || '');
             const language = match ? match[1] : '';
+            const position = rest.node?.position;
+            const startLine = position?.start?.line || 0;
+            const endLine = position?.end?.line || 0;
+            const isMultiline = Boolean(match) || endLine - startLine > 0;
 
-            // check position
-            const node = rest.node;
-            const position = node?.position;
-            const start_line = position?.start.line || 0;
-            const end_line = position?.end.line || 0;
-            const checker = end_line - start_line;
+            if (isMultiline) {
+              const codeText = getPlainText(children);
+              const codeCopyTarget = `code-copy:${language}:${codeText}`;
+              const codeCopyLabel =
+                copyFeedback?.target === codeCopyTarget ? copyFeedback.label : '複製';
 
-            if (match || checker) {
-              // 多行代碼塊
-              const code_text = getPlainText(children);
               return (
-                <div className='bg-gray-900 rounded-md my-2 overflow-x-auto w-full max-w-sm sm:max-w-md md:max-w-lg lg:max-w-2xl mx-auto'>
-                  <div className='flex justify-between items-center px-4 py-2 bg-gray-700 text-xs'>
+                <div className='my-2 overflow-hidden rounded-xl border border-gray-700/70 bg-gray-900'>
+                  <div className='flex items-center justify-between gap-3 border-b border-gray-700/70 bg-gray-800/80 px-4 py-2 text-xs'>
                     <span className='text-gray-300'>{language || 'code'}</span>
                     <button
-                      onClick={() => navigator.clipboard.writeText(code_text)}
-                      className='text-gray-400 hover:text-white transition-colors'
+                      type='button'
+                      onClick={() => void handleCopy(codeText, codeCopyTarget)}
+                      className='rounded-md px-2 py-1 text-gray-300 transition hover:bg-gray-700/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70'
+                      title={codeCopyLabel}
                     >
-                      複製
+                      {codeCopyLabel}
                     </button>
                   </div>
-                  <pre className='p-4 text-sm mx-auto'>
+                  <pre className='w-full overflow-x-auto p-4 text-sm'>
                     <code className={className} {...rest}>
                       {children}
                     </code>
                   </pre>
                 </div>
               );
-            } else {
-              // 內聯代碼
-              return (
-                <code
-                  className='bg-gray-700 text-cyan-300 px-1.5 py-0.5 rounded text-sm font-mono'
-                  {...rest}
-                >
-                  {children}
-                </code>
-              );
             }
+
+            return (
+              <code
+                className='rounded bg-gray-700 px-1.5 py-0.5 text-sm font-mono text-cyan-300'
+                {...rest}
+              >
+                {children}
+              </code>
+            );
           },
-          // 自定義其他元素樣式
-          h1: ({ children }) => <h1 className='text-xl font-bold mb-2 text-white'>{children}</h1>,
+          h1: ({ children }) => <h1 className='mb-2 text-xl font-bold text-white'>{children}</h1>,
           h2: ({ children }) => (
-            <h2 className='text-lg font-semibold mb-2 text-white'>{children}</h2>
+            <h2 className='mb-2 text-lg font-semibold text-white'>{children}</h2>
           ),
           h3: ({ children }) => (
-            <h3 className='text-base font-medium mb-1 text-white'>{children}</h3>
+            <h3 className='mb-1 text-base font-medium text-white'>{children}</h3>
           ),
           p: ({ children }) => <p className='mb-2 leading-relaxed'>{children}</p>,
           ul: ({ children }) => (
-            <ul className='list-disc list-inside mb-2 space-y-1'>{children}</ul>
+            <ul className='mb-2 list-inside list-disc space-y-1'>{children}</ul>
           ),
           ol: ({ children }) => (
-            <ol className='list-decimal list-inside mb-2 space-y-1'>{children}</ol>
+            <ol className='mb-2 list-inside list-decimal space-y-1'>{children}</ol>
           ),
           li: ({ children }) => <li className='text-sm'>{children}</li>,
           blockquote: ({ children }) => (
-            <blockquote className='border-l-4 border-cyan-500 pl-4 my-2 bg-gray-800/50 py-2 rounded-r'>
+            <blockquote className='my-2 rounded-r border-l-4 border-cyan-500 bg-gray-800/50 py-2 pl-4'>
               {children}
             </blockquote>
           ),
@@ -153,7 +228,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
               href={href}
               target='_blank'
               rel='noopener noreferrer'
-              className='text-cyan-400 hover:text-cyan-300 underline'
+              className='text-cyan-400 underline hover:text-cyan-300'
             >
               {children}
             </a>
@@ -163,14 +238,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
           ),
           em: ({ children }) => <em className='italic'>{children}</em>,
           table: ({ children }) => (
-            <div className='overflow-x-auto my-2'>
+            <div className='my-2 overflow-x-auto'>
               <table className='min-w-full border-collapse border border-gray-600'>
                 {children}
               </table>
             </div>
           ),
           th: ({ children }) => (
-            <th className='border border-gray-600 px-4 py-2 bg-gray-700 font-semibold text-left'>
+            <th className='border border-gray-600 bg-gray-700 px-4 py-2 text-left font-semibold'>
               {children}
             </th>
           ),
@@ -182,91 +257,93 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
     );
   };
 
-  return (
-    <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-      {message.role === 'user' ? (
-        /* User Message - Right Side */
-        <div className='flex flex-row-reverse gap-3 max-w-4xl'>
-          <div className='flex-shrink-0'>
-            <div className='w-10 h-10 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-full flex items-center justify-center shadow-lg ring-2 ring-cyan-400/20'>
-              <UserIcon className='w-5 h-5 text-white' />
-            </div>
-          </div>
-          <div className='flex flex-col items-end group'>
-            <div className='bg-gradient-to-br from-cyan-500 to-blue-600 text-white px-5 py-3 rounded-2xl rounded-br-md shadow-lg max-w-lg relative'>
-              <div className='text-sm leading-relaxed'>{renderMessageContent(message.content)}</div>
-              {/* Message actions */}
-              <div className='absolute -left-12 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200'>
-                <button
-                  onClick={() => navigator.clipboard.writeText(message.content)}
-                  className='p-2 text-gray-400 hover:text-gray-600 bg-white/90 rounded-lg shadow-md hover:shadow-lg transition-all duration-200'
-                  title='複製訊息'
-                >
-                  <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                    <path
-                      strokeLinecap='round'
-                      strokeLinejoin='round'
-                      strokeWidth={2}
-                      d='M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z'
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            {/* Timestamp */}
-            <div className='text-xs text-gray-400 mt-2 px-2 opacity-60 group-hover:opacity-100 transition-opacity duration-200 bg-gray-800/30 rounded-full px-3 py-1'>
-              {new Date().toLocaleTimeString('zh-TW', {
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </div>
-          </div>
-        </div>
-      ) : (
-        /* Assistant Message - Left Side */
-        <div className='flex gap-3 max-w-4xl'>
-          <div className='flex-shrink-0'>
-            <div className='w-10 h-10 bg-gradient-to-br from-gray-700 to-gray-600 rounded-full flex items-center justify-center shadow-lg ring-2 ring-gray-600/30'>
-              <GeminiIcon className='w-5 h-5 text-cyan-400' />
-            </div>
-          </div>
-          <div className='flex flex-col group gap-3'>
-            {message.toolCallLog && message.toolCallLog.length > 0 && (
-              <ToolCallCard records={message.toolCallLog} />
-            )}
-            {message.subagentRuns && message.subagentRuns.length > 0 && (
-              <SubagentActivityCard runs={message.subagentRuns} />
-            )}
-            <div className='bg-gray-800/80 backdrop-blur-sm text-gray-100 px-5 py-3 rounded-2xl rounded-bl-md shadow-lg border border-gray-700/50 relative'>
-              <div className='text-sm leading-relaxed'>{renderMessageContent(message.content)}</div>
-              {/* Message actions */}
-              <div className='absolute -right-12 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200'>
-                <button
-                  onClick={() => navigator.clipboard.writeText(message.content)}
-                  className='p-2 text-gray-400 hover:text-gray-600 bg-white/90 rounded-lg shadow-md hover:shadow-lg transition-all duration-200'
-                  title='複製回應'
-                >
-                  <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                    <path
-                      strokeLinecap='round'
-                      strokeLinejoin='round'
-                      strokeWidth={2}
-                      d='M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z'
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            {/* Timestamp */}
-            <div className='text-xs text-gray-400 mt-2 px-2 opacity-60 group-hover:opacity-100 transition-opacity duration-200 bg-gray-800/30 rounded-full px-3 py-1'>
-              {new Date().toLocaleTimeString('zh-TW', {
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </div>
-          </div>
-        </div>
+  const actionRow = (
+    <div
+      className={`mt-2 flex flex-wrap items-center gap-2 text-xs ${
+        isUser ? 'justify-end' : 'justify-start'
+      } text-gray-500`}
+    >
+      {timestampLabel && (
+        <span className='transition group-hover:text-gray-300 group-focus-within:text-gray-300'>
+          {timestampLabel}
+        </span>
       )}
+      <button
+        type='button'
+        onClick={() => void handleCopy(displayContent, messageCopyTarget)}
+        className='rounded-md px-2 py-1 text-gray-400 opacity-100 transition hover:bg-gray-700/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100'
+        title={messageCopyLabel}
+      >
+        {messageCopyLabel}
+      </button>
+    </div>
+  );
+
+  if (isUser) {
+    return (
+      <div className='flex justify-end'>
+        <div className='flex w-full max-w-3xl flex-row-reverse gap-3'>
+          <div className='flex-shrink-0'>
+            <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 shadow-lg ring-2 ring-cyan-400/20'>
+              <UserIcon className='h-5 w-5 text-white' />
+            </div>
+          </div>
+          <div className='group flex min-w-0 flex-col items-end'>
+            <div className='w-full max-w-[85%] rounded-2xl rounded-br-md bg-gradient-to-br from-cyan-500 to-blue-600 px-5 py-3 text-white shadow-lg md:max-w-[65ch]'>
+              <div className='text-sm leading-relaxed'>{renderMessageContent(displayContent)}</div>
+            </div>
+            {actionRow}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className='flex justify-start'>
+      <div className='flex w-full max-w-3xl gap-3'>
+        <div className='flex-shrink-0'>
+          <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-gray-700 to-gray-600 shadow-lg ring-2 ring-gray-600/30'>
+            <GeminiIcon className='h-5 w-5 text-cyan-400' />
+          </div>
+        </div>
+        <div className='group flex min-w-0 flex-col gap-3'>
+          {message.toolCallLog && message.toolCallLog.length > 0 && (
+            <ToolCallCard records={message.toolCallLog} />
+          )}
+          {message.subagentRuns && message.subagentRuns.length > 0 && (
+            <SubagentActivityCard runs={message.subagentRuns} />
+          )}
+          <div
+            className={`w-full max-w-[85%] rounded-2xl rounded-bl-md px-5 py-3 shadow-lg md:max-w-[65ch] ${
+              message.isError
+                ? 'border border-rose-500/40 bg-rose-500/10 text-rose-50'
+                : 'border border-gray-700/50 bg-gray-800/80 text-gray-100 backdrop-blur-sm'
+            }`}
+          >
+            {message.isError && (
+              <div className='mb-2 flex items-center gap-2 text-sm font-medium text-rose-200'>
+                <svg
+                  className='h-4 w-4 flex-shrink-0'
+                  fill='none'
+                  stroke='currentColor'
+                  viewBox='0 0 24 24'
+                >
+                  <path
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    strokeWidth={2}
+                    d='M12 9v3.75m0 3.75h.008v.008H12v-.008zm8.25-3.75a8.25 8.25 0 11-16.5 0 8.25 8.25 0 0116.5 0z'
+                  />
+                </svg>
+                <span>系統錯誤</span>
+              </div>
+            )}
+            <div className='text-sm leading-relaxed'>{renderMessageContent(displayContent)}</div>
+          </div>
+          {actionRow}
+        </div>
+      </div>
     </div>
   );
 };

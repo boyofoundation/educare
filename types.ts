@@ -83,6 +83,14 @@ export interface ChatMessage {
   role: 'user' | 'model';
   content: string;
   /**
+   * 訊息建立時間 (epoch ms)。舊資料可能沒有此欄位，UI 需優雅退化。
+   */
+  timestamp?: number;
+  /**
+   * 代表這是一條可見給使用者、但不可回送給模型上下文的錯誤訊息。
+   */
+  isError?: boolean;
+  /**
    * Agent 回合摘要軌跡 (G6)。序列化上限 200 字元,用於活動面板顯示與偵錯。
    * 由 conversationUtils 在每回合結束時填入。
    */

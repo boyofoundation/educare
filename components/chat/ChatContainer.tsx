@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useContext } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { ChatContainerProps } from './types';
 import { AppContext } from '../core/useAppContext';
 import MessageBubble from './MessageBubble';
@@ -10,9 +10,13 @@ import { AgentRunController } from '../../services/agentRunController';
 import {
   claimCheckpoint,
   deleteCheckpoint,
+  getCheckpoint,
   getInterruptedForSession,
 } from '../../services/agentRunCheckpointService';
 import { htmlProjectStore } from '../../services/htmlProjectStore';
+import { applyTokenUsageToSession } from '../../services/sessionTokenUsage';
+import { isErrorMessage, isSyntheticMessage } from '../../services/conversationUtils';
+import { useStickToBottom } from '../../hooks/useStickToBottom';
 import type {
   AgentRunCheckpoint,
   AgentRunState,
@@ -21,14 +25,16 @@ import type {
   ToolCallRecord,
 } from '../../types';
 import { HtmlProjectWorkspaceUpdate } from '../../types';
-import { applyTokenUsageToSession } from '../../services/sessionTokenUsage';
 
 const INTERRUPTION_NOTICE = '⚠️ 上次工作已中斷';
+const EMPTY_RESPONSE_NOTICE = '（本次回覆沒有內容）';
+const STICKY_SCROLL_THRESHOLD_PX = 100;
 
 const buildInterruptedNotice = (checkpoint: AgentRunCheckpoint): ChatMessage => ({
   role: 'model',
   content: `${INTERRUPTION_NOTICE}（第 ${Math.min(checkpoint.turnIndex + 1, checkpoint.maxTurns)}/${checkpoint.maxTurns} 回合）。`,
   synthetic: true,
+  timestamp: checkpoint.updatedAt,
 });
 
 const sameMessage = (left?: ChatMessage, right?: ChatMessage): boolean =>
@@ -58,7 +64,11 @@ const mergeCheckpointMessages = (
   includeInterruptedNotice: boolean,
 ): ChatMessage[] => {
   const additions: ChatMessage[] = [
-    { role: 'user', content: checkpoint.originalMessage },
+    {
+      role: 'user',
+      content: checkpoint.originalMessage,
+      timestamp: checkpoint.createdAt,
+    },
     ...checkpoint.committedHistoryDelta,
   ];
 
@@ -79,7 +89,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   hideHeader = false,
   sharedMode = false,
   assistantDescription,
-  isWorkspaceOpen = false,
+  isWorkspaceOpen: _isWorkspaceOpen = false,
   headerActions,
   agentHarnessEnabled = true,
   subagentDelegationEnabled = false,
@@ -87,6 +97,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const actions = useContext(AppContext)?.actions ?? null;
   const [input, setInput] = useState('');
   const [streamingResponse, setStreamingResponse] = useState('');
+  const [pendingEmptyResponseNotice, setPendingEmptyResponseNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [statusText, setStatusText] = useState('');
   const [isThinking, setIsThinking] = useState(false);
@@ -99,20 +110,18 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   );
   const [resumeUnavailableReason, setResumeUnavailableReason] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef(session);
   const controllerRef = useRef<AgentRunController | null>(null);
   const isThinkingRef = useRef(isThinking);
   const subagentBatchesRef = useRef<Record<string, SubagentRunRecord[]>>({});
   const toolCallRecordsRef = useRef<ToolCallRecord[]>([]);
+  const latestErrorMessageRef = useRef<string | null>(null);
+  const { containerRef, isAtBottom, handleScroll, scrollToBottom, updatePinnedState } =
+    useStickToBottom(STICKY_SCROLL_THRESHOLD_PX);
 
   useEffect(() => {
     isThinkingRef.current = isThinking;
   }, [isThinking]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
 
   useEffect(() => {
     setCurrentSession(session);
@@ -132,8 +141,31 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   }, [toolCallRecords]);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [currentSession.messages, streamingResponse, isThinking, subagentBatches, toolCallRecords]);
+    updatePinnedState();
+  }, [
+    currentSession.messages,
+    streamingResponse,
+    isThinking,
+    subagentBatches,
+    toolCallRecords,
+    pendingEmptyResponseNotice,
+    updatePinnedState,
+  ]);
+
+  useEffect(() => {
+    if (isAtBottom) {
+      scrollToBottom(streamingResponse ? 'auto' : 'smooth');
+    }
+  }, [
+    currentSession.messages,
+    isAtBottom,
+    isThinking,
+    pendingEmptyResponseNotice,
+    scrollToBottom,
+    streamingResponse,
+    subagentBatches,
+    toolCallRecords,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -286,6 +318,26 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     });
   };
 
+  const buildAssistantMessage = (content: string, extras?: Partial<ChatMessage>): ChatMessage => ({
+    role: 'model',
+    content,
+    timestamp: Date.now(),
+    subagentRuns: Object.values(subagentBatchesRef.current).flatMap(runs => runs),
+    toolCallLog: toolCallRecordsRef.current.slice(-50),
+    ...extras,
+  });
+
+  const loadRetainedCheckpoint = async (runId: string) => {
+    const checkpoint = await getCheckpoint(runId);
+    setInterruptedCheckpoint(checkpoint ?? null);
+    setResumeUnavailableReason(
+      checkpoint && checkpoint.turnIndex >= checkpoint.maxTurns
+        ? '這次工作已達最大回合數，只能捨棄並封存中斷前的紀錄。'
+        : null,
+    );
+    setResumeError(null);
+  };
+
   const persistCheckpointArchive = async (
     checkpoint: AgentRunCheckpoint,
     options?: { clearProject?: boolean },
@@ -331,6 +383,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setIsLoading(true);
     setIsThinking(true);
     setStreamingResponse('');
+    setPendingEmptyResponseNotice(null);
+    latestErrorMessageRef.current = null;
     setRunState(null);
     setSubagentBatches({});
     setToolCallRecords([]);
@@ -343,26 +397,16 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     try {
       setStatusText(ragChunks.length > 0 ? '🔎 搜尋知識庫中...' : '🤖 生成回答...');
 
-      let chatHistory: ChatMessage[];
+      const sanitizedHistoryMessages = historyMessages.filter(
+        messageItem => !isErrorMessage(messageItem),
+      );
+      const chatHistory: ChatMessage[] = sanitizedHistoryMessages;
       let enhancedSystemPrompt = systemPrompt;
 
       if (displaySession.compactContext) {
         const compactedContextPrompt = `\n\n[PREVIOUS CONVERSATION SUMMARY]\n${displaySession.compactContext.content}\n\nThe above is a summary of our previous conversation. Please refer to this context when responding to continue our conversation naturally.\n\n[CURRENT CONVERSATION]`;
 
         enhancedSystemPrompt = `${enhancedSystemPrompt}${compactedContextPrompt}`;
-        chatHistory = historyMessages;
-
-        console.log('📜 [CHAT HISTORY] Using compressed context in system prompt:', {
-          compactTokens: displaySession.compactContext.tokenCount,
-          compressedRounds: displaySession.compactContext.compressedFromRounds,
-          preservedMessages: historyMessages.length,
-          systemPromptLength: enhancedSystemPrompt.length,
-        });
-      } else {
-        chatHistory = historyMessages;
-        console.log('📜 [CHAT HISTORY] Using regular history:', {
-          messageCount: chatHistory.length,
-        });
       }
 
       const controller = new AgentRunController({
@@ -394,49 +438,90 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           },
           onError: error => {
             console.error('AgentRunController error:', error);
+            latestErrorMessageRef.current = error.message;
           },
         },
       });
       controllerRef.current = controller;
 
-      const runWithController = async () => {
+      const commitRunResult = async () => {
         const result = await controller.run();
         controllerRef.current = null;
 
         setRunState(result.state);
         actions?.setAgentRunState?.(result.state);
-
-        const tokenInfo = result.tokenInfo;
-        const fullModelResponse = result.fullText;
-
         setIsLoading(false);
         setIsThinking(false);
         setStatusText('');
+        setStreamingResponse('');
 
         const baseSession = sessionRef.current;
-        const newAiMessage = {
-          role: 'model' as const,
-          content: fullModelResponse,
-          subagentRuns: Object.values(subagentBatchesRef.current).flatMap(runs => runs),
-          toolCallLog: toolCallRecordsRef.current.slice(-50),
-        };
+        const fullModelResponse = result.fullText.trim();
+        const latestErrorMessage = latestErrorMessageRef.current;
+        const shouldPersistError = Boolean(latestErrorMessage) || result.state.status === 'failed';
+
+        if (shouldPersistError) {
+          const errorMessage = buildAssistantMessage(
+            latestErrorMessage ?? '執行過程發生錯誤，請稍後再試。',
+            { isError: true },
+          );
+          const finalSession = applyTokenUsageToSession(
+            {
+              ...baseSession,
+              messages: [...baseSession.messages, errorMessage],
+            },
+            result.tokenInfo,
+          );
+          sessionRef.current = finalSession;
+          setCurrentSession(finalSession);
+          setSubagentBatches({});
+          setToolCallRecords([]);
+          await onNewMessage(finalSession, message, errorMessage.content, result.tokenInfo);
+          await loadRetainedCheckpoint(result.state.runId);
+          return;
+        }
+
+        if (fullModelResponse === '') {
+          const finalSession = applyTokenUsageToSession(baseSession, result.tokenInfo);
+          sessionRef.current = finalSession;
+          setCurrentSession(finalSession);
+          setPendingEmptyResponseNotice(EMPTY_RESPONSE_NOTICE);
+          setSubagentBatches({});
+          setToolCallRecords([]);
+          await onNewMessage(finalSession, message, '', result.tokenInfo);
+          await deleteCheckpoint(result.state.runId);
+          setInterruptedCheckpoint(null);
+          setResumeUnavailableReason(null);
+          return;
+        }
+
+        const newAiMessage = buildAssistantMessage(fullModelResponse);
         const finalSession = applyTokenUsageToSession(
           {
             ...baseSession,
             messages: [...baseSession.messages, newAiMessage],
           },
-          tokenInfo,
+          result.tokenInfo,
         );
 
         sessionRef.current = finalSession;
         setCurrentSession(finalSession);
-        setStreamingResponse('');
         setSubagentBatches({});
         setToolCallRecords([]);
-        await onNewMessage(finalSession, message, fullModelResponse, tokenInfo);
-        await deleteCheckpoint(result.state.runId);
-        setInterruptedCheckpoint(null);
-        setResumeUnavailableReason(null);
+        try {
+          await onNewMessage(finalSession, message, fullModelResponse, result.tokenInfo);
+        } catch (persistError) {
+          latestErrorMessageRef.current = (persistError as Error).message;
+          throw persistError;
+        }
+
+        if (result.state.status === 'complete') {
+          await deleteCheckpoint(result.state.runId);
+          setInterruptedCheckpoint(null);
+          setResumeUnavailableReason(null);
+        } else {
+          await loadRetainedCheckpoint(result.state.runId);
+        }
       };
 
       const lockKey = `agent-run-${displaySession.id}`;
@@ -452,7 +537,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               return false;
             }
 
-            await runWithController();
+            await commitRunResult();
             return true;
           },
         );
@@ -481,18 +566,36 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         }
       }
 
-      await runWithController();
+      await commitRunResult();
     } catch (error) {
       controllerRef.current = null;
+      const errorMessageText = (error as Error).message;
       console.error('Error during chat stream:', error);
+      latestErrorMessageRef.current = errorMessageText;
       setIsLoading(false);
       setIsThinking(false);
       setStatusText('');
       setRunState(null);
       actions?.setAgentRunState?.(null);
-      setStreamingResponse(
-        `抱歉，發生錯誤。API 返回以下錯誤：\n\n${(error as Error).message}\n\n請檢查您的 API 密鑰和控制檯以取得更多細節。`,
+      setStreamingResponse('');
+      setSubagentBatches({});
+      setToolCallRecords([]);
+
+      const baseSession = sessionRef.current;
+      const errorMessage = buildAssistantMessage(
+        `${errorMessageText}\n\n請檢查您的 API 密鑰和控制檯以取得更多細節。`,
+        { isError: true },
       );
+      const finalSession = {
+        ...baseSession,
+        messages: [...baseSession.messages, errorMessage],
+      };
+      sessionRef.current = finalSession;
+      setCurrentSession(finalSession);
+      await onNewMessage(finalSession, message, errorMessage.content, {
+        promptTokenCount: 0,
+        candidatesTokenCount: 0,
+      });
     }
   };
 
@@ -503,6 +606,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
     const userMessage = input.trim();
     setInput('');
+    setPendingEmptyResponseNotice(null);
 
     if (interruptedCheckpoint) {
       await persistCheckpointArchive(interruptedCheckpoint, {
@@ -511,7 +615,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
 
     const baseSession = sessionRef.current;
-    const newUserMessage = { role: 'user' as const, content: userMessage };
+    const newUserMessage: ChatMessage = {
+      role: 'user',
+      content: userMessage,
+      timestamp: Date.now(),
+    };
     const updatedSession = {
       ...baseSession,
       messages: [...baseSession.messages, newUserMessage],
@@ -520,7 +628,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     await executeRun({
       message: userMessage,
       displaySession: updatedSession,
-      historyMessages: baseSession.messages,
+      historyMessages: baseSession.messages.filter(messageItem => !isSyntheticMessage(messageItem)),
     });
   };
 
@@ -528,6 +636,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     if (!interruptedCheckpoint || resumeUnavailableReason) {
       return;
     }
+
+    setPendingEmptyResponseNotice(null);
 
     const baseSession = sessionRef.current;
     const mergedSession = {
@@ -541,7 +651,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       message: interruptedCheckpoint.originalMessage,
       displaySession: mergedSession,
       historyMessages:
-        interruptedCheckpoint.turnIndex === 0 ? baseSession.messages : mergedSession.messages,
+        interruptedCheckpoint.turnIndex === 0
+          ? baseSession.messages.filter(messageItem => !isSyntheticMessage(messageItem))
+          : mergedSession.messages,
       resumeCheckpoint: interruptedCheckpoint,
     });
   };
@@ -564,13 +676,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const interruptedTurnLabel = interruptedCheckpoint
     ? `${Math.min(interruptedCheckpoint.turnIndex + 1, interruptedCheckpoint.maxTurns)}/${interruptedCheckpoint.maxTurns}`
     : null;
+  const showJumpToLatest =
+    !isAtBottom && (isThinking || streamingResponse !== '' || currentSession.messages.length > 0);
 
   return (
-    <div className='flex flex-col h-full bg-gray-900'>
+    <div className='relative flex h-full flex-col bg-gray-900'>
       {!hideHeader && (
-        <div className='p-2 md:p-4 border-b border-gray-700 flex-shrink-0 bg-gray-800'>
+        <div className='flex-shrink-0 border-b border-gray-700 bg-gray-800 p-2 md:p-4'>
           <div className='flex items-center justify-between'>
-            <h2 className='text-base md:text-xl font-medium md:font-semibold text-white truncate mr-2'>
+            <h2 className='mr-2 truncate text-base font-medium text-white md:text-xl md:font-semibold'>
               {assistantName}
             </h2>
             <div className='flex items-center space-x-3'>
@@ -592,6 +706,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                     actions?.setAgentRunState?.(null);
                     setRunState(null);
                     setStreamingResponse('');
+                    setPendingEmptyResponseNotice(null);
                     setIsThinking(false);
                     setStatusText('');
                     setInput('');
@@ -599,11 +714,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                     setResumeUnavailableReason(null);
                     setResumeError(null);
                   }}
-                  className='flex items-center space-x-1 md:space-x-2 px-2 md:px-3 py-1.5 rounded-md transition-colors text-xs md:text-sm font-medium bg-purple-700 hover:bg-purple-600 text-purple-100 hover:text-white'
+                  className='flex items-center space-x-1 rounded-md bg-purple-700 px-2 py-1.5 text-xs font-medium text-purple-100 transition-colors hover:bg-purple-600 hover:text-white md:space-x-2 md:px-3 md:text-sm'
                   title='開啟新對話'
                 >
                   <svg
-                    className='w-3 h-3 md:w-4 md:h-4'
+                    className='h-3 w-3 md:h-4 md:w-4'
                     fill='none'
                     stroke='currentColor'
                     viewBox='0 0 24 24'
@@ -623,10 +738,14 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         </div>
       )}
 
-      <main className='flex-1 overflow-y-auto chat-scroll' role='main' aria-label='聊天對話'>
-        <div
-          className={`${isWorkspaceOpen ? 'mx-auto max-w-4xl' : 'max-w-none'} px-3 py-4 md:px-4 md:py-6`}
-        >
+      <main
+        ref={containerRef}
+        onScroll={handleScroll}
+        className='chat-scroll flex-1 overflow-y-auto'
+        role='main'
+        aria-label='聊天對話'
+      >
+        <div className='mx-auto max-w-3xl px-3 py-4 md:px-4 md:py-6'>
           {interruptedCheckpoint && (
             <div
               className='mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100'
@@ -674,14 +793,19 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               </div>
             </div>
           )}
-          {currentSession.messages.length === 0 && !streamingResponse && !isThinking && (
-            <WelcomeMessage
-              assistantName={assistantName}
-              assistantDescription={assistantDescription}
-              sharedMode={sharedMode}
-            />
-          )}
-          <div className='space-y-8'>
+
+          {currentSession.messages.length === 0 &&
+            !streamingResponse &&
+            !isThinking &&
+            !pendingEmptyResponseNotice && (
+              <WelcomeMessage
+                assistantName={assistantName}
+                assistantDescription={assistantDescription}
+                sharedMode={sharedMode}
+              />
+            )}
+
+          <div className='space-y-6' role='log' aria-label='訊息列表'>
             {currentSession.messages.map((msg, index) => (
               <MessageBubble
                 key={index}
@@ -691,18 +815,42 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               />
             ))}
 
-            {isThinking && !streamingResponse && <ThinkingIndicator />}
+            {isThinking && !streamingResponse && (
+              <ThinkingIndicator assistantName={assistantName} statusText={statusText} />
+            )}
+
             {streamingResponse && (
               <StreamingResponse
                 content={streamingResponse}
+                assistantName={assistantName}
                 subagentBatches={subagentBatches}
                 toolCallLog={toolCallRecords}
               />
             )}
+
+            {pendingEmptyResponseNotice && (
+              <div className='flex justify-start'>
+                <div className='w-full max-w-3xl'>
+                  <div className='ml-13 rounded-lg border border-dashed border-gray-700/60 bg-gray-900/40 px-4 py-3 text-sm text-gray-300'>
+                    {pendingEmptyResponseNotice}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-          <div ref={messagesEndRef} />
         </div>
       </main>
+
+      {showJumpToLatest && (
+        <button
+          type='button'
+          onClick={() => scrollToBottom('smooth')}
+          className='absolute bottom-28 right-4 z-10 rounded-full border border-cyan-500/40 bg-gray-900/90 px-4 py-2 text-sm font-medium text-cyan-100 shadow-lg backdrop-blur transition hover:border-cyan-400 hover:bg-gray-800 md:bottom-32 md:right-8'
+          aria-label='捲動至最新訊息'
+        >
+          ⬇ 跳至最新
+        </button>
+      )}
 
       <ChatInput
         value={input}
@@ -711,7 +859,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         isLoading={isLoading}
         statusText={statusText}
         disabled={false}
-        isWorkspaceOpen={isWorkspaceOpen}
+        isWorkspaceOpen={_isWorkspaceOpen}
         isRunning={isRunning}
         onStop={handleStop}
       />

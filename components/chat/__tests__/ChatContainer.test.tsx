@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatContainer from '../ChatContainer';
@@ -234,6 +234,11 @@ describe('ChatContainer', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
     mockGetInterruptedForSession.mockResolvedValue(null);
     mockClaimCheckpoint.mockResolvedValue(null);
     mockDeleteCheckpoint.mockResolvedValue(undefined);
@@ -324,6 +329,37 @@ describe('ChatContainer', () => {
     await waitFor(() => {
       expect(screen.getByText('Need help')).toBeInTheDocument();
     });
+  });
+
+  it('shows a jump-to-latest button instead of auto-following when the user scrolls away from the bottom', async () => {
+    mockControllerRun.mockImplementationOnce(async () => {
+      const options = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+        callbacks?: { onChunk?: (text: string, turn: number) => void };
+      };
+      options?.callbacks?.onChunk?.('Chunk while scrolled away', 0);
+      return buildRunResult('Final chunked answer');
+    });
+
+    const scrollToSpy = vi.spyOn(HTMLElement.prototype, 'scrollTo');
+    render(<ChatContainer {...defaultProps} />);
+
+    const main = screen.getByRole('main', { name: '聊天對話' });
+    Object.defineProperty(main, 'scrollHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(main, 'clientHeight', { configurable: true, value: 200 });
+    Object.defineProperty(main, 'scrollTop', { configurable: true, value: 100 });
+
+    fireEvent.scroll(main);
+    scrollToSpy.mockClear();
+
+    await sendMessage('Need latest');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '捲動至最新訊息' })).toBeInTheDocument();
+    });
+    expect(scrollToSpy).not.toHaveBeenCalled();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: '捲動至最新訊息' }));
+    expect(scrollToSpy).toHaveBeenCalled();
   });
 
   it('constructs AgentRunController with assistantId, sessionId, activeProjectId, and message', async () => {
@@ -679,6 +715,62 @@ describe('ChatContainer', () => {
     expect(screen.queryByRole('button', { name: '正在傳送訊息' })).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: '輸入訊息' })).toBeEnabled();
     expect(screen.queryByText('🤖 生成回答...')).not.toBeInTheDocument();
+  });
+
+  it('persists visible error messages with isError instead of empty assistant bubbles', async () => {
+    const onNewMessage = vi.fn().mockResolvedValue(undefined);
+    mockControllerRun.mockRejectedValueOnce(
+      new Error('Gemini terminal response had no visible text'),
+    );
+
+    render(<ChatContainer {...defaultProps} onNewMessage={onNewMessage} />);
+
+    await sendMessage('Persist the failure');
+
+    await waitFor(() => {
+      expect(onNewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'model',
+              isError: true,
+              content: expect.stringContaining('Gemini terminal response had no visible text'),
+            }),
+          ]),
+        }),
+        'Persist the failure',
+        expect.stringContaining('Gemini terminal response had no visible text'),
+        expect.anything(),
+      );
+    });
+
+    const persistedSession = onNewMessage.mock.calls.at(-1)?.[0];
+    render(<ChatContainer {...defaultProps} session={persistedSession} />);
+    expect(screen.getAllByText('系統錯誤').length).toBeGreaterThan(0);
+  });
+
+  it('shows a render-only empty-response notice without persisting a placeholder message', async () => {
+    const onNewMessage = vi.fn().mockResolvedValue(undefined);
+    mockControllerRun.mockResolvedValueOnce(buildRunResult(''));
+
+    render(<ChatContainer {...defaultProps} onNewMessage={onNewMessage} />);
+
+    await sendMessage('Trigger empty response');
+
+    await waitFor(() => {
+      expect(screen.getByText('（本次回覆沒有內容）')).toBeInTheDocument();
+    });
+
+    expect(onNewMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.not.arrayContaining([
+          expect.objectContaining({ content: '（本次回覆沒有內容）' }),
+        ]),
+      }),
+      'Trigger empty response',
+      '',
+      expect.anything(),
+    );
   });
 
   it('keeps the checkpoint when final session persistence fails after a completed run', async () => {

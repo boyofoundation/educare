@@ -212,6 +212,11 @@ describe('ChatContainer interrupted-run integration', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
     await deleteForSession(SESSION_ID);
     mockGetProject.mockResolvedValue({ id: 'project-1' });
     mockPerformCachedRagQuery.mockResolvedValue({

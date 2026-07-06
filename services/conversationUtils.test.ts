@@ -11,6 +11,7 @@ import {
   partitionSyntheticMessages,
   dropSyntheticForCompaction,
   buildSyntheticMessage,
+  isErrorMessage,
 } from './conversationUtils';
 import { ChatMessage, ConversationRound } from '../types';
 
@@ -73,6 +74,17 @@ describe('conversationUtils', () => {
       ];
       expect(countConversationRounds(messages)).toBe(2);
     });
+
+    it('should not count isError messages as completed rounds', () => {
+      const messages = [
+        createMessage('user', 'Question 1'),
+        { role: 'model' as const, content: 'Error bubble', isError: true },
+        createMessage('user', 'Question 2'),
+        createMessage('model', 'Answer 2'),
+      ];
+
+      expect(countConversationRounds(messages)).toBe(1);
+    });
   });
 
   describe('getLastNRounds', () => {
@@ -114,6 +126,20 @@ describe('conversationUtils', () => {
         createMessage('model', 'Good!'),
         createMessage('user', 'Nice weather'),
         createMessage('model', 'Indeed!'),
+      ]);
+    });
+
+    it('should skip isError responses when returning recent rounds', () => {
+      const messagesWithError = [
+        createMessage('user', 'Question 1'),
+        { role: 'model' as const, content: 'Error bubble', isError: true },
+        createMessage('user', 'Question 2'),
+        createMessage('model', 'Answer 2'),
+      ];
+
+      expect(getLastNRounds(messagesWithError, 1)).toEqual([
+        createMessage('user', 'Question 2'),
+        createMessage('model', 'Answer 2'),
       ]);
     });
   });
@@ -169,6 +195,24 @@ describe('conversationUtils', () => {
       expect(result).toHaveLength(1);
       expect(result[0].userMessage.content).toBe('Hello');
       expect(result[0].assistantMessage.content).toBe('Yes!');
+    });
+
+    it('should skip isError model messages when grouping rounds', () => {
+      const messages = [
+        createMessage('user', 'Question 1'),
+        { role: 'model' as const, content: 'Error bubble', isError: true },
+        createMessage('user', 'Question 2'),
+        createMessage('model', 'Answer 2'),
+      ];
+
+      const result = groupMessagesByRounds(messages);
+      expect(result).toEqual([
+        {
+          userMessage: createMessage('user', 'Question 2'),
+          assistantMessage: createMessage('model', 'Answer 2'),
+          roundNumber: 1,
+        },
+      ]);
     });
   });
 
@@ -315,6 +359,14 @@ describe('conversationUtils', () => {
     });
   });
 
+  describe('isErrorMessage', () => {
+    it('returns true only when isError === true', () => {
+      expect(isErrorMessage({ role: 'model', content: 'x', isError: true })).toBe(true);
+      expect(isErrorMessage({ role: 'model', content: 'x', isError: false })).toBe(false);
+      expect(isErrorMessage({ role: 'model', content: 'x' })).toBe(false);
+    });
+  });
+
   describe('partitionSyntheticMessages', () => {
     it('partitions by synthetic flag while preserving order', () => {
       const messages: ChatMessage[] = [
@@ -335,6 +387,20 @@ describe('conversationUtils', () => {
       ]);
     });
 
+    it('excludes isError messages from the real partition', () => {
+      const messages: ChatMessage[] = [
+        { role: 'user', content: 'real-1' },
+        { role: 'model', content: 'error-row', isError: true },
+        { role: 'model', content: 'synthetic-1', synthetic: true },
+      ];
+
+      const result = partitionSyntheticMessages(messages);
+      expect(result.synthetic).toEqual([
+        { role: 'model', content: 'synthetic-1', synthetic: true },
+      ]);
+      expect(result.real).toEqual([{ role: 'user', content: 'real-1' }]);
+    });
+
     it('returns empty synthetic when none are synthetic', () => {
       const messages: ChatMessage[] = [
         { role: 'user', content: 'a' },
@@ -353,6 +419,17 @@ describe('conversationUtils', () => {
       const result = partitionSyntheticMessages(messages);
       expect(result.synthetic).toEqual(messages);
       expect(result.real).toEqual([]);
+    });
+
+    it('drops isError messages from the real partition without treating them as synthetic', () => {
+      const messages: ChatMessage[] = [
+        { role: 'user', content: 'a' },
+        { role: 'model', content: 'err', isError: true },
+        { role: 'model', content: 'b', synthetic: true },
+      ];
+      const result = partitionSyntheticMessages(messages);
+      expect(result.synthetic).toEqual([{ role: 'model', content: 'b', synthetic: true }]);
+      expect(result.real).toEqual([{ role: 'user', content: 'a' }]);
     });
 
     it('handles empty input', () => {

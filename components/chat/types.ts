@@ -70,6 +70,7 @@ export interface WelcomeMessageProps {
 
 export interface ThinkingIndicatorProps {
   assistantName?: string;
+  statusText?: string;
 }
 
 export interface StreamingResponseProps {

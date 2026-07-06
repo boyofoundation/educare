@@ -2,10 +2,10 @@ import React from 'react';
 import { ThinkingIndicatorProps } from './types';
 import { GeminiIcon } from '../ui/Icons';
 
-const ThinkingIndicator: React.FC<ThinkingIndicatorProps> = () => {
+const ThinkingIndicator: React.FC<ThinkingIndicatorProps> = ({ statusText }) => {
   return (
     <div className='flex justify-start'>
-      <div className='flex gap-3 max-w-4xl'>
+      <div className='flex w-full max-w-3xl gap-3'>
         <div className='flex-shrink-0'>
           <div className='w-10 h-10 bg-gradient-to-br from-gray-700 to-gray-600 rounded-full flex items-center justify-center shadow-lg ring-2 ring-gray-600/30'>
             <GeminiIcon className='w-5 h-5 text-cyan-400 animate-pulse' />
@@ -28,7 +28,9 @@ const ThinkingIndicator: React.FC<ThinkingIndicatorProps> = () => {
                   style={{ animationDelay: '300ms' }}
                 ></div>
               </div>
-              <span className='text-gray-300 text-sm font-medium'>AI 正在思考...</span>
+              <span className='text-gray-300 text-sm font-medium'>
+                {statusText || 'AI 正在思考...'}
+              </span>
             </div>
           </div>
         </div>

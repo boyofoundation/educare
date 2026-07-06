@@ -280,20 +280,27 @@ describe('MessageBubble', () => {
   });
 
   describe('Timestamp Display', () => {
-    it('should display timestamp for both message types', () => {
-      // Arrange
+    it('should display timestamp when a message timestamp is present', () => {
       const userMessage = createMockChatMessage({
         role: 'user',
         content: 'Test message',
+        timestamp: new Date('2026-07-06T08:00:00Z').getTime(),
       });
 
-      // Act
       render(<MessageBubble message={userMessage} index={0} />);
 
-      // Assert
-      // Look for any element that matches time format
-      const timestampElement = document.querySelector('.text-xs.text-gray-400');
-      expect(timestampElement).toBeInTheDocument();
+      expect(screen.getByText(/08:00|下午04:00|上午08:00/)).toBeInTheDocument();
+    });
+
+    it('should hide timestamp metadata when a message has no timestamp', () => {
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: 'Timestamp-less reply',
+      });
+
+      render(<MessageBubble message={assistantMessage} index={0} />);
+
+      expect(screen.queryByText(/上午|下午|\d{1,2}:\d{2}/)).not.toBeInTheDocument();
     });
   });
 
@@ -310,7 +317,20 @@ describe('MessageBubble', () => {
         render(<MessageBubble message={emptyMessage} index={0} />);
       }).not.toThrow();
 
-      expect(screen.getByTestId('markdown-content')).toBeInTheDocument();
+      expect(screen.getByText('（本次回覆沒有內容）')).toBeInTheDocument();
+    });
+
+    it('should render error messages with the error heading', () => {
+      const errorMessage = createMockChatMessage({
+        role: 'model',
+        content: 'Gemini terminal response had no visible text',
+        isError: true,
+      });
+
+      render(<MessageBubble message={errorMessage} index={0} />);
+
+      expect(screen.getByText('系統錯誤')).toBeInTheDocument();
+      expect(screen.getByText('Gemini terminal response had no visible text')).toBeInTheDocument();
     });
 
     it('should handle very long content', () => {

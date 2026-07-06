@@ -37,6 +37,13 @@ export function isSyntheticMessage(message: ChatMessage): boolean {
 }
 
 /**
+ * 判斷訊息是否為不可回送到模型上下文的錯誤訊息。
+ */
+export function isErrorMessage(message: ChatMessage): boolean {
+  return message.isError === true;
+}
+
+/**
  * 將訊息陣列依「合成 / 真實」分區 (G6)。
  *
  * @param messages - 聊天訊息陣列
@@ -51,7 +58,7 @@ export function partitionSyntheticMessages(messages: ChatMessage[]): {
   for (const message of messages) {
     if (isSyntheticMessage(message)) {
       synthetic.push(message);
-    } else {
+    } else if (!isErrorMessage(message)) {
       real.push(message);
     }
   }
@@ -155,9 +162,14 @@ export function countConversationRounds(messages: ChatMessage[]): number {
   for (const message of messages) {
     if (expectingUserMessage && message.role === 'user') {
       expectingUserMessage = false; // 下一個期待 model 回覆
-    } else if (!expectingUserMessage && message.role === 'model') {
-      rounds++; // 完成一輪對話
-      expectingUserMessage = true; // 下一個期待 user 訊息
+      continue;
+    }
+
+    if (!expectingUserMessage && message.role === 'model') {
+      if (!isErrorMessage(message)) {
+        rounds++; // 完成一輪對話
+      }
+      expectingUserMessage = true; // 錯誤或成功都視為本輪結束，不跨輪配對
     }
     // 如果順序不對，保持當前狀態繼續尋找正確的配對
   }
@@ -233,13 +245,18 @@ export function groupMessagesByRounds(messages: ChatMessage[]): ConversationRoun
       if (currentUserMessage === null) {
         currentUserMessage = message;
       }
-    } else if (message.role === 'model' && currentUserMessage !== null) {
-      // 找到配對的AI回覆，建立一輪對話
-      rounds.push({
-        userMessage: currentUserMessage,
-        assistantMessage: message,
-        roundNumber: roundNumber++,
-      });
+      continue;
+    }
+
+    if (message.role === 'model' && currentUserMessage !== null) {
+      if (!isErrorMessage(message)) {
+        // 找到配對的AI回覆，建立一輪對話
+        rounds.push({
+          userMessage: currentUserMessage,
+          assistantMessage: message,
+          roundNumber: roundNumber++,
+        });
+      }
       currentUserMessage = null;
     }
   }
