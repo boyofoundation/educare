@@ -10,6 +10,7 @@ import {
   type HtmlProjectWorkspaceUpdate,
   type SubagentActivityUpdate,
   type SubagentRunRecord,
+  type ToolCallRecord,
   type SubagentTaskSpec,
   type TokenUsageTotals,
 } from '../types';
@@ -26,9 +27,8 @@ import {
 } from './knowledgeSearchService';
 import {
   executeHtmlProjectToolCall,
-  getHtmlProjectToolDefinitionsForPacks,
+  getAllHtmlProjectToolDefinitions,
   getHtmlProjectToolNamesForPacks,
-  isHtmlProjectToolName,
 } from './htmlProjectToolService';
 import { buildHtmlProjectSystemPrompt, classifyHtmlProjectIntent } from './htmlProjectPrompting';
 import { recordHtmlProjectTelemetryEvent } from './htmlProjectAgentTelemetry';
@@ -66,6 +66,7 @@ export interface StreamChatParams {
   onChunk: (text: string) => void;
   onProjectToolActivity?: (update: HtmlProjectWorkspaceUpdate) => void;
   onSubagentActivity?: (update: SubagentActivityUpdate) => void;
+  onToolCallActivity?: (record: ToolCallRecord) => void;
   onComplete: (
     metadata: {
       promptTokenCount: number;
@@ -220,6 +221,7 @@ export const streamChat = async (params: StreamChatParams) => {
     onChunk,
     onProjectToolActivity,
     onSubagentActivity,
+    onToolCallActivity,
     onComplete,
   } = params;
 
@@ -325,12 +327,11 @@ export const streamChat = async (params: StreamChatParams) => {
     telemetryEvent.selectedPackSet = [...selectedPackSet];
 
     const htmlProjectToolDefinitions = htmlProjectToolEnabled
-      ? getHtmlProjectToolDefinitionsForPacks(selectedPackSet)
+      ? getAllHtmlProjectToolDefinitions()
       : [];
-    const visibleHtmlProjectToolNames = new Set(
-      htmlProjectToolEnabled ? getHtmlProjectToolNamesForPacks(selectedPackSet) : [],
-    );
+    const visibleHtmlProjectToolNames = new Set(htmlProjectToolDefinitions.map(tool => tool.name));
     const forcedHtmlProjectToolName = (() => {
+      const packToolNames = getHtmlProjectToolNamesForPacks(selectedPackSet);
       if (!htmlProjectToolEnabled) {
         return undefined;
       }
@@ -341,17 +342,18 @@ export const streamChat = async (params: StreamChatParams) => {
           : 'createProject';
       }
 
-      if (visibleHtmlProjectToolNames.has('getProjectSummary')) {
+      if (packToolNames.includes('getProjectSummary')) {
         return 'getProjectSummary';
       }
 
-      return [...visibleHtmlProjectToolNames].find(
+      return [...packToolNames].find(
         toolName =>
           ![
             'reportTurnOutcome',
             'getPreviewRuntimeErrors',
             'listSnapshots',
             'revertToSnapshot',
+            'lintProject',
           ].includes(toolName),
       );
     })();
@@ -367,6 +369,7 @@ export const streamChat = async (params: StreamChatParams) => {
             activeProjectId: resolvedActiveProjectId,
             intentDecision: effectiveIntentDecision,
             projectSummary,
+            gatingMode: 'soft',
           })
         : '',
       subagentDelegationEnabled ? SUBAGENT_DELEGATION_SYSTEM_PROMPT : '',
@@ -374,100 +377,145 @@ export const streamChat = async (params: StreamChatParams) => {
       .filter(Boolean)
       .join('\n\n');
 
+    const truncateToolSummary = (value: string | undefined): string | undefined => {
+      if (!value) {
+        return undefined;
+      }
+      return value.length <= 200 ? value : `${value.slice(0, 197)}...`;
+    };
+
     const executeTool = async (call: ToolCall) => {
       telemetryEvent.toolSequence.push(call.name);
+      const toolStartedAt = Date.now();
+      const toolCallId = `${call.name}-${telemetryEvent.toolSequence.length}-${toolStartedAt}`;
 
-      if (call.name === KNOWLEDGE_SEARCH_TOOL_NAME) {
-        return buildKnowledgeSearchResponse(
-          knowledgeChunks,
-          call.args as unknown as KnowledgeSearchArgs,
-        );
-      }
+      const emitToolRecord = (
+        status: ToolCallRecord['status'],
+        options?: {
+          code?: string;
+          summary?: string;
+        },
+      ) => {
+        onToolCallActivity?.({
+          id: toolCallId,
+          name: call.name,
+          startedAt: toolStartedAt,
+          status,
+          code: options?.code,
+          summary: truncateToolSummary(options?.summary),
+          durationMs: Date.now() - toolStartedAt,
+        });
+      };
 
-      if (subagentDelegationEnabled && call.name === SUBAGENT_DELEGATE_TOOL_NAME) {
-        const result = await runSubagentBatch(
-          ((call.args as { tasks?: SubagentTaskSpec[] }).tasks ?? []) as SubagentTaskSpec[],
-          {
+      emitToolRecord('running');
+
+      try {
+        let result: unknown;
+
+        if (call.name === KNOWLEDGE_SEARCH_TOOL_NAME) {
+          result = buildKnowledgeSearchResponse(
+            knowledgeChunks,
+            call.args as unknown as KnowledgeSearchArgs,
+          );
+        } else if (subagentDelegationEnabled && call.name === SUBAGENT_DELEGATE_TOOL_NAME) {
+          result = await runSubagentBatch(
+            ((call.args as { tasks?: SubagentTaskSpec[] }).tasks ?? []) as SubagentTaskSpec[],
+            {
+              assistantId,
+              sessionId,
+              activeProjectId: resolvedActiveProjectId,
+              history,
+              knowledgeChunks,
+              signal,
+            },
+            {
+              onActivity: update => {
+                subagentRunsByBatch.set(update.batchId, update.runs);
+                subagentRuns = undefined;
+                onSubagentActivity?.(update);
+              },
+              onProjectToolActivity,
+            },
+          );
+
+          if ((result as { ok?: boolean }).ok) {
+            const subagentResult = result as {
+              ok: true;
+              results: Array<{ name: string; status: SubagentRunRecord['status'] }>;
+              usageTotals?: TokenUsageTotals;
+            };
+            telemetryEvent.subagentTaskCount =
+              (telemetryEvent.subagentTaskCount ?? 0) + subagentResult.results.length;
+            subagentUsageTotals = mergeSubagentUsageTotals(
+              subagentUsageTotals,
+              subagentResult.usageTotals,
+            );
+            subagentRuns = [...subagentRunsByBatch.values()].flatMap(runs => runs);
+          }
+        } else if (htmlProjectToolEnabled && visibleHtmlProjectToolNames.has(call.name)) {
+          const toolResult = await executeHtmlProjectToolCall(call, {
             assistantId,
             sessionId,
             activeProjectId: resolvedActiveProjectId,
-            history,
-            knowledgeChunks,
-            signal,
-          },
-          {
-            onActivity: update => {
-              subagentRunsByBatch.set(update.batchId, update.runs);
-              subagentRuns = undefined;
-              onSubagentActivity?.(update);
-            },
-            onProjectToolActivity,
-          },
-        );
+          });
 
-        if (result.ok) {
-          telemetryEvent.subagentTaskCount =
-            (telemetryEvent.subagentTaskCount ?? 0) + result.results.length;
-          subagentUsageTotals = mergeSubagentUsageTotals(subagentUsageTotals, result.usageTotals);
-          subagentRuns = [...subagentRunsByBatch.values()].flatMap(runs => runs);
+          resolvedActiveProjectId = toolResult.workspace.activeProjectId;
+          telemetryEvent.projectId = resolvedActiveProjectId;
+          latestPreviewOutcome =
+            getPreviewOutcomeFromWorkspace(toolResult.workspace) ?? latestPreviewOutcome;
+          onProjectToolActivity?.(toolResult.workspace);
+
+          result = {
+            ...toolResult.result,
+            summary: toolResult.summary,
+          };
+        } else {
+          result = createRoutingRecoverableToolError(
+            'tool-unsupported',
+            `Unsupported tool: ${call.name}`,
+            'Retry using only tools that are explicitly exposed for this turn.',
+            {
+              requestedTool: call.name,
+              visibleToolNames: [
+                ...(knowledgeToolEnabled ? [KNOWLEDGE_SEARCH_TOOL_NAME] : []),
+                ...htmlProjectToolDefinitions.map(tool => tool.name),
+                ...(subagentDelegationEnabled ? [SUBAGENT_DELEGATE_TOOL_NAME] : []),
+              ],
+              selectedPackSet: [...selectedPackSet],
+              intent: effectiveIntentDecision.intent,
+            },
+          );
+        }
+
+        const resultRecord = result as Record<string, unknown> | undefined;
+        if (resultRecord?.ok === false && resultRecord.recoverable === true) {
+          emitToolRecord('recoverable_error', {
+            code: typeof resultRecord.code === 'string' ? resultRecord.code : undefined,
+            summary:
+              typeof resultRecord.message === 'string'
+                ? resultRecord.message
+                : typeof resultRecord.summary === 'string'
+                  ? resultRecord.summary
+                  : undefined,
+          });
+        } else {
+          emitToolRecord('ok', {
+            summary:
+              typeof resultRecord?.summary === 'string'
+                ? resultRecord.summary
+                : typeof resultRecord?.message === 'string'
+                  ? resultRecord.message
+                  : undefined,
+          });
         }
 
         return result;
-      }
-
-      if (
-        htmlProjectToolEnabled &&
-        visibleHtmlProjectToolNames.has(
-          call.name as ReturnType<typeof getHtmlProjectToolNamesForPacks>[number],
-        )
-      ) {
-        const toolResult = await executeHtmlProjectToolCall(call, {
-          assistantId,
-          sessionId,
-          activeProjectId: resolvedActiveProjectId,
+      } catch (error) {
+        emitToolRecord('failed', {
+          summary: error instanceof Error ? error.message : String(error),
         });
-
-        resolvedActiveProjectId = toolResult.workspace.activeProjectId;
-        telemetryEvent.projectId = resolvedActiveProjectId;
-        latestPreviewOutcome =
-          getPreviewOutcomeFromWorkspace(toolResult.workspace) ?? latestPreviewOutcome;
-        onProjectToolActivity?.(toolResult.workspace);
-
-        return {
-          ...toolResult.result,
-          summary: toolResult.summary,
-        };
+        throw error;
       }
-
-      if (isHtmlProjectToolName(call.name)) {
-        return createRoutingRecoverableToolError(
-          'tool-not-visible-for-turn',
-          `Tool ${call.name} is not visible for the current HTML project route.`,
-          'Retry using only the currently visible HTML project tools for this turn.',
-          {
-            requestedTool: call.name,
-            visibleToolNames: [...visibleHtmlProjectToolNames],
-            selectedPackSet: [...selectedPackSet],
-            intent: effectiveIntentDecision.intent,
-          },
-        );
-      }
-
-      return createRoutingRecoverableToolError(
-        'tool-unsupported',
-        `Unsupported tool: ${call.name}`,
-        'Retry using only tools that are explicitly exposed for this turn.',
-        {
-          requestedTool: call.name,
-          visibleToolNames: [
-            ...(knowledgeToolEnabled ? [KNOWLEDGE_SEARCH_TOOL_NAME] : []),
-            ...htmlProjectToolDefinitions.map(tool => tool.name),
-            ...(subagentDelegationEnabled ? [SUBAGENT_DELEGATE_TOOL_NAME] : []),
-          ],
-          selectedPackSet: [...selectedPackSet],
-          intent: effectiveIntentDecision.intent,
-        },
-      );
     };
 
     const tools = [

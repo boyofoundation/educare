@@ -320,6 +320,7 @@ describe('subagentService', () => {
       expect(names).not.toContain('getPreviewRuntimeErrors');
       expect(names).not.toContain('listSnapshots');
       expect(names).not.toContain('revertToSnapshot');
+      expect(names).not.toContain('lintProject');
     });
   });
 

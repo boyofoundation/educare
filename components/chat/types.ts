@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { ChatMessage, ChatSession, RagChunk, SubagentRunRecord } from '../../types';
+import { ChatMessage, ChatSession, RagChunk, SubagentRunRecord, ToolCallRecord } from '../../types';
 import type { ProviderUsageMetadata } from '../../services/llmAdapter';
 
 export interface ChatTokenInfo {
@@ -76,4 +76,5 @@ export interface StreamingResponseProps {
   content: string;
   assistantName?: string;
   subagentBatches?: Record<string, SubagentRunRecord[]>;
+  toolCallLog?: ToolCallRecord[];
 }

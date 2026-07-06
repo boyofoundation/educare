@@ -18,6 +18,7 @@ import type {
   AgentRunState,
   ChatMessage,
   SubagentRunRecord,
+  ToolCallRecord,
 } from '../../types';
 import { HtmlProjectWorkspaceUpdate } from '../../types';
 import { applyTokenUsageToSession } from '../../services/sessionTokenUsage';
@@ -92,6 +93,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const [currentSession, setCurrentSession] = useState(session);
   const [runState, setRunState] = useState<AgentRunState | null>(null);
   const [subagentBatches, setSubagentBatches] = useState<Record<string, SubagentRunRecord[]>>({});
+  const [toolCallRecords, setToolCallRecords] = useState<ToolCallRecord[]>([]);
   const [interruptedCheckpoint, setInterruptedCheckpoint] = useState<AgentRunCheckpoint | null>(
     null,
   );
@@ -102,6 +104,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const controllerRef = useRef<AgentRunController | null>(null);
   const isThinkingRef = useRef(isThinking);
   const subagentBatchesRef = useRef<Record<string, SubagentRunRecord[]>>({});
+  const toolCallRecordsRef = useRef<ToolCallRecord[]>([]);
 
   useEffect(() => {
     isThinkingRef.current = isThinking;
@@ -125,8 +128,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   }, [subagentBatches]);
 
   useEffect(() => {
+    toolCallRecordsRef.current = toolCallRecords;
+  }, [toolCallRecords]);
+
+  useEffect(() => {
     scrollToBottom();
-  }, [currentSession.messages, streamingResponse, isThinking, subagentBatches]);
+  }, [currentSession.messages, streamingResponse, isThinking, subagentBatches, toolCallRecords]);
 
   useEffect(() => {
     let active = true;
@@ -263,6 +270,22 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     });
   };
 
+  const handleToolCallActivity = (record: ToolCallRecord) => {
+    setToolCallRecords(prev => {
+      const existingIndex = prev.findIndex(item => item.id === record.id);
+      if (existingIndex === -1) {
+        const next = [...prev, record].slice(-50);
+        toolCallRecordsRef.current = next;
+        return next;
+      }
+
+      const next = [...prev];
+      next[existingIndex] = record;
+      toolCallRecordsRef.current = next;
+      return next;
+    });
+  };
+
   const persistCheckpointArchive = async (
     checkpoint: AgentRunCheckpoint,
     options?: { clearProject?: boolean },
@@ -310,6 +333,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setStreamingResponse('');
     setRunState(null);
     setSubagentBatches({});
+    setToolCallRecords([]);
     setResumeError(null);
     actions?.setAgentRunState?.(null);
 
@@ -363,6 +387,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           },
           onProjectToolActivity: handleProjectToolActivity,
           onSubagentActivity: handleSubagentActivity,
+          onToolCallActivity: handleToolCallActivity,
           onStateChange: nextState => {
             setRunState(nextState);
             actions?.setAgentRunState?.(nextState);
@@ -393,6 +418,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           role: 'model' as const,
           content: fullModelResponse,
           subagentRuns: Object.values(subagentBatchesRef.current).flatMap(runs => runs),
+          toolCallLog: toolCallRecordsRef.current.slice(-50),
         };
         const finalSession = applyTokenUsageToSession(
           {
@@ -406,6 +432,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         setCurrentSession(finalSession);
         setStreamingResponse('');
         setSubagentBatches({});
+        setToolCallRecords([]);
         await onNewMessage(finalSession, message, fullModelResponse, tokenInfo);
         await deleteCheckpoint(result.state.runId);
         setInterruptedCheckpoint(null);
@@ -666,7 +693,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
             {isThinking && !streamingResponse && <ThinkingIndicator />}
             {streamingResponse && (
-              <StreamingResponse content={streamingResponse} subagentBatches={subagentBatches} />
+              <StreamingResponse
+                content={streamingResponse}
+                subagentBatches={subagentBatches}
+                toolCallLog={toolCallRecords}
+              />
             )}
           </div>
           <div ref={messagesEndRef} />

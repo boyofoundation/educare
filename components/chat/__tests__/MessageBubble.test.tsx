@@ -175,6 +175,46 @@ describe('MessageBubble', () => {
       expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
     });
 
+    it('should render persisted tool call activity above the assistant message', () => {
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: 'Assistant response with tool activity',
+        toolCallLog: [
+          {
+            id: 'tool-1',
+            name: 'writeFiles',
+            startedAt: 1700000000000,
+            status: 'ok',
+            summary: 'Updated /index.html',
+            durationMs: 15,
+          },
+          {
+            id: 'tool-2',
+            name: 'lintProject',
+            startedAt: 1700000000100,
+            status: 'recoverable_error',
+            code: 'lint-path-not-found',
+            summary: 'lintProject could not find 1 requested path(s).',
+            durationMs: 21,
+          },
+        ],
+      });
+
+      render(<MessageBubble message={assistantMessage} index={0} />);
+
+      expect(screen.getByText('Tool activity')).toBeInTheDocument();
+      expect(screen.getByText('2 calls')).toBeInTheDocument();
+      expect(screen.getByText('writeFiles')).toBeInTheDocument();
+      expect(screen.getByText('lintProject')).toBeInTheDocument();
+      expect(screen.getByText('OK')).toBeInTheDocument();
+      expect(screen.getByText('Recoverable')).toBeInTheDocument();
+      expect(screen.getByText('Updated /index.html')).toBeInTheDocument();
+      expect(
+        screen.getByText('lintProject could not find 1 requested path(s).'),
+      ).toBeInTheDocument();
+      expect(screen.getByText('lint-path-not-found')).toBeInTheDocument();
+    });
+
     it('should render persisted subagent runs above the assistant message', () => {
       // Arrange
       const assistantMessage = createMockChatMessage({

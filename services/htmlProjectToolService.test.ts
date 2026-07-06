@@ -8,6 +8,7 @@ const {
   mockDeleteTodo,
   mockGetTodoSummary,
   mockListFiles,
+  mockListProjectFiles,
   mockListProjectsByAssistant,
   mockListTodos,
   mockReadFile,
@@ -30,6 +31,7 @@ const {
   mockDeleteTodo: vi.fn(),
   mockGetTodoSummary: vi.fn(),
   mockListFiles: vi.fn(),
+  mockListProjectFiles: vi.fn(),
   mockListProjectsByAssistant: vi.fn(),
   mockListTodos: vi.fn(),
   mockReadFile: vi.fn(),
@@ -59,6 +61,7 @@ vi.mock('./htmlProjectStore', async importOriginal => {
       deleteTodo: mockDeleteTodo,
       getTodoSummary: mockGetTodoSummary,
       listFiles: mockListFiles,
+      listProjectFiles: mockListProjectFiles,
       listProjectsByAssistant: mockListProjectsByAssistant,
       listTodos: mockListTodos,
       readFile: mockReadFile,
@@ -137,6 +140,7 @@ describe('executeHtmlProjectToolCall', () => {
       allComplete: false,
     });
     mockListTodos.mockResolvedValue([]);
+    mockListProjectFiles.mockResolvedValue([]);
     mockDeleteFile.mockResolvedValue({
       deleted: true,
       previewVersion: 4,
@@ -333,6 +337,47 @@ describe('executeHtmlProjectToolCall', () => {
     expect(result.summary).not.toContain('靜態驗證發現');
   });
 
+  it('returns missing-required-args before dispatch when writeFiles files is omitted', async () => {
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+
+    const result = await executeHtmlProjectToolCall(
+      {
+        name: 'writeFiles',
+        args: {
+          projectId: 'project-1',
+        },
+      },
+      {
+        assistantId: 'assistant-1',
+        activeProjectId: 'project-1',
+      },
+    );
+
+    expect(mockAssertProjectOwnership).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      toolName: 'writeFiles',
+      summary: 'writeFiles is missing required arguments: files.',
+      result: {
+        ok: false,
+        recoverable: true,
+        code: 'missing-required-args',
+        message: 'writeFiles is missing required arguments: files.',
+        guidance: 'Retry with all required top-level arguments from the tool schema.',
+        details: {
+          missing: ['files'],
+          required: ['files'],
+        },
+      },
+      workspace: {
+        activeProjectId: 'project-1',
+        activityMessage: 'writeFiles is missing required arguments: files.',
+        preview: null,
+      },
+    });
+    expect(mockWriteFiles).not.toHaveBeenCalled();
+    expect(mockResolveProjectForPreview).not.toHaveBeenCalled();
+  });
+
   it('returns a structured recoverable result when writeFiles receives an empty files array', async () => {
     const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
 
@@ -372,7 +417,7 @@ describe('executeHtmlProjectToolCall', () => {
     expect(mockResolveProjectForPreview).not.toHaveBeenCalled();
   });
 
-  it('returns a structured recoverable result when writeFiles receives null call args', async () => {
+  it('returns missing-required-args when writeFiles receives null call args', async () => {
     const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
 
     const result = await executeHtmlProjectToolCall(
@@ -386,19 +431,23 @@ describe('executeHtmlProjectToolCall', () => {
       },
     );
 
-    expect(mockAssertProjectOwnership).toHaveBeenCalledWith('project-1', 'assistant-1');
+    expect(mockAssertProjectOwnership).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       toolName: 'writeFiles',
-      summary: 'writeFiles requires a non-empty files array.',
+      summary: 'writeFiles is missing required arguments: files.',
       result: {
         ok: false,
         recoverable: true,
-        code: 'invalid-write-files-input',
-        message: 'writeFiles requires a non-empty files array.',
+        code: 'missing-required-args',
+        message: 'writeFiles is missing required arguments: files.',
+        details: {
+          missing: ['files'],
+          required: ['files'],
+        },
       },
       workspace: {
         activeProjectId: 'project-1',
-        activityMessage: 'writeFiles requires a non-empty files array.',
+        activityMessage: 'writeFiles is missing required arguments: files.',
         preview: null,
       },
     });
@@ -697,7 +746,51 @@ describe('executeHtmlProjectToolCall', () => {
     ]);
   });
 
-  it('returns a structured recoverable result when replaceInFile oldText is missing', async () => {
+  it('returns missing-required-args before dispatch when replaceInFile oldText is omitted', async () => {
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+
+    const result = await executeHtmlProjectToolCall(
+      {
+        name: 'replaceInFile',
+        args: {
+          projectId: 'project-1',
+          path: '/index.html',
+          newText: 'Hi',
+        },
+      },
+      {
+        assistantId: 'assistant-1',
+        activeProjectId: 'project-1',
+      },
+    );
+
+    expect(mockAssertProjectOwnership).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      toolName: 'replaceInFile',
+      summary: 'replaceInFile is missing required arguments: oldText.',
+      result: {
+        ok: false,
+        recoverable: true,
+        code: 'missing-required-args',
+        message: 'replaceInFile is missing required arguments: oldText.',
+        guidance: 'Retry with all required top-level arguments from the tool schema.',
+        details: {
+          missing: ['oldText'],
+          required: ['path', 'oldText', 'newText'],
+        },
+      },
+      workspace: {
+        activeProjectId: 'project-1',
+        activityMessage: 'replaceInFile is missing required arguments: oldText.',
+        preview: null,
+      },
+    });
+    expect(mockReadFile).not.toHaveBeenCalled();
+    expect(mockWriteFiles).not.toHaveBeenCalled();
+    expect(mockResolveProjectForPreview).not.toHaveBeenCalled();
+  });
+
+  it('returns a structured recoverable result when replaceInFile oldText is blank', async () => {
     const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
 
     const result = await executeHtmlProjectToolCall(
@@ -716,21 +809,15 @@ describe('executeHtmlProjectToolCall', () => {
       },
     );
 
-    expect(mockAssertProjectOwnership).toHaveBeenCalledWith('project-1', 'assistant-1');
+    expect(mockAssertProjectOwnership).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       toolName: 'replaceInFile',
-      summary: 'replaceInFile requires a non-empty oldText value.',
+      summary: 'replaceInFile is missing required arguments: oldText.',
       result: {
         ok: false,
         recoverable: true,
-        code: 'invalid-replace-old-text',
-        message: 'replaceInFile requires a non-empty oldText value.',
-        guidance: 'Call readFile first, copy the exact text to replace, then retry replaceInFile.',
-      },
-      workspace: {
-        activeProjectId: 'project-1',
-        activityMessage: 'replaceInFile requires a non-empty oldText value.',
-        preview: null,
+        code: 'missing-required-args',
+        message: 'replaceInFile is missing required arguments: oldText.',
       },
     });
     expect(mockReadFile).not.toHaveBeenCalled();
@@ -1362,10 +1449,23 @@ describe('executeHtmlProjectToolCall', () => {
     });
   });
 
-  it('returns a structured recoverable result when readFile path is missing or invalid', async () => {
+  it('returns missing-required-args before dispatch when readFile path is omitted or null', async () => {
     const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
 
-    const result = await executeHtmlProjectToolCall(
+    const omittedPathResult = await executeHtmlProjectToolCall(
+      {
+        name: 'readFile',
+        args: {
+          projectId: 'project-1',
+        },
+      },
+      {
+        assistantId: 'assistant-1',
+        activeProjectId: 'project-1',
+      },
+    );
+
+    const nullPathResult = await executeHtmlProjectToolCall(
       {
         name: 'readFile',
         args: {
@@ -1381,21 +1481,34 @@ describe('executeHtmlProjectToolCall', () => {
 
     expect(mockAssertProjectOwnership).not.toHaveBeenCalled();
     expect(mockReadFile).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
+    expect(omittedPathResult).toMatchObject({
       toolName: 'readFile',
-      summary: 'readFile requires a valid path.',
+      summary: 'readFile is missing required arguments: path.',
       result: {
         ok: false,
         recoverable: true,
-        code: 'invalid-read-file-path',
-        message: 'readFile requires a valid path.',
-        guidance:
-          'Use virtual project-root paths like /index.html, /src/app.js, or /data/ruby.js. Do not use host filesystem paths or URLs.',
+        code: 'missing-required-args',
+        message: 'readFile is missing required arguments: path.',
+        guidance: 'Retry with all required top-level arguments from the tool schema.',
+        details: {
+          missing: ['path'],
+          required: ['path'],
+        },
       },
       workspace: {
         activeProjectId: 'project-1',
-        activityMessage: 'readFile requires a valid path.',
+        activityMessage: 'readFile is missing required arguments: path.',
         preview: null,
+      },
+    });
+    expect(nullPathResult).toMatchObject({
+      toolName: 'readFile',
+      summary: 'readFile is missing required arguments: path.',
+      result: {
+        ok: false,
+        recoverable: true,
+        code: 'missing-required-args',
+        message: 'readFile is missing required arguments: path.',
       },
     });
   });
@@ -2113,7 +2226,7 @@ describe('getHtmlProjectToolDefinitions', () => {
 // ============================================================================
 
 describe('getHtmlProjectToolNamesForPacks (harness-resident tools)', () => {
-  it('auto-attaches all 4 harness-resident tools for any non-empty HTML pack set', async () => {
+  it('auto-attaches all 5 harness-resident tools for any non-empty HTML pack set', async () => {
     const { getHtmlProjectToolNamesForPacks } = await import('./htmlProjectToolService');
 
     const residentTools = [
@@ -2121,6 +2234,7 @@ describe('getHtmlProjectToolNamesForPacks (harness-resident tools)', () => {
       'getPreviewRuntimeErrors',
       'listSnapshots',
       'revertToSnapshot',
+      'lintProject',
     ];
 
     for (const pack of [
@@ -2146,13 +2260,25 @@ describe('getHtmlProjectToolNamesForPacks (harness-resident tools)', () => {
     const { getHtmlProjectToolNamesForPacks } = await import('./htmlProjectToolService');
     const names = getHtmlProjectToolNamesForPacks(['inspect', 'edit']);
     const reportCount = names.filter(n => n === 'reportTurnOutcome').length;
+    const lintCount = names.filter(n => n === 'lintProject').length;
     expect(reportCount).toBe(1);
+    expect(lintCount).toBe(1);
   });
 });
 
 describe('executeHtmlProjectToolCall — harness tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockAssertProjectOwnership.mockResolvedValue({
+      id: 'project-1',
+      assistantId: 'assistant-1',
+      sessionId: 'session-1',
+      name: 'Canvas MVP',
+      description: 'Project description',
+      entryFile: '/index.html',
+      previewVersion: 3,
+    });
+    mockListProjectFiles.mockResolvedValue([]);
   });
 
   it('reportTurnOutcome returns outcome + todoSummary + previewDiagnosticState', async () => {
@@ -2285,6 +2411,179 @@ describe('executeHtmlProjectToolCall — harness tools', () => {
     });
     expect(mockRevertToSnapshot).not.toHaveBeenCalled();
   });
+
+  it('lintProject returns zero-count validation results for a clean project', async () => {
+    mockListProjectFiles.mockResolvedValueOnce([
+      {
+        path: '/index.html',
+        kind: 'html',
+        content: '<main>Hello</main>',
+        encoding: 'utf-8',
+      },
+      {
+        path: '/styles.css',
+        kind: 'css',
+        content: 'body { color: red; }',
+        encoding: 'utf-8',
+      },
+    ]);
+
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+    const result = await executeHtmlProjectToolCall(
+      { name: 'lintProject', args: {} },
+      { assistantId: 'assistant-1', activeProjectId: 'project-1' },
+    );
+
+    expect(mockAssertProjectOwnership).toHaveBeenCalledWith('project-1', 'assistant-1');
+    expect(mockListProjectFiles).toHaveBeenCalledWith('project-1');
+    expect(result).toMatchObject({
+      toolName: 'lintProject',
+      summary: 'lintProject 已檢查整個專案，未發現靜態驗證問題。',
+      result: {
+        projectId: 'project-1',
+        checkedPaths: ['/index.html', '/styles.css'],
+        ok: true,
+        errorCount: 0,
+        warningCount: 0,
+        staticValidation: {
+          ok: true,
+          errorCount: 0,
+          warningCount: 0,
+        },
+      },
+      workspace: {
+        activeProjectId: 'project-1',
+        activityMessage: 'lintProject 已檢查整個專案，未發現靜態驗證問題。',
+        preview: null,
+      },
+    });
+  });
+
+  it('lintProject uses the active project when projectId is omitted', async () => {
+    mockListProjectFiles.mockResolvedValueOnce([
+      {
+        path: '/index.html',
+        kind: 'html',
+        content: '<main>Hello</main>',
+        encoding: 'utf-8',
+      },
+    ]);
+
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+    const result = await executeHtmlProjectToolCall(
+      { name: 'lintProject', args: {} },
+      { assistantId: 'assistant-1', activeProjectId: 'project-1' },
+    );
+
+    expect(mockAssertProjectOwnership).toHaveBeenCalledWith('project-1', 'assistant-1');
+    expect(mockListProjectFiles).toHaveBeenCalledWith('project-1');
+    expect(result).toMatchObject({
+      toolName: 'lintProject',
+      result: {
+        projectId: 'project-1',
+        checkedPaths: ['/index.html'],
+        errorCount: 0,
+        warningCount: 0,
+      },
+    });
+  });
+
+  it('lintProject returns a recoverable error when requested paths are missing', async () => {
+    mockListProjectFiles.mockResolvedValueOnce([
+      {
+        path: '/index.html',
+        kind: 'html',
+        content: '<main>Hello</main>',
+        encoding: 'utf-8',
+      },
+    ]);
+
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+    const result = await executeHtmlProjectToolCall(
+      { name: 'lintProject', args: { projectId: 'project-1', paths: ['/missing.js'] } },
+      { assistantId: 'assistant-1', activeProjectId: 'project-1' },
+    );
+
+    expect(result).toMatchObject({
+      toolName: 'lintProject',
+      summary: 'lintProject could not find 1 requested path(s).',
+      result: {
+        ok: false,
+        recoverable: true,
+        code: 'lint-path-not-found',
+        message: 'lintProject could not find 1 requested path(s).',
+        details: {
+          missingPaths: ['/missing.js'],
+          availablePaths: ['/index.html'],
+        },
+      },
+    });
+  });
+
+  it('lintProject enforces the maximum file count limit', async () => {
+    mockListProjectFiles.mockResolvedValueOnce(
+      Array.from({ length: 51 }, (_, index) => ({
+        path: `/file-${index}.js`,
+        kind: 'js',
+        content: 'export const value = 1;',
+        encoding: 'utf-8',
+      })),
+    );
+
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+    const result = await executeHtmlProjectToolCall(
+      { name: 'lintProject', args: { projectId: 'project-1' } },
+      { assistantId: 'assistant-1', activeProjectId: 'project-1' },
+    );
+
+    expect(result).toMatchObject({
+      toolName: 'lintProject',
+      summary: 'lintProject can validate at most 50 files per call.',
+      result: {
+        ok: false,
+        recoverable: true,
+        code: 'lint-too-many-files',
+        message: 'lintProject can validate at most 50 files per call.',
+        details: {
+          fileCount: 51,
+          maxFiles: 50,
+        },
+      },
+    });
+  });
+
+  it('lintProject enforces the maximum payload size limit', async () => {
+    mockListProjectFiles.mockResolvedValueOnce([
+      {
+        path: '/large.js',
+        kind: 'js',
+        content: 'a'.repeat(512 * 1024 + 1),
+        encoding: 'utf-8',
+      },
+    ]);
+
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+    const result = await executeHtmlProjectToolCall(
+      { name: 'lintProject', args: { projectId: 'project-1' } },
+      { assistantId: 'assistant-1', activeProjectId: 'project-1' },
+    );
+
+    expect(result).toMatchObject({
+      toolName: 'lintProject',
+      summary: `lintProject input is too large (${512 * 1024 + 1} bytes).`,
+      result: {
+        ok: false,
+        recoverable: true,
+        code: 'lint-payload-too-large',
+        message: `lintProject input is too large (${512 * 1024 + 1} bytes).`,
+        details: {
+          fileCount: 1,
+          totalBytes: 512 * 1024 + 1,
+          maxBytes: 512 * 1024,
+        },
+      },
+    });
+  });
 });
 
 describe('write-tool dynamic-code syntax warnings (G11)', () => {
@@ -2385,13 +2684,14 @@ describe('write-tool dynamic-code syntax warnings (G11)', () => {
 });
 
 describe('harness tool definitions', () => {
-  it('exposes all 4 resident tool definitions', async () => {
+  it('exposes all 5 resident tool definitions', async () => {
     const { getHtmlProjectToolDefinitions } = await import('./htmlProjectToolService');
     const names = getHtmlProjectToolDefinitions().map(d => d.name);
     expect(names).toContain('reportTurnOutcome');
     expect(names).toContain('getPreviewRuntimeErrors');
     expect(names).toContain('listSnapshots');
     expect(names).toContain('revertToSnapshot');
+    expect(names).toContain('lintProject');
   });
 
   it('exports write-pack names as a subset of known HTML project packs', async () => {

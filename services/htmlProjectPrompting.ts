@@ -3,7 +3,10 @@ import type {
   HtmlProjectSummary,
   HtmlProjectToolPackName,
 } from '../types';
-import { getHtmlProjectToolNamesForPacks } from './htmlProjectToolService';
+import {
+  getAllHtmlProjectToolDefinitions,
+  getHtmlProjectToolNamesForPacks,
+} from './htmlProjectToolService';
 
 const HTML_PROJECT_KEYWORDS = [
   'landing page',
@@ -311,6 +314,7 @@ interface BuildHtmlProjectSystemPromptOptions {
   activeProjectId?: string | null;
   intentDecision?: HtmlProjectIntentDecision | null;
   projectSummary?: HtmlProjectSummary | null;
+  gatingMode?: 'soft' | 'hard';
 }
 
 const buildProjectSummaryPrompt = (projectSummary?: HtmlProjectSummary | null): string => {
@@ -336,14 +340,25 @@ const buildProjectSummaryPrompt = (projectSummary?: HtmlProjectSummary | null): 
   return `The system already injected a current project summary for this turn: ${JSON.stringify(compactSummary)}. Do not start with redundant listFiles or listProjectTodos unless you need deeper detail than this summary provides.`;
 };
 
-const buildVisibleToolPrompt = (packSet: HtmlProjectToolPackName[]): string => {
-  const visibleToolNames = getHtmlProjectToolNamesForPacks(packSet);
+const buildVisibleToolPrompt = (
+  packSet: HtmlProjectToolPackName[],
+  gatingMode: 'soft' | 'hard' = 'hard',
+): string => {
+  const recommendedToolNames = getHtmlProjectToolNamesForPacks(packSet);
+  const availableToolNames =
+    gatingMode === 'soft'
+      ? getAllHtmlProjectToolDefinitions().map(tool => tool.name)
+      : recommendedToolNames;
 
-  if (visibleToolNames.length === 0) {
+  if (availableToolNames.length === 0) {
     return '';
   }
 
-  return `Only use tools that are visible for this turn. Visible HTML project tools: ${visibleToolNames.join(', ')}.`;
+  if (gatingMode === 'soft') {
+    return `All HTML project tools are available for this turn. Recommended HTML tool packs for this turn: ${packSet.join(', ')}. Available HTML project tools: ${availableToolNames.join(', ')}.`;
+  }
+
+  return `Only use tools that are visible for this turn. Visible HTML project tools: ${availableToolNames.join(', ')}.`;
 };
 
 const buildPackSpecificGuidance = (packSet: HtmlProjectToolPackName[]): string[] => {
@@ -370,7 +385,7 @@ const buildPackSpecificGuidance = (packSet: HtmlProjectToolPackName[]): string[]
 
   if (packSetLookup.has('edit')) {
     guidance.push(
-      'When edit tools are visible and the user asks to create, edit, copy, rename, or delete project contents, you must use the visible project tools to perform those changes instead of only describing edits in chat.',
+      'When edit tools are available and the user asks to create, edit, copy, rename, or delete project contents, you must use the visible project tools to perform those changes instead of only describing edits in chat.',
     );
     guidance.push(
       'For targeted edits, inspect existing work first: use getProjectSummary when available, use searchFiles to locate relevant code, use listFiles to inspect structure, then use readFile before writeFiles, replaceInFile, or modifyLinesInFile.',
@@ -388,7 +403,7 @@ const buildPackSpecificGuidance = (packSet: HtmlProjectToolPackName[]): string[]
       'Before resuming project execution, inspect the current checklist or injected summary. Before saying all work is complete, call checkProjectTodos and confirm allComplete is true.',
     );
     guidance.push(
-      "Before calling reportTurnOutcome(outcome:'complete'), you MUST first call checkProjectTodos and confirm todoSummary.allComplete === true, AND call getPreviewRuntimeErrors and confirm status is 'clean' or 'not_executed' (no runtime errors). If todos remain or runtime errors exist, continue working instead of reporting complete.",
+      "Before calling reportTurnOutcome(outcome:'complete'), you MUST first call checkProjectTodos and confirm todoSummary.allComplete === true, AND call getPreviewRuntimeErrors and confirm status is 'clean' or 'not_executed' (no runtime errors), AND call lintProject and confirm staticValidation.errorCount === 0. If todos remain, runtime errors exist, or lintProject finds errors, continue working instead of reporting complete.",
     );
 
     if (packSetLookup.has('edit')) {
@@ -427,14 +442,17 @@ export const buildHtmlProjectSystemPrompt = (
 
   const activeProjectId = normalizedOptions?.activeProjectId ?? null;
   const selectedPackSet = normalizedOptions?.intentDecision?.selectedPackSet ?? [];
+  const gatingMode = normalizedOptions?.gatingMode ?? 'hard';
   const continuationPrompt = activeProjectId
     ? `Current active HTML project id: ${activeProjectId}. Reuse it for incremental edits unless the user explicitly asks for a fresh project.`
     : 'No active HTML project exists yet.';
   const routingPrompt = selectedPackSet.length
-    ? `Current routing intent: ${normalizedOptions?.intentDecision?.intent} (${normalizedOptions?.intentDecision?.confidence} confidence). HTML tool packs exposed for this turn: ${selectedPackSet.join(', ')}.`
+    ? gatingMode === 'soft'
+      ? `Current routing intent: ${normalizedOptions?.intentDecision?.intent} (${normalizedOptions?.intentDecision?.confidence} confidence). HTML tool packs recommended for this turn: ${selectedPackSet.join(', ')}.`
+      : `Current routing intent: ${normalizedOptions?.intentDecision?.intent} (${normalizedOptions?.intentDecision?.confidence} confidence). HTML tool packs exposed for this turn: ${selectedPackSet.join(', ')}.`
     : '';
   const summaryPrompt = buildProjectSummaryPrompt(normalizedOptions?.projectSummary);
-  const visibleToolPrompt = buildVisibleToolPrompt(selectedPackSet);
+  const visibleToolPrompt = buildVisibleToolPrompt(selectedPackSet, gatingMode);
   const packSpecificGuidance = buildPackSpecificGuidance(selectedPackSet);
 
   return [
@@ -445,6 +463,7 @@ export const buildHtmlProjectSystemPrompt = (
     summaryPrompt,
     'Always use virtual project-root paths like /index.html, /src/app.js, or /data/ruby.js. Never use host filesystem paths or URLs.',
     SANDBOX_CAPABILITIES_PROMPT,
+    'Use lintProject when you need a proactive static validation pass over existing project files or a final syntax check before completion',
     SANDBOX_BOUNDARIES_PROMPT,
     ...packSpecificGuidance,
     'Each displayed line in readFile.numberedContent starts with "<line> | ". That line-number prefix is only for display and must never be copied into replaceInFile.oldText, replaceInFile.newText, modifyLinesInFile.content, or modifyLinesInFile.expectedOriginal.',

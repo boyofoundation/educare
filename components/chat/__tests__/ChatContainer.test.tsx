@@ -496,6 +496,81 @@ describe('ChatContainer', () => {
     });
   });
 
+  it('renders live tool activity and persists toolCallLog into the committed assistant message', async () => {
+    mockControllerRun.mockImplementationOnce(async () => {
+      const options = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+        callbacks?: {
+          onToolCallActivity?: (record: {
+            id: string;
+            name: string;
+            startedAt: number;
+            status: 'running' | 'ok' | 'recoverable_error' | 'failed';
+            code?: string;
+            summary?: string;
+            durationMs?: number;
+          }) => void;
+        };
+      };
+      options?.callbacks?.onToolCallActivity?.({
+        id: 'tool-1',
+        name: 'getProjectSummary',
+        startedAt: 1700000000000,
+        status: 'running',
+        summary: 'Inspecting current project',
+        durationMs: 8,
+      });
+      options?.callbacks?.onToolCallActivity?.({
+        id: 'tool-2',
+        name: 'lintProject',
+        startedAt: 1700000000100,
+        status: 'recoverable_error',
+        code: 'lint-path-not-found',
+        summary: 'lintProject could not find 1 requested path(s).',
+        durationMs: 20,
+      });
+      return buildRunResult('Tool-assisted answer');
+    });
+
+    render(<ChatContainer {...defaultProps} />);
+
+    await sendMessage('Use tools');
+
+    await waitFor(() => {
+      expect(screen.getByText('Tool activity')).toBeInTheDocument();
+      expect(screen.getByText('getProjectSummary')).toBeInTheDocument();
+      expect(screen.getByText('lintProject')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(defaultProps.onNewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'model',
+              content: 'Tool-assisted answer',
+              toolCallLog: [
+                expect.objectContaining({
+                  id: 'tool-1',
+                  name: 'getProjectSummary',
+                  status: 'running',
+                }),
+                expect.objectContaining({
+                  id: 'tool-2',
+                  name: 'lintProject',
+                  status: 'recoverable_error',
+                  code: 'lint-path-not-found',
+                }),
+              ],
+            }),
+          ]),
+        }),
+        'Use tools',
+        'Tool-assisted answer',
+        expect.objectContaining({ promptTokenCount: 10, candidatesTokenCount: 15 }),
+      );
+    });
+  });
+
   it('calls controller.stop when the Stop button is clicked during a run', async () => {
     // Run that stays pending (we control resolution) so the Stop button stays visible.
     let resolveRun: (value: AgentRunResult) => void = () => undefined;

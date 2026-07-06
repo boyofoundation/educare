@@ -154,7 +154,7 @@ describe('buildHtmlProjectSystemPrompt', () => {
     );
   });
 
-  it('includes only the route-visible tools for active project resume flows', () => {
+  it('includes all HTML tools with soft-gated routing guidance for active project resume flows', () => {
     const prompt = buildHtmlProjectSystemPrompt({
       activeProjectId: 'project-123',
       intentDecision: classifyHtmlProjectIntent(
@@ -162,15 +162,19 @@ describe('buildHtmlProjectSystemPrompt', () => {
         'project-123',
       ),
       projectSummary,
+      gatingMode: 'soft',
     });
 
     expect(prompt).toContain('Current active HTML project id: project-123.');
     expect(prompt).toContain('Current routing intent: resume_project (medium confidence).');
     expect(prompt).toContain(
-      'HTML tool packs exposed for this turn: inspect, edit, todo_finalize, preview_recheck.',
+      'HTML tool packs recommended for this turn: inspect, edit, todo_finalize, preview_recheck.',
     );
     expect(prompt).toContain(
-      'Visible HTML project tools: getProjectSummary, listFiles, searchFiles, readFile, listProjectTodos, writeFiles, replaceInFile, modifyLinesInFile, copyFile, renameFile, deleteFile, setEntrypoint, setProjectTodos, updateProjectTodo, deleteProjectTodo, checkProjectTodos, renderPreview, reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot.',
+      'All HTML project tools are available for this turn. Recommended HTML tool packs for this turn: inspect, edit, todo_finalize, preview_recheck.',
+    );
+    expect(prompt).toContain(
+      'Available HTML project tools: createProject, listProjects, openProject, getProjectSummary, searchFiles, writeFiles, replaceInFile, listFiles, modifyLinesInFile, readFile, listProjectTodos, setProjectTodos, updateProjectTodo, deleteProjectTodo, checkProjectTodos, deleteFile, copyFile, renameFile, setEntrypoint, renderPreview, reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot, lintProject.',
     );
     expect(prompt).toContain(
       'The system already injected a current project summary for this turn:',
@@ -182,10 +186,9 @@ describe('buildHtmlProjectSystemPrompt', () => {
     expect(prompt).toContain(
       'Successful mutating tools already refresh preview/workspace state automatically. Use renderPreview only when the user explicitly asks to rebuild, reopen, refresh, or recheck preview state, or when preview diagnostics indicate that a repair flow needs revalidation.',
     );
-    expect(prompt).not.toContain('Visible HTML project tools: createProject');
   });
 
-  it('keeps finalize guidance scoped to finalize packs until edit routing is promoted elsewhere', () => {
+  it('keeps hard-gated finalize guidance scoped to finalize packs and includes lintProject as harness-resident', () => {
     const prompt = buildHtmlProjectSystemPrompt({
       activeProjectId: 'project-123',
       intentDecision: classifyHtmlProjectIntent(
@@ -200,7 +203,7 @@ describe('buildHtmlProjectSystemPrompt', () => {
       'HTML tool packs exposed for this turn: inspect, todo_finalize, preview_recheck.',
     );
     expect(prompt).toContain(
-      'Visible HTML project tools: getProjectSummary, listFiles, searchFiles, readFile, listProjectTodos, checkProjectTodos, renderPreview, reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot.',
+      'Visible HTML project tools: getProjectSummary, listFiles, searchFiles, readFile, listProjectTodos, checkProjectTodos, renderPreview, reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot, lintProject.',
     );
     expect(prompt).not.toContain(
       'Visible HTML project tools: getProjectSummary, listFiles, searchFiles, readFile, listProjectTodos, writeFiles',
@@ -241,7 +244,7 @@ describe('buildHtmlProjectSystemPrompt', () => {
     );
   });
 
-  it('strengthens the todo_finalize gate with reportTurnOutcome and getPreviewRuntimeErrors requirements', () => {
+  it('strengthens the todo_finalize gate with lintProject in addition to reportTurnOutcome and runtime checks', () => {
     const prompt = buildHtmlProjectSystemPrompt({
       activeProjectId: 'project-123',
       intentDecision: classifyHtmlProjectIntent(
@@ -252,7 +255,7 @@ describe('buildHtmlProjectSystemPrompt', () => {
     });
 
     expect(prompt).toContain(
-      "Before calling reportTurnOutcome(outcome:'complete'), you MUST first call checkProjectTodos and confirm todoSummary.allComplete === true, AND call getPreviewRuntimeErrors and confirm status is 'clean' or 'not_executed' (no runtime errors). If todos remain or runtime errors exist, continue working instead of reporting complete.",
+      "Before calling reportTurnOutcome(outcome:'complete'), you MUST first call checkProjectTodos and confirm todoSummary.allComplete === true, AND call getPreviewRuntimeErrors and confirm status is 'clean' or 'not_executed' (no runtime errors), AND call lintProject and confirm staticValidation.errorCount === 0. If todos remain, runtime errors exist, or lintProject finds errors, continue working instead of reporting complete.",
     );
   });
 
@@ -272,6 +275,33 @@ describe('buildHtmlProjectSystemPrompt', () => {
       'Before writing files, plan the work with setProjectTodos (at least 3 concrete todos).',
     );
     expect(prompt).toContain("Before calling reportTurnOutcome(outcome:'complete')");
+  });
+
+  it('describes hard-vs-soft tool visibility wording explicitly', () => {
+    const decision = classifyHtmlProjectIntent(
+      'Continue the same project, fix the header, and refresh preview after that.',
+      'project-123',
+    );
+
+    const hardPrompt = buildHtmlProjectSystemPrompt({
+      activeProjectId: 'project-123',
+      intentDecision: decision,
+      projectSummary,
+      gatingMode: 'hard',
+    });
+    const softPrompt = buildHtmlProjectSystemPrompt({
+      activeProjectId: 'project-123',
+      intentDecision: decision,
+      projectSummary,
+      gatingMode: 'soft',
+    });
+
+    expect(hardPrompt).toContain(
+      'Only use tools that are visible for this turn. Visible HTML project tools:',
+    );
+    expect(softPrompt).toContain(
+      'All HTML project tools are available for this turn. Recommended HTML tool packs for this turn: inspect, edit, todo_finalize, preview_recheck.',
+    );
   });
 
   it('includes VFS sandbox capabilities and boundaries (V10)', () => {

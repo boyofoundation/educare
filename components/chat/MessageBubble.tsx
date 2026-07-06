@@ -3,6 +3,7 @@ import { MessageBubbleProps } from './types';
 import { UserIcon, GeminiIcon } from '../ui/Icons';
 import ReactMarkdown from 'react-markdown';
 import SubagentActivityCard from './SubagentActivityCard';
+import ToolCallCard from './ToolCallCard';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeHighlightCodeLines from 'rehype-highlight-code-lines';
@@ -230,6 +231,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
             </div>
           </div>
           <div className='flex flex-col group gap-3'>
+            {message.toolCallLog && message.toolCallLog.length > 0 && (
+              <ToolCallCard records={message.toolCallLog} />
+            )}
             {message.subagentRuns && message.subagentRuns.length > 0 && (
               <SubagentActivityCard runs={message.subagentRuns} />
             )}

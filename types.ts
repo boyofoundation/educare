@@ -69,6 +69,16 @@ export interface SubagentActivityUpdate {
   runs: SubagentRunRecord[];
 }
 
+export interface ToolCallRecord {
+  id: string;
+  name: string;
+  status: 'running' | 'ok' | 'recoverable_error' | 'failed';
+  code?: string;
+  summary?: string;
+  durationMs?: number;
+  startedAt: number;
+}
+
 export interface ChatMessage {
   role: 'user' | 'model';
   content: string;
@@ -86,6 +96,10 @@ export interface ChatMessage {
    * 子代理人批次執行紀錄。用於串流卡片與歷史訊息重建。
    */
   subagentRuns?: SubagentRunRecord[];
+  /**
+   * 工具呼叫活動紀錄。用於串流卡片與歷史訊息重建。
+   */
+  toolCallLog?: ToolCallRecord[];
 }
 
 /**
@@ -471,7 +485,8 @@ export type HtmlProjectHarnessToolName =
   | 'reportTurnOutcome'
   | 'getPreviewRuntimeErrors'
   | 'listSnapshots'
-  | 'revertToSnapshot';
+  | 'revertToSnapshot'
+  | 'lintProject';
 
 /** reportTurnOutcome 工具的回報結果 (G2/G4)。*/
 export type ReportTurnOutcome = 'complete' | 'continue_needed';

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import StreamingResponse from '../StreamingResponse';
 import { setupTestEnvironment } from './test-utils';
@@ -404,6 +404,44 @@ describe('StreamingResponse', () => {
       expect(screen.getByText('Active planner')).toBeInTheDocument();
       expect(screen.getByText('Completed summary')).toBeInTheDocument();
       expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
+    });
+
+    it('renders live tool call activity above the streaming bubble', () => {
+      render(
+        <StreamingResponse
+          content='Streaming with tools'
+          toolCallLog={[
+            {
+              id: 'tool-1',
+              name: 'getProjectSummary',
+              startedAt: 1700000000000,
+              status: 'running',
+              summary: 'Inspecting project context',
+              durationMs: 12,
+            },
+            {
+              id: 'tool-2',
+              name: 'lintProject',
+              startedAt: 1700000000100,
+              status: 'recoverable_error',
+              code: 'lint-path-not-found',
+              summary: 'lintProject could not find 1 requested path(s).',
+              durationMs: 25,
+            },
+          ]}
+        />,
+      );
+
+      expect(screen.getByText('Tool activity')).toBeInTheDocument();
+      expect(screen.getByText('2 calls')).toBeInTheDocument();
+      expect(screen.getByText('getProjectSummary')).toBeInTheDocument();
+      expect(screen.getByText('lintProject')).toBeInTheDocument();
+      expect(screen.getByText('Running')).toBeInTheDocument();
+      expect(screen.getByText('Recoverable')).toBeInTheDocument();
+      expect(screen.queryByText('Inspecting project context')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /getProjectSummary/i }));
+      expect(screen.getByText('Inspecting project context')).toBeInTheDocument();
+      expect(screen.getByText('lint-path-not-found')).toBeInTheDocument();
     });
   });
 

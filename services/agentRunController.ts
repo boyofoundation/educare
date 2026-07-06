@@ -14,6 +14,7 @@ import {
   type SubagentActivityUpdate,
   type SubagentRunRecord,
   type TokenUsageTotals,
+  type ToolCallRecord,
 } from '../types';
 import type { ProviderUsageMetadata } from './llmAdapter';
 import { buildSyntheticMessage, serializeAgentTurnLog } from './conversationUtils';
@@ -103,6 +104,7 @@ export interface AgentRunControllerCallbacks {
   onChunk: (text: string, turnIndex: number) => void;
   onProjectToolActivity?: (update: HtmlProjectWorkspaceUpdate) => void;
   onSubagentActivity?: (update: SubagentActivityUpdate) => void;
+  onToolCallActivity?: (record: ToolCallRecord) => void;
   onTurnStart?: (turnIndex: number, maxTurns: number) => void;
   onTurnComplete?: (turnIndex: number, summary: AgentRunTurnSummary) => void;
   onStateChange?: (state: AgentRunState) => void;
@@ -433,6 +435,7 @@ export class AgentRunController {
             },
             onProjectToolActivity: callbacks.onProjectToolActivity,
             onSubagentActivity: callbacks.onSubagentActivity,
+            onToolCallActivity: callbacks.onToolCallActivity,
             onComplete: (meta, text) => {
               turn.text = text;
               turn.finishReason = meta.finishReason ?? 'complete';

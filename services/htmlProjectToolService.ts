@@ -57,6 +57,7 @@ const HTML_PROJECT_TOOL_NAMES = [
   'getPreviewRuntimeErrors',
   'listSnapshots',
   'revertToSnapshot',
+  'lintProject',
 ] as const;
 
 type HtmlProjectToolName = (typeof HTML_PROJECT_TOOL_NAMES)[number];
@@ -69,6 +70,7 @@ const HARNESS_RESIDENT_TOOL_NAMES: HtmlProjectHarnessToolName[] = [
   'getPreviewRuntimeErrors',
   'listSnapshots',
   'revertToSnapshot',
+  'lintProject',
 ];
 
 const HTML_PROJECT_TOOL_PACKS: Record<HtmlProjectToolPackName, HtmlProjectToolName[]> = {
@@ -241,6 +243,15 @@ interface RevertToSnapshotArgs {
   version: number;
 }
 
+interface LintProjectArgs {
+  projectId?: string;
+  paths?: string[];
+}
+
+interface ToolRequiredArgsMeta {
+  required: string[];
+}
+
 const createWorkspaceUpdate = (
   activeProjectId: string | null,
   activityMessage: string,
@@ -286,6 +297,25 @@ const summarizeSearchResult = (result: {
 
 const summarizeFileList = (paths: string[]): string => paths.join(', ');
 
+const normalizeLintPaths = (paths: string[] | undefined): string[] => {
+  if (!Array.isArray(paths)) {
+    return [];
+  }
+
+  const normalizedPaths: string[] = [];
+  for (const path of paths) {
+    if (typeof path !== 'string') {
+      continue;
+    }
+    const trimmed = path.trim();
+    if (trimmed.length > 0) {
+      normalizedPaths.push(trimmed);
+    }
+  }
+
+  return normalizedPaths;
+};
+
 /**
  * G11 防禦性檢查:偵測寫入內容是否包含動態程式碼模式 (new Function / DOMParser eval)。
  * - ESM (含 import/export) 跳過檢查,回傳 moduleSyntaxSkipped:true。
@@ -316,13 +346,13 @@ const evaluateDynamicCodeWarning = (content: string): DynamicCodeWarningResult =
 // ---------------------------------------------------------------------------
 // Static validation (Phase 1 MVP) — non-blocking 靜態語法驗證
 // 寫入完成後跑 acorn/css-tree/parse5,把診斷以 result.staticDiagnostics
-// 回傳 LLM;ok 時完全省略欄位以節省 token(見計畫 Step 6)。
+// 回傳 LLM;寫入工具在 ok 時可省略欄位以節省 token,主動 lintProject 則必須回傳 0-count 結果。
 // ---------------------------------------------------------------------------
 
 interface StaticValidationToolPayload {
   /** 格式化後的診斷字串 (LLM-friendly)。ok 時省略。 */
   staticDiagnostics?: string;
-  /** 結構化 summary 供 telemetry / UI。ok 時省略。 */
+  /** 結構化 summary 供 telemetry / UI。主動 lint 時不可省略。 */
   staticValidation?: {
     ok: boolean;
     errorCount: number;
@@ -336,6 +366,56 @@ interface StaticValidationToolPayload {
 const buildStaticValidationSuffix = (errorCount: number): string =>
   errorCount > 0 ? `靜態驗證發現 ${errorCount} 項錯誤，見 staticDiagnostics。` : '';
 
+const getToolRequiredArgs = (toolName: string): string[] => {
+  const cached = toolRequiredArgsCache.get(toolName);
+  if (cached) {
+    return cached.required;
+  }
+
+  const definition = getHtmlProjectToolDefinitions().find(tool => tool.name === toolName);
+  const required = Array.isArray(definition?.parameters?.required)
+    ? definition.parameters.required.filter(
+        (value): value is string => typeof value === 'string' && value.length > 0,
+      )
+    : [];
+
+  toolRequiredArgsCache.set(toolName, { required });
+  return required;
+};
+
+const validateRequiredToolArgs = (
+  toolName: string,
+  safeArgs: Record<string, unknown>,
+): RecoverableToolErrorResult | null => {
+  const required = getToolRequiredArgs(toolName);
+  if (required.length === 0) {
+    return null;
+  }
+
+  const missing = required.filter(key => {
+    const value = safeArgs[key];
+    return (
+      value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
+    );
+  });
+
+  if (missing.length === 0) {
+    return null;
+  }
+
+  return {
+    ok: false,
+    recoverable: true,
+    code: 'missing-required-args',
+    message: `${toolName} is missing required arguments: ${missing.join(', ')}.`,
+    guidance: 'Retry with all required top-level arguments from the tool schema.',
+    details: {
+      missing,
+      required,
+    },
+  };
+};
+
 /** 把 runStaticValidation 結果攤到 result 物件;ok 時兩個欄位都不會出現 */
 const spreadStaticValidationFields = (
   payload: StaticValidationToolPayload,
@@ -344,20 +424,37 @@ const spreadStaticValidationFields = (
   ...(payload.staticValidation ? { staticValidation: payload.staticValidation } : {}),
 });
 
+const summarizeLintProjectResult = (
+  errorCount: number,
+  warningCount: number,
+  scopedPathCount: number | null,
+): string => {
+  const scopeLabel = scopedPathCount === null ? '整個專案' : `${scopedPathCount} 個指定檔案`;
+
+  if (errorCount === 0 && warningCount === 0) {
+    return `lintProject 已檢查${scopeLabel}，未發現靜態驗證問題。`;
+  }
+
+  return `lintProject 已檢查${scopeLabel}，發現 ${errorCount} 項錯誤、${warningCount} 項警告。`;
+};
+
 const runStaticValidation = async (
   files: StaticValidationFileInput[],
+  options?: { includeZeroCounts?: boolean },
 ): Promise<StaticValidationToolPayload> => {
   // 預熱 parser bundle (no-op 若已載入),讓 handler 內的 stats 不被首次 import 影響
   await preloadStaticValidationParsers();
   const result = await validateProjectFiles(files);
-  // 完全沒有診斷 (沒有 error 也沒有 warning) 時省略回傳欄位 → 零 token 成本
-  if (result.diagnostics.length === 0) {
-    return { summarySuffix: '' };
-  }
   const errorCount = result.diagnostics.filter(d => d.severity === 'error').length;
   const warningCount = result.diagnostics.filter(d => d.severity === 'warning').length;
+
+  if (result.diagnostics.length === 0 && !options?.includeZeroCounts) {
+    return { summarySuffix: '' };
+  }
+
   return {
-    staticDiagnostics: formatStaticDiagnosticsForLlm(result.diagnostics),
+    staticDiagnostics:
+      result.diagnostics.length > 0 ? formatStaticDiagnosticsForLlm(result.diagnostics) : undefined,
     staticValidation: {
       ok: result.ok,
       errorCount,
@@ -388,7 +485,10 @@ const LINE_NUMBER_PREFIX_GUIDANCE =
 const WRITE_FILE_MAX_BYTES = 24 * 1024;
 const WRITE_FILES_MAX_BYTES = 64 * 1024;
 const MODIFY_LINES_CONTENT_MAX_BYTES = 64 * 1024;
+const LINT_PROJECT_MAX_FILES = 50;
+const LINT_PROJECT_MAX_BYTES = 512 * 1024;
 const textEncoder = new TextEncoder();
+const toolRequiredArgsCache = new Map<string, ToolRequiredArgsMeta>();
 
 interface RecoverableToolErrorResult {
   ok: false;
@@ -2254,6 +2354,106 @@ const handleRevertToSnapshot = async (
   };
 };
 
+const handleLintProject = async (
+  args: LintProjectArgs,
+  context: HtmlProjectToolContext,
+): Promise<HtmlProjectToolExecutionResult> => {
+  const project = await requireOwnedProject(args.projectId, context);
+  const requestedPaths = normalizeLintPaths(args.paths);
+  const projectFiles = await htmlProjectStore.listProjectFiles(project.id);
+  const projectFileMap = new Map(projectFiles.map(file => [file.path, file]));
+
+  const missingPaths = requestedPaths.filter(path => !projectFileMap.has(path));
+  if (missingPaths.length > 0) {
+    throw new HtmlProjectToolRecoverableError({
+      ok: false,
+      recoverable: true,
+      code: 'lint-path-not-found',
+      message: `lintProject could not find ${missingPaths.length} requested path(s).`,
+      guidance: 'Call listFiles first or retry with only existing virtual project paths.',
+      details: {
+        missingPaths,
+        availablePaths: projectFiles.map(file => file.path),
+      },
+    });
+  }
+
+  const targetFiles =
+    requestedPaths.length > 0
+      ? requestedPaths
+          .map(path => projectFileMap.get(path))
+          .filter((file): file is NonNullable<typeof file> => Boolean(file))
+      : projectFiles;
+
+  if (targetFiles.length > LINT_PROJECT_MAX_FILES) {
+    throw new HtmlProjectToolRecoverableError({
+      ok: false,
+      recoverable: true,
+      code: 'lint-too-many-files',
+      message: `lintProject can validate at most ${LINT_PROJECT_MAX_FILES} files per call.`,
+      guidance: 'Retry with a smaller paths array or split the lint into multiple batches.',
+      details: {
+        fileCount: targetFiles.length,
+        maxFiles: LINT_PROJECT_MAX_FILES,
+      },
+    });
+  }
+
+  const totalBytes = targetFiles.reduce(
+    (sum, file) => sum + getContentSizeInBytes(file.content),
+    0,
+  );
+  if (totalBytes > LINT_PROJECT_MAX_BYTES) {
+    throw new HtmlProjectToolRecoverableError({
+      ok: false,
+      recoverable: true,
+      code: 'lint-payload-too-large',
+      message: `lintProject input is too large (${totalBytes} bytes).`,
+      guidance: 'Retry with a smaller set of paths so lintProject can process them in batches.',
+      details: {
+        fileCount: targetFiles.length,
+        totalBytes,
+        maxBytes: LINT_PROJECT_MAX_BYTES,
+      },
+    });
+  }
+
+  const staticValidation = await runStaticValidation(
+    targetFiles.map(file => ({
+      path: file.path,
+      kind: file.kind,
+      content: file.content,
+      encoding: file.encoding,
+    })),
+    { includeZeroCounts: true },
+  );
+
+  const errorCount = staticValidation.staticValidation?.errorCount ?? 0;
+  const warningCount = staticValidation.staticValidation?.warningCount ?? 0;
+  const durationMs = staticValidation.staticValidation?.durationMs ?? 0;
+  const ok = staticValidation.staticValidation?.ok ?? true;
+  const summary = summarizeLintProjectResult(
+    errorCount,
+    warningCount,
+    requestedPaths.length > 0 ? targetFiles.length : null,
+  );
+
+  return {
+    toolName: 'lintProject',
+    summary,
+    result: {
+      projectId: project.id,
+      checkedPaths: targetFiles.map(file => file.path),
+      ok,
+      errorCount,
+      warningCount,
+      durationMs,
+      ...spreadStaticValidationFields(staticValidation),
+    },
+    workspace: createWorkspaceUpdate(project.id, summary),
+  };
+};
+
 export const getHtmlProjectToolDefinitions = (): ToolDefinition[] => [
   {
     name: 'createProject',
@@ -2628,6 +2828,25 @@ export const getHtmlProjectToolDefinitions = (): ToolDefinition[] => [
       required: ['version'],
     },
   },
+  {
+    name: 'lintProject',
+    description:
+      'Harness-resident tool. Proactively run static validation across the active HTML project or a selected set of virtual project files. Use this to inspect existing files or to confirm the project is syntax-clean before reporting completion.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        projectId: { type: 'string' },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Optional virtual project-root paths to lint. Omit to validate the full project. Large projects may need to be linted in batches.',
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 export const getHtmlProjectToolNamesForPacks = (
@@ -2684,6 +2903,18 @@ export const executeHtmlProjectToolCall = async (
     call.args && typeof call.args === 'object' && !Array.isArray(call.args)
       ? call.args
       : ({} as Record<string, unknown>);
+  const recoverableActiveProjectId = getRecoverableActiveProjectId(
+    safeArgs,
+    context.activeProjectId,
+  );
+  const requiredArgsError = validateRequiredToolArgs(call.name, safeArgs);
+  if (requiredArgsError) {
+    return createRecoverableToolExecutionResult(
+      call.name,
+      requiredArgsError,
+      recoverableActiveProjectId,
+    );
+  }
 
   try {
     switch (call.name) {
@@ -2738,15 +2969,12 @@ export const executeHtmlProjectToolCall = async (
         return await handleListSnapshots(safeArgs as unknown as ListSnapshotsArgs, context);
       case 'revertToSnapshot':
         return await handleRevertToSnapshot(safeArgs as unknown as RevertToSnapshotArgs, context);
+      case 'lintProject':
+        return await handleLintProject(safeArgs as unknown as LintProjectArgs, context);
       default:
         throw new Error(`Unsupported HTML project tool: ${call.name}`);
     }
   } catch (error) {
-    const recoverableActiveProjectId = getRecoverableActiveProjectId(
-      safeArgs,
-      context.activeProjectId,
-    );
-
     if (error instanceof HtmlProjectToolRecoverableError) {
       return createRecoverableToolExecutionResult(
         call.name,

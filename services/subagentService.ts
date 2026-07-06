@@ -37,6 +37,7 @@ const SUBAGENT_HTML_TOOL_EXCLUSIONS = new Set([
   'getPreviewRuntimeErrors',
   'listSnapshots',
   'revertToSnapshot',
+  'lintProject',
 ]);
 
 export interface RecoverableToolErrorResult {
@@ -368,7 +369,7 @@ export const buildSubagentTools = (
         .map(tool => tool.name)
         .join(
           ', ',
-        )}. Harness-resident tools such as reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, and revertToSnapshot are not available inside subagents.`,
+        )}. Harness-resident tools such as reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot, and lintProject are not available inside subagents.`,
     );
     const visibleHtmlToolNames = new Set(htmlDefinitions.map(tool => tool.name));
     executors.push(async call => {
@@ -480,6 +481,8 @@ export const buildSubagentDelegationToolDefinition = (): ToolDefinition => ({
             },
             htmlPacks: {
               type: 'array',
+              description:
+                'HTML tool packs for the currently active project. On the main turn these are routing recommendations; for subagents they are hard capability authorization.',
               items: {
                 type: 'string',
                 enum: ['bootstrap', 'inspect', 'edit', 'todo_finalize', 'preview_recheck'],
@@ -502,7 +505,7 @@ export const SUBAGENT_DELEGATION_SYSTEM_PROMPT = [
   'Give each task a short descriptive name, a self-contained systemPrompt, and a concrete task instruction.',
   'Use includeHistoryLastN sparingly; only include the minimum recent context the subagent needs.',
   'Use allowKnowledgeSearch when the answer likely depends on uploaded knowledge documents.',
-  'Use includeProjectFiles and htmlPacks only for the currently active HTML project. bootstrap is forbidden for subagents.',
+  'Use includeProjectFiles and htmlPacks only for the currently active HTML project. In the main turn, htmlPacks are routing recommendations; for subagents they are hard capability authorization. bootstrap is forbidden for subagents.',
   'At most one task per batch may request write-capable HTML packs. Keep the remaining tasks read-only.',
   `Each subagent defaults to ${DEFAULT_SUBAGENT_MAX_TOOL_ROUNDS} tool rounds and is clamped to ${MIN_SUBAGENT_MAX_TOOL_ROUNDS}-${MAX_SUBAGENT_MAX_TOOL_ROUNDS}.`,
   'Subagents never receive delegateToSubagents recursively; summarize their outputs in your final response.',

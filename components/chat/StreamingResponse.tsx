@@ -3,11 +3,16 @@ import { StreamingResponseProps } from './types';
 import { GeminiIcon } from '../ui/Icons';
 import ReactMarkdown from 'react-markdown';
 import SubagentActivityCard from './SubagentActivityCard';
+import ToolCallCard from './ToolCallCard';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
 
-const StreamingResponse: React.FC<StreamingResponseProps> = ({ content, subagentBatches }) => {
+const StreamingResponse: React.FC<StreamingResponseProps> = ({
+  content,
+  subagentBatches,
+  toolCallLog,
+}) => {
   const renderMessageContent = (content: string) => {
     return (
       <ReactMarkdown
@@ -116,6 +121,7 @@ const StreamingResponse: React.FC<StreamingResponseProps> = ({ content, subagent
           </div>
         </div>
         <div className='flex flex-col group gap-3'>
+          {toolCallLog && toolCallLog.length > 0 && <ToolCallCard records={toolCallLog} />}
           {subagentBatches &&
             Object.entries(subagentBatches).map(([batchId, runs]) => (
               <SubagentActivityCard key={batchId} runs={runs} />

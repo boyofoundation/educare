@@ -91,8 +91,61 @@ describe('streamChat', () => {
     });
   });
 
-  it('rejects non-visible HTML project tools with a recoverable routing error', async () => {
+  it('allows valid HTML project tools under soft-gated main-turn exposure', async () => {
     const observedChatParams: Array<Record<string, unknown>> = [];
+    mockExecuteHtmlProjectToolCall.mockImplementation(async call => {
+      if (call.name === 'getProjectSummary') {
+        return {
+          workspace: {
+            activeProjectId: 'project-123',
+            activityMessage: 'loaded summary',
+            preview: null,
+          },
+          result: {
+            projectSummary: {
+              projectId: 'project-123',
+              name: 'Canvas MVP',
+              entryFile: '/index.html',
+              previewVersion: 7,
+              previewReady: false,
+              files: [],
+              fileCount: 0,
+              todoSummary: {
+                projectId: 'project-123',
+                total: 2,
+                pending: 1,
+                inProgress: 1,
+                completed: 0,
+                allComplete: false,
+              },
+              warnings: [],
+              previewDiagnostics: {
+                category: 'missing_reference',
+                outcome: 'repairable_error',
+                repairable: true,
+                summary: 'Missing preview dependencies: /scripts/app.js.',
+              },
+              suggestedNextActionCategory: 'repair_preview',
+            },
+          },
+          summary: 'loaded summary',
+        };
+      }
+
+      return {
+        workspace: {
+          activeProjectId: 'project-123',
+          activityMessage: 'updated project',
+          preview: null,
+        },
+        result: {
+          projectId: 'project-123',
+          updated: ['/index.html'],
+        },
+        summary: 'updated project',
+      };
+    });
+
     const provider = {
       name: 'gemini',
       displayName: 'Gemini',
@@ -104,7 +157,7 @@ describe('streamChat', () => {
           name: string;
           args: Record<string, unknown>;
         }) => Promise<unknown>;
-        const badToolResult = await executeTool({
+        const writeFilesResult = await executeTool({
           name: 'writeFiles',
           args: {
             projectId: 'project-123',
@@ -112,33 +165,11 @@ describe('streamChat', () => {
           },
         });
 
-        expect(badToolResult).toMatchObject({
-          ok: false,
-          recoverable: true,
-          code: 'tool-not-visible-for-turn',
-          message: 'Tool writeFiles is not visible for the current HTML project route.',
-          details: {
-            requestedTool: 'writeFiles',
-            selectedPackSet: ['inspect', 'todo_finalize', 'preview_recheck'],
-            intent: 'finalize_or_complete',
-          },
+        expect(writeFilesResult).toMatchObject({
+          projectId: 'project-123',
+          updated: ['/index.html'],
+          summary: 'updated project',
         });
-        expect(
-          (badToolResult as { details: { visibleToolNames: string[] } }).details.visibleToolNames,
-        ).toEqual([
-          'getProjectSummary',
-          'listFiles',
-          'searchFiles',
-          'readFile',
-          'listProjectTodos',
-          'checkProjectTodos',
-          'renderPreview',
-          // harness-resident tools auto-attach to any non-empty HTML pack set (T4/G2)
-          'reportTurnOutcome',
-          'getPreviewRuntimeErrors',
-          'listSnapshots',
-          'revertToSnapshot',
-        ]);
 
         yield {
           text: '',
@@ -149,13 +180,7 @@ describe('streamChat', () => {
             provider: 'gemini',
             model: 'gemini-2.5-flash',
             toolRoundCount: 1,
-            repeatedRecoverableErrors: [
-              {
-                toolName: 'writeFiles',
-                code: 'tool-not-visible-for-turn',
-                count: 1,
-              },
-            ],
+            repeatedRecoverableErrors: [],
           },
         };
       }),
@@ -177,7 +202,7 @@ describe('streamChat', () => {
       onProjectToolActivity: vi.fn(),
     });
 
-    expect(mockExecuteHtmlProjectToolCall).toHaveBeenCalledTimes(1);
+    expect(mockExecuteHtmlProjectToolCall).toHaveBeenCalledTimes(2);
     expect(mockExecuteHtmlProjectToolCall).toHaveBeenNthCalledWith(
       1,
       {
@@ -190,31 +215,41 @@ describe('streamChat', () => {
         activeProjectId: 'project-123',
       },
     );
+    expect(mockExecuteHtmlProjectToolCall).toHaveBeenNthCalledWith(
+      2,
+      {
+        name: 'writeFiles',
+        args: {
+          projectId: 'project-123',
+          files: [{ path: '/index.html', content: '<main>Hi</main>' }],
+        },
+      },
+      {
+        assistantId: 'assistant-1',
+        sessionId: undefined,
+        activeProjectId: 'project-123',
+      },
+    );
     expect(provider.streamChat).toHaveBeenCalledTimes(1);
     expect(observedChatParams[0]?.toolChoice).toEqual({
       mode: 'requireSpecific',
       name: 'getProjectSummary',
     });
-    // 7 pack tools + 4 harness-resident tools (reportTurnOutcome,
-    // getPreviewRuntimeErrors, listSnapshots, revertToSnapshot) auto-attached (T4/G2)
-    expect(observedChatParams[0]?.tools).toHaveLength(11);
+    expect(observedChatParams[0]?.tools).toHaveLength(25);
     expect(observedChatParams[0]?.tools).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ name: 'createProject' }),
+        expect.objectContaining({ name: 'listProjects' }),
+        expect.objectContaining({ name: 'openProject' }),
         expect.objectContaining({ name: 'getProjectSummary' }),
-        expect.objectContaining({ name: 'listFiles' }),
-        expect.objectContaining({ name: 'searchFiles' }),
-        expect.objectContaining({ name: 'readFile' }),
-        expect.objectContaining({ name: 'listProjectTodos' }),
+        expect.objectContaining({ name: 'writeFiles' }),
         expect.objectContaining({ name: 'checkProjectTodos' }),
-        expect.objectContaining({ name: 'renderPreview' }),
         expect.objectContaining({ name: 'reportTurnOutcome' }),
         expect.objectContaining({ name: 'getPreviewRuntimeErrors' }),
         expect.objectContaining({ name: 'listSnapshots' }),
         expect.objectContaining({ name: 'revertToSnapshot' }),
+        expect.objectContaining({ name: 'lintProject' }),
       ]),
-    );
-    expect(observedChatParams[0]?.tools).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: 'writeFiles' })]),
     );
   });
 
