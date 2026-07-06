@@ -558,10 +558,9 @@ const validateSingleFile = (
 ): HtmlProjectStaticDiagnostic[] => {
   const path = file.path;
   const ext = getExtension(path);
-  const encoding = file.encoding ?? 'utf8';
 
   // 跳過 base64 / 二進位
-  if (encoding === 'base64') {
+  if (file.encoding === 'base64') {
     return [];
   }
 

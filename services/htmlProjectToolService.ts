@@ -336,6 +336,14 @@ interface StaticValidationToolPayload {
 const buildStaticValidationSuffix = (errorCount: number): string =>
   errorCount > 0 ? `靜態驗證發現 ${errorCount} 項錯誤，見 staticDiagnostics。` : '';
 
+/** 把 runStaticValidation 結果攤到 result 物件;ok 時兩個欄位都不會出現 */
+const spreadStaticValidationFields = (
+  payload: StaticValidationToolPayload,
+): Record<string, unknown> => ({
+  ...(payload.staticDiagnostics ? { staticDiagnostics: payload.staticDiagnostics } : {}),
+  ...(payload.staticValidation ? { staticValidation: payload.staticValidation } : {}),
+});
+
 const runStaticValidation = async (
   files: StaticValidationFileInput[],
 ): Promise<StaticValidationToolPayload> => {
@@ -1319,12 +1327,7 @@ const handleWriteFiles = async (
       previewVersion: result.previewVersion,
       ...(warnings.length > 0 ? { warnings } : {}),
       ...(moduleSyntaxSkipped ? { moduleSyntaxSkipped: true } : {}),
-      ...(staticValidation.staticDiagnostics
-        ? { staticDiagnostics: staticValidation.staticDiagnostics }
-        : {}),
-      ...(staticValidation.staticValidation
-        ? { staticValidation: staticValidation.staticValidation }
-        : {}),
+      ...spreadStaticValidationFields(staticValidation),
     },
     workspace: createWorkspaceUpdate(project.id, finalSummary, preview),
   };
@@ -1476,12 +1479,7 @@ const handleReplaceInFile = async (
       matchCount,
       ...(warningResult.warnings ? { warnings: warningResult.warnings } : {}),
       ...(warningResult.moduleSyntaxSkipped ? { moduleSyntaxSkipped: true } : {}),
-      ...(staticValidation.staticDiagnostics
-        ? { staticDiagnostics: staticValidation.staticDiagnostics }
-        : {}),
-      ...(staticValidation.staticValidation
-        ? { staticValidation: staticValidation.staticValidation }
-        : {}),
+      ...spreadStaticValidationFields(staticValidation),
     },
     workspace: createWorkspaceUpdate(project.id, finalSummary, preview),
   };
@@ -1687,12 +1685,7 @@ const handleModifyLinesInFile = async (
       totalLinesAfter,
       ...(warningResult.warnings ? { warnings: warningResult.warnings } : {}),
       ...(warningResult.moduleSyntaxSkipped ? { moduleSyntaxSkipped: true } : {}),
-      ...(staticValidation.staticDiagnostics
-        ? { staticDiagnostics: staticValidation.staticDiagnostics }
-        : {}),
-      ...(staticValidation.staticValidation
-        ? { staticValidation: staticValidation.staticValidation }
-        : {}),
+      ...spreadStaticValidationFields(staticValidation),
     },
     workspace: createWorkspaceUpdate(project.id, finalSummary, preview),
   };

@@ -3,7 +3,6 @@ import {
   formatStaticDiagnosticsForLlm,
   preloadStaticValidationParsers,
   validateProjectFiles,
-  type StaticValidationFileInput,
 } from './staticValidationService';
 
 // Suppress noisy console.warn from validator-self-throw tests
@@ -236,11 +235,6 @@ describe('staticValidationService: validateProjectFiles', () => {
 describe('staticValidationService: formatStaticDiagnosticsForLlm', () => {
   // 驗收 5:12 → ≤8;dedup ×N;truncation suffix
   it('caps at 8 entries with dedup ×N and truncation suffix', () => {
-    const diagnostics: StaticValidationFileInput[] = [
-      { path: '/a.js', content: 'x' }, // dummy, formatStaticDiagnosticsForLlm 不會讀 content
-    ] as StaticValidationFileInput[];
-    void diagnostics;
-
     // 建 12 個 diagnostic,其中 3 個重複
     const items = Array.from({ length: 12 }, (_, i) => ({
       source: 'syntax' as const,
