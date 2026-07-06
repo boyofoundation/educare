@@ -295,6 +295,46 @@ export interface HtmlProjectRuntimeErrorEntry {
 }
 
 /**
+ * 靜態語法驗證診斷 (Phase 1 MVP)。
+ * 來源於寫入工具 handler 內 acorn/css-tree/parse5 的解析結果;
+ * 行號與列號一律 1-based (acorn loc.column 0-based 需 +1)。
+ * 與 HtmlProjectRuntimeErrorEntry (執行期) 並存,格式化器統一對 LLM 輸出。
+ */
+export type HtmlProjectStaticDiagnosticLang = 'html' | 'css' | 'js' | 'json';
+
+export interface HtmlProjectStaticDiagnostic {
+  /** 'syntax' = parser 解析失敗; 'lint' = csstree-validator 屬性值錯誤 */
+  source: 'syntax' | 'lint';
+  lang: HtmlProjectStaticDiagnosticLang;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  /** 專案內檔案路徑 (inline script/style 時為 HTML 檔路徑) */
+  path: string;
+  /** 1-based;inline 片段已加上 sourceCodeLocation.startLine - 1 平移 */
+  line: number;
+  /** 1-based;inline 片段第 1 行診斷額外加上 startCol - 1 平移 */
+  column: number;
+  /** parse5 錯誤碼 / csstree-validator 屬性名 / acorn 固定 'SyntaxError' */
+  rule?: string;
+  /** 出錯行前後各一行,錯誤行前綴 '>' */
+  snippet?: string;
+}
+
+export interface HtmlProjectStaticValidationStats {
+  /** 純解析耗時 (不含 parser 模組首次載入) */
+  durationMs: number;
+  /** MVP 固定 'lightweight-v1' (acorn + css-tree + parse5 + csstree-validator) */
+  engine: string;
+}
+
+export interface HtmlProjectStaticValidationResult {
+  /** severity === 'error' 數量為 0 時為 true */
+  ok: boolean;
+  diagnostics: HtmlProjectStaticDiagnostic[];
+  stats: HtmlProjectStaticValidationStats;
+}
+
+/**
  * Runtime 診斷查詢結果 (G1/G8)。getPreviewRuntimeErrors 工具回傳值。
  * waitMs 預設 1500、上限 5000;在 ready ack 版本相符前查詢回傳 not_executed。
  */
