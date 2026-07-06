@@ -219,6 +219,120 @@ describe('executeHtmlProjectToolCall', () => {
     });
   });
 
+  // Phase 1 靜態驗證整合測試 (writeFiles handler)
+  it('writeFiles with JS syntax error attaches staticDiagnostics (non-blocking, file still written)', async () => {
+    mockWriteFiles.mockResolvedValue({
+      updated: ['/foo.js'],
+      previewVersion: 7,
+    });
+
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+
+    const result = await executeHtmlProjectToolCall(
+      {
+        name: 'writeFiles',
+        args: {
+          projectId: 'project-1',
+          files: [
+            {
+              path: '/foo.js',
+              content: 'items.forEach(item => {}));',
+            },
+          ],
+        },
+      },
+      {
+        assistantId: 'assistant-1',
+        activeProjectId: 'project-1',
+      },
+    );
+
+    expect(mockWriteFiles).toHaveBeenCalled();
+    expect(result.toolName).toBe('writeFiles');
+    const r = result.result as Record<string, unknown>;
+    expect(typeof r.staticDiagnostics).toBe('string');
+    expect((r.staticDiagnostics as string).toLowerCase()).toContain('js:error');
+    const sv = r.staticValidation as { ok: boolean; errorCount: number };
+    expect(sv.ok).toBe(false);
+    expect(sv.errorCount).toBeGreaterThanOrEqual(1);
+    // summary 中文尾句
+    expect(result.summary).toContain('靜態驗證發現');
+  });
+
+  it('writeFiles with valid JS omits staticDiagnostics to save tokens', async () => {
+    mockWriteFiles.mockResolvedValue({
+      updated: ['/foo.js'],
+      previewVersion: 8,
+    });
+
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+
+    const result = await executeHtmlProjectToolCall(
+      {
+        name: 'writeFiles',
+        args: {
+          projectId: 'project-1',
+          files: [
+            {
+              path: '/foo.js',
+              content: 'export const x = 1;\n',
+            },
+          ],
+        },
+      },
+      {
+        assistantId: 'assistant-1',
+        activeProjectId: 'project-1',
+      },
+    );
+
+    const r = result.result as Record<string, unknown>;
+    expect(r.staticDiagnostics).toBeUndefined();
+    expect(r.staticValidation).toBeUndefined();
+    expect(result.summary).not.toContain('靜態驗證發現');
+  });
+
+  it('writeFiles with .tsx file emits sandbox-unsupported warning (not SyntaxError)', async () => {
+    mockWriteFiles.mockResolvedValue({
+      updated: ['/app.tsx'],
+      previewVersion: 9,
+    });
+
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+
+    const result = await executeHtmlProjectToolCall(
+      {
+        name: 'writeFiles',
+        args: {
+          projectId: 'project-1',
+          files: [
+            {
+              path: '/app.tsx',
+              content: 'const x: number = 1;',
+            },
+          ],
+        },
+      },
+      {
+        assistantId: 'assistant-1',
+        activeProjectId: 'project-1',
+      },
+    );
+
+    const r = result.result as Record<string, unknown>;
+    expect(typeof r.staticDiagnostics).toBe('string');
+    const diag = r.staticDiagnostics as string;
+    expect(diag).toContain('js:warning');
+    expect(diag.toLowerCase()).toContain('typescript');
+    // warning 不算 error → staticValidation.ok 仍為 true,但 warning 仍會回報
+    const sv = r.staticValidation as { ok: boolean; errorCount: number; warningCount: number };
+    expect(sv.ok).toBe(true);
+    expect(sv.errorCount).toBe(0);
+    expect(sv.warningCount).toBeGreaterThanOrEqual(1);
+    // summary 中文尾句不應出現(因為沒有 error)
+    expect(result.summary).not.toContain('靜態驗證發現');
+  });
+
   it('returns a structured recoverable result when writeFiles receives an empty files array', async () => {
     const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
 

@@ -342,7 +342,8 @@ const runStaticValidation = async (
   // 預熱 parser bundle (no-op 若已載入),讓 handler 內的 stats 不被首次 import 影響
   await preloadStaticValidationParsers();
   const result = await validateProjectFiles(files);
-  if (result.ok) {
+  // 完全沒有診斷 (沒有 error 也沒有 warning) 時省略回傳欄位 → 零 token 成本
+  if (result.diagnostics.length === 0) {
     return { summarySuffix: '' };
   }
   const errorCount = result.diagnostics.filter(d => d.severity === 'error').length;
@@ -350,7 +351,7 @@ const runStaticValidation = async (
   return {
     staticDiagnostics: formatStaticDiagnosticsForLlm(result.diagnostics),
     staticValidation: {
-      ok: false,
+      ok: result.ok,
       errorCount,
       warningCount,
       durationMs: result.stats.durationMs,

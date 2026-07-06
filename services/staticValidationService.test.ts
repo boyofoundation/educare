@@ -48,7 +48,7 @@ describe('staticValidationService: validateProjectFiles', () => {
       { path: '/styles.css', content: 'body { display: flexx; }' },
     ]);
     expect(result.ok).toBe(false);
-    const d = result.diagnostics.find((x) => x.lang === 'css');
+    const d = result.diagnostics.find(x => x.lang === 'css');
     expect(d).toBeDefined();
     expect(d!.source).toBe('lint');
     expect(d!.rule).toBe('display');
@@ -61,7 +61,7 @@ describe('staticValidationService: validateProjectFiles', () => {
     ]);
     // css-tree 與 csstree-validator 至少一個會抓到;寬鬆斷言「有 error」
     expect(result.ok).toBe(false);
-    expect(result.diagnostics.some((d) => d.lang === 'css')).toBe(true);
+    expect(result.diagnostics.some(d => d.lang === 'css')).toBe(true);
   });
 
   // 驗收 3:HTML allowlist — missing-doctype 降級或丟棄
@@ -69,7 +69,7 @@ describe('staticValidationService: validateProjectFiles', () => {
     const result = await validateProjectFiles([
       { path: '/index.html', content: '<div><span>hi</span></div>' },
     ]);
-    const md = result.diagnostics.find((d) => d.rule === 'missing-doctype');
+    const md = result.diagnostics.find(d => d.rule === 'missing-doctype');
     expect(md).toBeDefined();
     expect(md!.severity).toBe('info');
     // ok 仍為 true (info 不算 error)
@@ -83,7 +83,9 @@ describe('staticValidationService: validateProjectFiles', () => {
       { path: '/index.html', content: '<div class="a" class="b"></div>' },
     ]);
     // duplicate-attribute 在 allowlist 內,應為 error
-    expect(result.diagnostics.some((d) => d.rule === 'duplicate-attribute' && d.severity === 'error')).toBe(true);
+    expect(
+      result.diagnostics.some(d => d.rule === 'duplicate-attribute' && d.severity === 'error'),
+    ).toBe(true);
   });
 
   // 驗收 4:inline <script> 行號平移
@@ -107,7 +109,7 @@ describe('staticValidationService: validateProjectFiles', () => {
     ].join('\n');
     const result = await validateProjectFiles([{ path: '/index.html', content: html }]);
     expect(result.ok).toBe(false);
-    const d = result.diagnostics.find((x) => x.lang === 'js');
+    const d = result.diagnostics.find(x => x.lang === 'js');
     expect(d).toBeDefined();
     // 開 script 在第 10 行,acorn 報 (2:25) → 10 + 2 - 1 = 11
     expect(d!.line).toBe(11);
@@ -123,7 +125,7 @@ describe('staticValidationService: validateProjectFiles', () => {
       '</body></html>',
     ].join('\n');
     const result = await validateProjectFiles([{ path: '/index.html', content: html }]);
-    expect(result.diagnostics.some((d) => d.lang === 'js' && d.severity === 'error')).toBe(true);
+    expect(result.diagnostics.some(d => d.lang === 'js' && d.severity === 'error')).toBe(true);
   });
 
   it('inline <script type="application/json"> is skipped (not browser-executable)', async () => {
@@ -135,7 +137,7 @@ describe('staticValidationService: validateProjectFiles', () => {
     ].join('\n');
     const result = await validateProjectFiles([{ path: '/index.html', content: html }]);
     // 沒有 JS 診斷
-    expect(result.diagnostics.filter((d) => d.lang === 'js')).toHaveLength(0);
+    expect(result.diagnostics.filter(d => d.lang === 'js')).toHaveLength(0);
   });
 
   it('inline <script src="..."> is skipped (external)', async () => {
@@ -146,7 +148,7 @@ describe('staticValidationService: validateProjectFiles', () => {
       '</body></html>',
     ].join('\n');
     const result = await validateProjectFiles([{ path: '/index.html', content: html }]);
-    expect(result.diagnostics.filter((d) => d.lang === 'js')).toHaveLength(0);
+    expect(result.diagnostics.filter(d => d.lang === 'js')).toHaveLength(0);
   });
 
   it('inline <style> CSS error is also translated to HTML line coordinates', async () => {
@@ -159,7 +161,7 @@ describe('staticValidationService: validateProjectFiles', () => {
       '</head></html>', // 6
     ].join('\n');
     const result = await validateProjectFiles([{ path: '/index.html', content: html }]);
-    const d = result.diagnostics.find((x) => x.lang === 'css');
+    const d = result.diagnostics.find(x => x.lang === 'css');
     expect(d).toBeDefined();
     // parse5 對 <style> 文字節點的 startLine 通常是 <style> 標籤所在行 (3)
     // 加上 acorn/css-tree 報的 acorn 1-based line,反映實際位置
@@ -173,7 +175,7 @@ describe('staticValidationService: validateProjectFiles', () => {
       { path: '/app.tsx', content: 'const x: number = 1;' },
     ]);
     expect(result.ok).toBe(true); // warning 不算 error
-    const d = result.diagnostics.find((x) => x.rule === 'UnsupportedJsVariant');
+    const d = result.diagnostics.find(x => x.rule === 'UnsupportedJsVariant');
     expect(d).toBeDefined();
     expect(d!.severity).toBe('warning');
     expect(d!.lang).toBe('js');
@@ -183,7 +185,7 @@ describe('staticValidationService: validateProjectFiles', () => {
     const result = await validateProjectFiles([
       { path: '/styles.scss', content: '$primary: #333; body { color: $primary; }' },
     ]);
-    const d = result.diagnostics.find((x) => x.rule === 'UnsupportedCssVariant');
+    const d = result.diagnostics.find(x => x.rule === 'UnsupportedCssVariant');
     expect(d).toBeDefined();
     expect(d!.severity).toBe('warning');
   });
@@ -206,11 +208,9 @@ describe('staticValidationService: validateProjectFiles', () => {
 
   // JSON 驗證
   it('returns [json:error] for malformed JSON', async () => {
-    const result = await validateProjectFiles([
-      { path: '/data.json', content: '{"a": 1, "b":}' },
-    ]);
+    const result = await validateProjectFiles([{ path: '/data.json', content: '{"a": 1, "b":}' }]);
     expect(result.ok).toBe(false);
-    const d = result.diagnostics.find((x) => x.lang === 'json');
+    const d = result.diagnostics.find(x => x.lang === 'json');
     expect(d).toBeDefined();
     expect(d!.severity).toBe('error');
   });
@@ -255,7 +255,7 @@ describe('staticValidationService: formatStaticDiagnosticsForLlm', () => {
     const formatted = formatStaticDiagnosticsForLlm(items);
     const lines = formatted.split('\n');
     // 開頭 8 條資料列(可能有 snippet 行,但每條 header 一行)
-    const headerLines = lines.filter((l) => l.startsWith('['));
+    const headerLines = lines.filter(l => l.startsWith('['));
     expect(headerLines.length).toBeLessThanOrEqual(8);
     // ×3 計數
     expect(formatted).toContain('×3');
@@ -314,7 +314,7 @@ describe('staticValidationService: stats', () => {
     // 構造 ≈ 100KB 的有效 JS (註解填充,語法正確)
     const filler = '// ' + 'a'.repeat(120) + '\n';
     const lines = Math.ceil(100_000 / filler.length) + 10;
-    const big = (filler.repeat(lines)).trim() + '\nexport const x = 1;';
+    const big = filler.repeat(lines).trim() + '\nexport const x = 1;';
     expect(big.length).toBeGreaterThan(100_000);
     const result = await validateProjectFiles([{ path: '/big.js', content: big }]);
     expect(result.stats.engine).toBe('lightweight-v1');
