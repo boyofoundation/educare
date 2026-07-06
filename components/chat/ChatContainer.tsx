@@ -857,7 +857,6 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         onChange={setInput}
         onSend={handleSend}
         isLoading={isLoading}
-        statusText={statusText}
         disabled={false}
         isWorkspaceOpen={_isWorkspaceOpen}
         isRunning={isRunning}

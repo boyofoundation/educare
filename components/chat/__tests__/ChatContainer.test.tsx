@@ -504,7 +504,7 @@ describe('ChatContainer', () => {
     await sendMessage('Delegate this');
 
     await waitFor(() => {
-      expect(screen.getByText('Subagent activity')).toBeInTheDocument();
+      expect(screen.getByText('子代理活動')).toBeInTheDocument();
       expect(screen.getByText('Researcher')).toBeInTheDocument();
     });
 
@@ -572,7 +572,7 @@ describe('ChatContainer', () => {
     await sendMessage('Use tools');
 
     await waitFor(() => {
-      expect(screen.getByText('Tool activity')).toBeInTheDocument();
+      expect(screen.getByText('工具活動')).toBeInTheDocument();
       expect(screen.getByText('getProjectSummary')).toBeInTheDocument();
       expect(screen.getByText('lintProject')).toBeInTheDocument();
     });
