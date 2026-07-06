@@ -106,6 +106,25 @@ vi.mock('../../../services/ragSettingsService', () => ({
   }),
 }));
 
+vi.mock('react-virtuoso', () => ({
+  Virtuoso: ({
+    data = [],
+    itemContent,
+  }: {
+    data?: unknown[];
+    itemContent: (index: number, item: unknown) => unknown;
+  }) => {
+    const React = require('react');
+    return React.createElement(
+      'div',
+      { 'data-testid': 'virtuoso-scroller' },
+      data.map((item, index) =>
+        React.createElement('div', { key: index }, itemContent(index, item)),
+      ),
+    );
+  },
+}));
+
 vi.mock('../../settings', () => ({
   RagSettingsModal: () => null,
 }));
@@ -212,6 +231,15 @@ describe('ChatContainer interrupted-run integration', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    Object.defineProperty(globalThis, 'ResizeObserver', {
+      configurable: true,
+      writable: true,
+      value: class ResizeObserver {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    });
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
       writable: true,

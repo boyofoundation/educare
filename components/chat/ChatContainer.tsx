@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { ChatContainerProps } from './types';
 import { AppContext } from '../core/useAppContext';
 import MessageBubble from './MessageBubble';
@@ -6,6 +6,7 @@ import ChatInput from './ChatInput';
 import WelcomeMessage from './WelcomeMessage';
 import ThinkingIndicator from './ThinkingIndicator';
 import StreamingResponse from './StreamingResponse';
+import { Virtuoso } from 'react-virtuoso';
 import { AgentRunController } from '../../services/agentRunController';
 import {
   claimCheckpoint,
@@ -116,12 +117,37 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const subagentBatchesRef = useRef<Record<string, SubagentRunRecord[]>>({});
   const toolCallRecordsRef = useRef<ToolCallRecord[]>([]);
   const latestErrorMessageRef = useRef<string | null>(null);
+  const streamingBufferRef = useRef('');
+  const streamingFlushFrameRef = useRef<number | null>(null);
   const { containerRef, isAtBottom, handleScroll, scrollToBottom, updatePinnedState } =
     useStickToBottom(STICKY_SCROLL_THRESHOLD_PX);
 
   useEffect(() => {
     isThinkingRef.current = isThinking;
   }, [isThinking]);
+
+  const flushStreamingBuffer = useCallback(() => {
+    if (streamingFlushFrameRef.current !== null) {
+      window.cancelAnimationFrame(streamingFlushFrameRef.current);
+      streamingFlushFrameRef.current = null;
+    }
+
+    if (streamingBufferRef.current === streamingResponse) {
+      return;
+    }
+
+    setStreamingResponse(streamingBufferRef.current);
+  }, [streamingResponse]);
+
+  const scheduleStreamingFlush = useCallback(() => {
+    if (streamingFlushFrameRef.current !== null) {
+      return;
+    }
+
+    streamingFlushFrameRef.current = window.requestAnimationFrame(() => {
+      flushStreamingBuffer();
+    });
+  }, [flushStreamingBuffer]);
 
   useEffect(() => {
     setCurrentSession(session);
@@ -139,6 +165,14 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   useEffect(() => {
     toolCallRecordsRef.current = toolCallRecords;
   }, [toolCallRecords]);
+
+  useEffect(() => {
+    return () => {
+      if (streamingFlushFrameRef.current !== null) {
+        window.cancelAnimationFrame(streamingFlushFrameRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     updatePinnedState();
@@ -382,6 +416,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   }) => {
     setIsLoading(true);
     setIsThinking(true);
+    streamingBufferRef.current = '';
     setStreamingResponse('');
     setPendingEmptyResponseNotice(null);
     latestErrorMessageRef.current = null;
@@ -427,7 +462,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             if (isThinkingRef.current) {
               setIsThinking(false);
             }
-            setStreamingResponse(prev => prev + chunk);
+            streamingBufferRef.current += chunk;
+            scheduleStreamingFlush();
           },
           onProjectToolActivity: handleProjectToolActivity,
           onSubagentActivity: handleSubagentActivity,
@@ -447,6 +483,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       const commitRunResult = async () => {
         const result = await controller.run();
         controllerRef.current = null;
+        flushStreamingBuffer();
 
         setRunState(result.state);
         actions?.setAgentRunState?.(result.state);
@@ -569,6 +606,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       await commitRunResult();
     } catch (error) {
       controllerRef.current = null;
+      flushStreamingBuffer();
       const errorMessageText = (error as Error).message;
       console.error('Error during chat stream:', error);
       latestErrorMessageRef.current = errorMessageText;
@@ -805,15 +843,22 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               />
             )}
 
-          <div className='space-y-6' role='log' aria-label='訊息列表'>
-            {currentSession.messages.map((msg, index) => (
-              <MessageBubble
-                key={index}
-                message={msg}
-                index={index}
-                assistantName={assistantName}
-              />
-            ))}
+          <div role='log' aria-label='訊息列表'>
+            <Virtuoso
+              key={`${currentSession.id}:${currentSession.messages.length}`}
+              data={currentSession.messages}
+              customScrollParent={containerRef.current ?? undefined}
+              followOutput={isAtBottom ? 'auto' : false}
+              atBottomStateChange={() => {
+                updatePinnedState();
+              }}
+              initialItemCount={Math.max(currentSession.messages.length, 1)}
+              itemContent={(index: number, msg: ChatMessage) => (
+                <div className='mb-6'>
+                  <MessageBubble message={msg} index={index} assistantName={assistantName} />
+                </div>
+              )}
+            />
 
             {isThinking && !streamingResponse && (
               <ThinkingIndicator assistantName={assistantName} statusText={statusText} />
