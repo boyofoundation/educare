@@ -410,14 +410,31 @@ describe('ChatContainer', () => {
     });
   });
 
-  it('threads agentHarnessEnabled=false when the prop is false', async () => {
-    render(<ChatContainer {...defaultProps} agentHarnessEnabled={false} />);
+  it('derives agentHarnessEnabled=false and htmlProjectEnabled=false when the session has no active project', async () => {
+    render(<ChatContainer {...defaultProps} session={createMockChatSession()} />);
 
     await sendMessage('Single turn only');
 
     await waitFor(() => {
       expect(mockAgentRunControllerCtor).toHaveBeenCalledWith(
-        expect.objectContaining({ agentHarnessEnabled: false }),
+        expect.objectContaining({ agentHarnessEnabled: false, htmlProjectEnabled: false }),
+      );
+    });
+  });
+
+  it('derives agentHarnessEnabled and htmlProjectEnabled from an active HTML project in the session', async () => {
+    render(
+      <ChatContainer
+        {...defaultProps}
+        session={createMockChatSession({ activeProjectId: 'project-42' })}
+      />,
+    );
+
+    await sendMessage('Continue building');
+
+    await waitFor(() => {
+      expect(mockAgentRunControllerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({ agentHarnessEnabled: true, htmlProjectEnabled: true }),
       );
     });
   });

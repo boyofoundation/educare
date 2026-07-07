@@ -93,9 +93,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   starterPrompts = [],
   isWorkspaceOpen: _isWorkspaceOpen = false,
   headerActions,
-  agentHarnessEnabled = true,
   subagentDelegationEnabled = false,
-  htmlProjectEnabled = false,
 }) => {
   const actions = useContext(AppContext)?.actions ?? null;
   const [input, setInput] = useState('');
@@ -446,18 +444,25 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         enhancedSystemPrompt = `${enhancedSystemPrompt}${compactedContextPrompt}`;
       }
 
+      // 「開啟 HTML 專案」= 此聊天回合綁定了 activeProjectId。
+      // HTML 專案工具與 agentic harness 皆據此自動推導,使用者無需在助理設定手動開關;
+      // resume 時則沿用 checkpoint 快照,維持與原回合一致的行為。
+      const effectiveProjectId =
+        resumeCheckpoint?.projectId ?? displaySession.activeProjectId ?? null;
+      const projectEditingActive = Boolean(effectiveProjectId);
+
       const controller = new AgentRunController({
         assistantId,
         sessionId: displaySession.id,
-        activeProjectId: resumeCheckpoint?.projectId ?? displaySession.activeProjectId ?? null,
+        activeProjectId: effectiveProjectId,
         systemPrompt: enhancedSystemPrompt,
         history: chatHistory,
         message,
         knowledgeChunks: ragChunks,
-        agentHarnessEnabled: resumeCheckpoint?.agentHarnessEnabled ?? agentHarnessEnabled,
+        agentHarnessEnabled: resumeCheckpoint?.agentHarnessEnabled ?? projectEditingActive,
         subagentDelegationEnabled:
           resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
-        htmlProjectEnabled: resumeCheckpoint?.htmlProjectEnabled ?? htmlProjectEnabled,
+        htmlProjectEnabled: resumeCheckpoint?.htmlProjectEnabled ?? projectEditingActive,
         sharedMode: resumeCheckpoint?.sharedMode ?? sharedMode,
         resumeFrom: resumeCheckpoint,
         callbacks: {

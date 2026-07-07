@@ -52,12 +52,8 @@ export interface ChatContainerProps {
   starterPrompts?: string[];
   isWorkspaceOpen?: boolean;
   headerActions?: ReactNode;
-  /** G9: 由父層 (AppShell) 從 assistant.agentHarnessEnabled 傳入;預設 true。 */
-  agentHarnessEnabled?: boolean;
   /** 子代理人委派開關。由父層從 assistant.subagentDelegationEnabled 傳入。 */
   subagentDelegationEnabled?: boolean;
-  /** HTML 專案模式開關。由父層從 assistant.htmlProjectEnabled 傳入;預設 false。 */
-  htmlProjectEnabled?: boolean;
 }
 
 export interface WelcomeMessageProps {

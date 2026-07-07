@@ -26,21 +26,13 @@ export interface Assistant {
   createdAt: number;
   isShared?: boolean;
   /**
-   * Agentic harness 開關 (G9)。預設 true:啟用跨回合自主續跑。
-   * 關閉時退回現行單回合行為。shared mode 預設續跑預算 = 1。
-   */
-  agentHarnessEnabled?: boolean;
-  /**
    * 子代理人委派開關。預設 false: 僅在明確 opt-in 時暴露 delegateToSubagents。
    * shared mode 會在 controller/llmService 上游強制停用。
+   *
+   * 註: agentHarnessEnabled 與 htmlProjectEnabled 不再是助理層級設定,
+   * 改由「聊天回合是否有開啟 HTML 專案 (session.activeProjectId)」於執行期自動推導。
    */
   subagentDelegationEnabled?: boolean;
-  /**
-   * HTML 專案模式開關。預設 false: 未開啟時，聊天回合不會暴露任何 HTML 專案工具，
-   * 意圖分類完全略過，避免一般聊天助理誤觸專案工具而造成錯誤。
-   * 僅在明確 opt-in（或選用 HTML 開發代理範本）時啟用。
-   */
-  htmlProjectEnabled?: boolean;
 }
 
 export type SubagentRunStatus = 'running' | 'complete' | 'failed' | 'aborted';
