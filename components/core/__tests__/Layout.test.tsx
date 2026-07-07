@@ -148,6 +148,14 @@ vi.mock('../../ui/Icons', () => ({
       null,
     );
   },
+  PlusIcon: ({ className }: { className?: string }) => {
+    const React = require('react');
+    return React.createElement(
+      'svg',
+      { 'data-testid': 'plus-icon', className, viewBox: '0 0 24 24' },
+      null,
+    );
+  },
 }));
 
 // Mock services
@@ -202,7 +210,7 @@ vi.mock('../../hooks/useTursoAssistantStatus', () => ({
   useTursoAssistantStatus: vi.fn().mockReturnValue({ canShare: true }),
 }));
 
-import { Layout } from '../Layout';
+import { Layout, formatRelativeTime } from '../Layout';
 import { AppProvider } from '../AppContext';
 import {
   setupCoreTestEnvironment,
@@ -274,6 +282,83 @@ describe('Layout', () => {
     // fallback: return direct parent
     return assistantList.parentElement;
   };
+
+  describe('formatRelativeTime', () => {
+    // 固定基準時間：2026-07-07 12:00:00（本地時區）
+    const NOW = new Date(2026, 6, 7, 12, 0, 0).getTime();
+
+    it('returns 剛剛 for timestamps within one minute', () => {
+      expect(formatRelativeTime(NOW - 30_000, NOW)).toBe('剛剛');
+      expect(formatRelativeTime(NOW, NOW)).toBe('剛剛');
+    });
+
+    it('returns N 分鐘前 for timestamps within one hour', () => {
+      expect(formatRelativeTime(NOW - 5 * 60_000, NOW)).toBe('5 分鐘前');
+      expect(formatRelativeTime(NOW - 59 * 60_000, NOW)).toBe('59 分鐘前');
+    });
+
+    it('returns N 小時前 for timestamps earlier today', () => {
+      expect(formatRelativeTime(NOW - 3 * 3_600_000, NOW)).toBe('3 小時前');
+    });
+
+    it('returns 昨天 for timestamps that fall on the previous day', () => {
+      const yesterdayNoon = new Date(2026, 6, 6, 12, 0, 0).getTime();
+      expect(formatRelativeTime(yesterdayNoon, NOW)).toBe('昨天');
+    });
+
+    it('returns M月D日 for older timestamps', () => {
+      const older = new Date(2026, 5, 20, 9, 30, 0).getTime();
+      expect(formatRelativeTime(older, NOW)).toBe('6月20日');
+    });
+  });
+
+  describe('Brand Area', () => {
+    it('should render the EduCare brand in the sidebar', async () => {
+      Object.defineProperty(window, 'innerWidth', {
+        value: RESPONSIVE_BREAKPOINTS.desktop + 100,
+        writable: true,
+      });
+
+      render(
+        <TestLayoutWrapper>
+          <TestLayoutContent />
+        </TestLayoutWrapper>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('EduCare')).toBeInTheDocument();
+        expect(screen.getByText('AI 教學助理')).toBeInTheDocument();
+      });
+    });
+
+    it('should hide the brand wordmark when collapsed but keep the logo mark', async () => {
+      Object.defineProperty(window, 'innerWidth', {
+        value: RESPONSIVE_BREAKPOINTS.desktop + 100,
+        writable: true,
+      });
+
+      render(
+        <TestLayoutWrapper>
+          <TestLayoutContent />
+        </TestLayoutWrapper>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('EduCare')).toBeInTheDocument();
+      });
+
+      const toggle = screen.getByTestId('sidebar-collapse-toggle');
+      await act(async () => {
+        fireEvent.click(toggle);
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByText('EduCare')).not.toBeInTheDocument();
+        // Logo mark（漸層 SVG）仍然存在
+        expect(document.querySelector('#educare-brand-gradient')).toBeInTheDocument();
+      });
+    });
+  });
 
   describe('Basic Structure', () => {
     it('should render sidebar and main content area', async () => {

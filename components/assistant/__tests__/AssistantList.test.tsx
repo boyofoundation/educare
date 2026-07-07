@@ -347,7 +347,7 @@ describe('AssistantList', () => {
 
       // The navigation element itself has the CSS classes
       const container = screen.getByRole('navigation');
-      expect(container).toHaveClass('mb-6', 'px-2');
+      expect(container).toHaveClass('mb-5', 'px-1');
     });
 
     it('applies hover styles to buttons', () => {

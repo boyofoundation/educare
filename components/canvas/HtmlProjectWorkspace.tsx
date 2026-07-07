@@ -144,24 +144,38 @@ export function HtmlProjectWorkspace({ projectId }: HtmlProjectWorkspaceProps): 
         onClose={() => actions.setProjectWorkspaceOpen(false)}
       />
 
-      <div className='flex items-center gap-2 border-b border-gray-800 px-4 py-3'>
-        {tabs.map(tab => {
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type='button'
-              onClick={() => setActiveTab(tab.id)}
-              className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                isActive
-                  ? 'bg-cyan-500 text-slate-950'
-                  : 'bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white'
-              }`}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
+      <div className='border-b border-gray-800 px-4 py-3'>
+        <div className='inline-flex items-center gap-1 rounded-xl border border-gray-800 bg-gray-900/80 p-1'>
+          {tabs.map(tab => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type='button'
+                onClick={() => setActiveTab(tab.id)}
+                aria-label={tab.label}
+                aria-pressed={isActive}
+                className={`inline-flex items-center rounded-lg px-3.5 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70 ${
+                  isActive
+                    ? 'bg-cyan-500 text-gray-950 shadow-sm'
+                    : 'text-gray-400 hover:bg-gray-800/70 hover:text-gray-100'
+                }`}
+              >
+                {tab.label}
+                {tab.id === 'files' && files.length > 0 && (
+                  <span
+                    aria-hidden='true'
+                    className={`ml-1.5 rounded-full px-1.5 py-px text-[10px] font-semibold tabular-nums ${
+                      isActive ? 'bg-gray-950/15 text-gray-950' : 'bg-gray-800 text-gray-300'
+                    }`}
+                  >
+                    {files.length}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className='min-h-0 flex-1 p-4'>

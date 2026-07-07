@@ -598,7 +598,7 @@ describe('AppShell', () => {
       });
 
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Open project' }));
+        fireEvent.click(screen.getByRole('button', { name: '開啟' }));
       });
 
       await waitFor(() => {
@@ -835,7 +835,7 @@ describe('AppShell', () => {
       });
 
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Open project' }));
+        fireEvent.click(screen.getByRole('button', { name: '開啟' }));
       });
 
       await waitFor(() => {
@@ -897,7 +897,15 @@ describe('AppShell', () => {
       });
 
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+        fireEvent.click(screen.getByRole('button', { name: '專案動作選單' }));
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('menuitem', { name: 'Delete project' }));
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '永久刪除' }));
       });
 
       await waitFor(() => {

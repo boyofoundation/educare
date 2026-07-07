@@ -35,7 +35,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
       >
         <button
           onClick={onCreateNew}
-          className='flex w-12 h-12 items-center justify-center rounded-xl bg-cyan-600/20 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 hover:text-cyan-200 transition-colors'
+          className='flex w-12 h-12 items-center justify-center rounded-xl bg-cyan-600/20 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 hover:text-cyan-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
           title='新增助理'
           aria-label='新增助理'
         >
@@ -53,20 +53,27 @@ export const AssistantList: React.FC<AssistantListProps> = ({
             const isSelected = selectedAssistant?.id === assistant.id;
             const initial = (assistant.name?.trim()?.[0] ?? '?').toUpperCase();
             return (
-              <button
-                key={assistant.id}
-                onClick={() => onSelect(assistant.id)}
-                className={`flex w-11 h-11 items-center justify-center rounded-full text-sm font-semibold transition-all ${
-                  isSelected
-                    ? 'bg-cyan-500 text-white ring-2 ring-cyan-300/50 shadow-lg shadow-cyan-500/20'
-                    : 'bg-gray-700/60 text-gray-300 hover:bg-gray-600/70 hover:text-white'
-                }`}
-                title={assistant.name}
-                aria-label={`選擇助理 ${assistant.name}`}
-                aria-pressed={isSelected}
-              >
-                {initial}
-              </button>
+              <div key={assistant.id} className='relative flex w-full justify-center'>
+                {isSelected && (
+                  <span
+                    aria-hidden='true'
+                    className='absolute left-1 top-1/2 h-6 w-1 -translate-y-1/2 rounded-full bg-cyan-400'
+                  />
+                )}
+                <button
+                  onClick={() => onSelect(assistant.id)}
+                  className={`flex w-11 h-11 items-center justify-center rounded-full text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
+                    isSelected
+                      ? 'bg-cyan-500 text-white ring-2 ring-cyan-300/50 shadow-lg shadow-cyan-500/20'
+                      : 'bg-gray-700/60 text-gray-300 hover:bg-gray-600/70 hover:text-white'
+                  }`}
+                  title={assistant.name}
+                  aria-label={`選擇助理 ${assistant.name}`}
+                  aria-pressed={isSelected}
+                >
+                  {initial}
+                </button>
+              </div>
             );
           })}
         </div>
@@ -82,7 +89,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
                   }
                 }}
                 disabled={!canShare}
-                className={`flex w-9 h-9 items-center justify-center rounded-lg transition-colors ${
+                className={`flex w-9 h-9 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
                   canShare
                     ? 'text-gray-400 hover:text-blue-400 hover:bg-blue-500/20'
                     : 'text-gray-600 cursor-not-allowed opacity-50'
@@ -94,7 +101,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
               </button>
               <button
                 onClick={() => onEdit(selectedAssistant)}
-                className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-cyan-400 hover:bg-cyan-500/20 transition-colors'
+                className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-cyan-400 hover:bg-cyan-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
                 title='編輯助理'
                 aria-label='編輯助理'
               >
@@ -102,7 +109,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
               </button>
               <button
                 onClick={() => onDelete(selectedAssistant.id)}
-                className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/20 transition-colors'
+                className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60'
                 title='刪除助理'
                 aria-label='刪除助理'
               >
@@ -117,8 +124,8 @@ export const AssistantList: React.FC<AssistantListProps> = ({
 
   // --- Expanded: original layout ---
   return (
-    <div className='mb-6 px-2' role='navigation' aria-label='助理選擇'>
-      <label className='block text-sm font-bold text-gray-300 uppercase tracking-wider mb-2'>
+    <div className='mb-5 px-1' role='navigation' aria-label='助理選擇'>
+      <label className='block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2'>
         選擇助理
       </label>
 
@@ -132,7 +139,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
       <div className='flex justify-end gap-1 mt-2'>
         <button
           onClick={onCreateNew}
-          className='p-1.5 text-gray-400 hover:text-cyan-400 rounded-md hover:bg-cyan-500/20 transition-colors'
+          className='p-1.5 text-gray-400 hover:text-cyan-400 rounded-md hover:bg-cyan-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
           title='新增助理'
           aria-label='新增助理'
         >
@@ -147,7 +154,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
                 }
               }}
               disabled={!canShare}
-              className={`p-1.5 rounded-md transition-colors ${
+              className={`p-1.5 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
                 canShare
                   ? 'text-gray-400 hover:text-blue-400 hover:bg-blue-500/20 cursor-pointer'
                   : 'text-gray-600 cursor-not-allowed opacity-50'
@@ -159,7 +166,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
             </button>
             <button
               onClick={() => onEdit(selectedAssistant)}
-              className='p-1.5 text-gray-400 hover:text-cyan-400 rounded-md hover:bg-cyan-500/20 transition-colors'
+              className='p-1.5 text-gray-400 hover:text-cyan-400 rounded-md hover:bg-cyan-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
               title='編輯助理'
               aria-label='編輯助理'
             >
@@ -167,7 +174,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
             </button>
             <button
               onClick={() => onDelete(selectedAssistant.id)}
-              className='p-1.5 text-gray-400 hover:text-red-400 rounded-md hover:bg-red-500/20 transition-colors'
+              className='p-1.5 text-gray-400 hover:text-red-400 rounded-md hover:bg-red-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60'
               title='刪除助理'
               aria-label='刪除助理'
             >
