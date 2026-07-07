@@ -10,6 +10,8 @@ export interface AssistantTemplate {
   gradient: string;
   borderGlow: string;
   badgeColor: string;
+  /** 選用此範本時是否啟用 HTML 專案模式。未指定視為 false。 */
+  htmlProjectEnabled?: boolean;
 }
 
 const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
@@ -71,6 +73,7 @@ const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
   },
   {
     id: 'tpl_html_dev_agent',
+    htmlProjectEnabled: true,
     name: 'HTML 開發代理',
     description:
       '兼具 PM 專案管理能力的 HTML 開發代理人，運用 Agent Harness 概念協調本平台的專案工具、待辦追蹤與平行子代理，帶你從需求到驗收完成 HTML 工具開發。',

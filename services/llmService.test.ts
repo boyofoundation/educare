@@ -191,6 +191,7 @@ describe('streamChat', () => {
     const { streamChat } = await import('./llmService');
 
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'Please finish this and recheck preview before we wrap up.',
@@ -253,6 +254,57 @@ describe('streamChat', () => {
     );
   });
 
+  it('exposes no HTML project tools and skips intent classification when htmlProjectEnabled is false', async () => {
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        yield {
+          text: 'done',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 3,
+            candidatesTokenCount: 1,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 0,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+
+    await streamChat({
+      // htmlProjectEnabled intentionally omitted → defaults to false (opt-in).
+      systemPrompt: 'You are helpful.',
+      history: [],
+      // Message carries strong HTML-build signals AND an active project id, which
+      // would normally trigger project tools — they must stay hidden here.
+      message: 'Build me a brand new expense tracker webpage and recheck the preview.',
+      assistantId: 'assistant-1',
+      activeProjectId: 'project-123',
+      knowledgeChunks: [],
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+      onProjectToolActivity: vi.fn(),
+    });
+
+    // No summary preflight or any project tool execution occurred.
+    expect(mockExecuteHtmlProjectToolCall).not.toHaveBeenCalled();
+    // Provider received no tools and no forced tool choice for this plain turn.
+    expect(provider.streamChat).toHaveBeenCalledTimes(1);
+    expect(observedChatParams[0]?.tools).toBeUndefined();
+    expect(observedChatParams[0]?.toolChoice).toBeUndefined();
+  });
+
   it('returns a recoverable unsupported-tool error for unknown tool names', async () => {
     const provider = {
       name: 'gemini',
@@ -302,6 +354,7 @@ describe('streamChat', () => {
     const { streamChat } = await import('./llmService');
 
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'Please finish this and recheck preview before we wrap up.',
@@ -345,6 +398,7 @@ describe('streamChat', () => {
     const { streamChat } = await import('./llmService');
 
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'Build me a brand new expense tracker webpage.',
@@ -402,6 +456,7 @@ describe('streamChat', () => {
       const { streamChat } = await import('./llmService');
 
       await streamChat({
+        htmlProjectEnabled: true,
         systemPrompt: 'You are helpful.',
         history: [],
         message: 'continuation',
@@ -461,6 +516,7 @@ describe('streamChat', () => {
     const { streamChat } = await import('./llmService');
 
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'Please finish this and recheck preview before we wrap up.',
@@ -513,6 +569,7 @@ describe('streamChat', () => {
     const { streamChat } = await import('./llmService');
 
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'Can you reopen the earlier canvas prototype?',
@@ -559,6 +616,7 @@ describe('streamChat', () => {
 
     const controller = new AbortController();
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'hello',
@@ -645,6 +703,7 @@ describe('streamChat', () => {
 
     const onComplete = vi.fn();
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'Please finish this and recheck preview before we wrap up.',
@@ -694,6 +753,7 @@ describe('streamChat', () => {
     const { streamChat } = await import('./llmService');
 
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'parallel research please',
@@ -711,6 +771,7 @@ describe('streamChat', () => {
 
     observedChatParams.length = 0;
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'parallel research please',
@@ -801,6 +862,7 @@ describe('streamChat', () => {
     const onComplete = vi.fn();
 
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'parallel research please',
@@ -952,6 +1014,7 @@ describe('streamChat', () => {
     const onComplete = vi.fn();
 
     await streamChat({
+      htmlProjectEnabled: true,
       systemPrompt: 'You are helpful.',
       history: [],
       message: 'parallel research twice please',

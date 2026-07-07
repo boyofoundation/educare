@@ -50,6 +50,12 @@ export interface StreamChatParams {
   knowledgeChunks?: RagChunk[];
   subagentDelegationEnabled?: boolean;
   /**
+   * HTML 專案模式開關。預設 false（opt-in）。為 false 時完全略過意圖分類、
+   * 不進行 summary preflight、不暴露任何 HTML 專案工具、不注入專案系統提示,
+   * 也忽略 packSetOverride——確保未開啟專案的一般聊天回合不會誤觸專案工具。
+   */
+  htmlProjectEnabled?: boolean;
+  /**
    * AbortSignal (G4/G17). Threaded into the provider's chatParams; providers
    * check `signal.aborted` per round and yield finishReason='aborted' within
    * ~1 round. No half-turn writes.
@@ -218,6 +224,7 @@ export const streamChat = async (params: StreamChatParams) => {
     signal,
     packSetOverride,
     subagentDelegationEnabled = false,
+    htmlProjectEnabled = false,
     onChunk,
     onProjectToolActivity,
     onSubagentActivity,
@@ -253,17 +260,29 @@ export const streamChat = async (params: StreamChatParams) => {
 
   const knowledgeToolEnabled = hasKnowledgeChunks(knowledgeChunks);
 
+  // HTML 專案模式未開啟時,完全略過意圖分類與工具暴露(即使有 packSetOverride)。
+  // 這確保一般聊天助理不會因訊息關鍵字而誤觸專案工具,避免執行期錯誤。
+  const htmlProjectModeDisabledDecision: HtmlProjectIntentDecision = {
+    intent: 'uncertain',
+    confidence: 'low',
+    selectedPackSet: [],
+    reason: 'HTML project mode is disabled for this assistant; no project tools exposed.',
+    requiresSummaryPreflight: false,
+  };
+
   // G2: packSetOverride bypasses intent classification for continuation turns.
-  const hasPackSetOverride = !!packSetOverride && packSetOverride.length > 0;
-  const initialIntentDecision: HtmlProjectIntentDecision = hasPackSetOverride
-    ? {
-        intent: 'uncertain',
-        confidence: 'high',
-        selectedPackSet: [...(packSetOverride as HtmlProjectToolPackName[])],
-        reason: 'packSetOverride supplied — bypassing intent classification (continuation turn).',
-        requiresSummaryPreflight: false,
-      }
-    : classifyHtmlProjectIntent(message, resolvedActiveProjectId);
+  const hasPackSetOverride = htmlProjectEnabled && !!packSetOverride && packSetOverride.length > 0;
+  const initialIntentDecision: HtmlProjectIntentDecision = !htmlProjectEnabled
+    ? htmlProjectModeDisabledDecision
+    : hasPackSetOverride
+      ? {
+          intent: 'uncertain',
+          confidence: 'high',
+          selectedPackSet: [...(packSetOverride as HtmlProjectToolPackName[])],
+          reason: 'packSetOverride supplied — bypassing intent classification (continuation turn).',
+          requiresSummaryPreflight: false,
+        }
+      : classifyHtmlProjectIntent(message, resolvedActiveProjectId);
   let selectedPackSet = [...initialIntentDecision.selectedPackSet];
   let htmlProjectToolEnabled = hasPackSetOverride || selectedPackSet.length > 0;
 

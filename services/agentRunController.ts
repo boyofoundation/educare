@@ -123,6 +123,8 @@ export interface AgentRunControllerOptions {
   /** G9 feature flag — when false, run EXACTLY ONE turn (legacy single-turn behavior). */
   agentHarnessEnabled: boolean;
   subagentDelegationEnabled?: boolean;
+  /** HTML 專案模式開關。預設 false: 未開啟時不暴露任何 HTML 專案工具。 */
+  htmlProjectEnabled?: boolean;
   /** shared mode → default budget 1 (auto-continue effectively off). */
   sharedMode?: boolean;
   /** override run budget; default 5 (sharedMode default 1). */
@@ -230,6 +232,8 @@ export class AgentRunController {
     const effectiveDelegation =
       (resumeFrom?.subagentDelegationEnabled ?? options.subagentDelegationEnabled ?? false) &&
       !(options.sharedMode ?? false);
+    const effectiveHtmlProjectEnabled =
+      resumeFrom?.htmlProjectEnabled ?? options.htmlProjectEnabled ?? false;
     const checkpointHistory = resumeFrom?.committedHistoryDelta
       ? [...resumeFrom.committedHistoryDelta]
       : [];
@@ -238,8 +242,8 @@ export class AgentRunController {
     // Link caller signal → internal abort (one-time).
     this.linkCallerSignal();
 
-    // G11: best-effort run-start snapshot.
-    if (!resumeFrom && options.activeProjectId) {
+    // G11: best-effort run-start snapshot (only when project mode is active).
+    if (!resumeFrom && effectiveHtmlProjectEnabled && options.activeProjectId) {
       try {
         const snapshot = await htmlProjectStore.createSnapshot(
           options.activeProjectId,
@@ -297,6 +301,7 @@ export class AgentRunController {
       },
       agentHarnessEnabled: options.agentHarnessEnabled,
       subagentDelegationEnabled: effectiveDelegation,
+      htmlProjectEnabled: effectiveHtmlProjectEnabled,
       sharedMode: options.sharedMode ?? false,
       createdAt: resumeFrom?.createdAt ?? state.startedAt,
       updatedAt: Date.now(),
@@ -428,6 +433,7 @@ export class AgentRunController {
             signal: this.internalAbort.signal,
             packSetOverride: isContinuation ? firstTurnPackSet : undefined,
             subagentDelegationEnabled: effectiveDelegation,
+            htmlProjectEnabled: effectiveHtmlProjectEnabled,
             onChunk: text => {
               this.latestPartialText += text;
               callbacks.onChunk(text, state.turnIndex);

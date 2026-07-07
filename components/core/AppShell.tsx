@@ -151,6 +151,7 @@ function AppContent(): React.JSX.Element {
             starterPrompts={state.currentAssistant.starterPrompts ?? []}
             agentHarnessEnabled={state.currentAssistant.agentHarnessEnabled ?? true}
             subagentDelegationEnabled={state.currentAssistant.subagentDelegationEnabled ?? false}
+            htmlProjectEnabled={state.currentAssistant.htmlProjectEnabled ?? false}
           />
         )}
 
@@ -255,6 +256,7 @@ function AppContent(): React.JSX.Element {
                 subagentDelegationEnabled={
                   state.currentAssistant.subagentDelegationEnabled ?? false
                 }
+                htmlProjectEnabled={state.currentAssistant.htmlProjectEnabled ?? false}
                 hideHeader={state.isMobile || state.isTablet}
                 isWorkspaceOpen={Boolean(state.isProjectWorkspaceOpen && state.activeProjectId)}
                 headerActions={

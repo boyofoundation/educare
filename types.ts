@@ -35,6 +35,12 @@ export interface Assistant {
    * shared mode 會在 controller/llmService 上游強制停用。
    */
   subagentDelegationEnabled?: boolean;
+  /**
+   * HTML 專案模式開關。預設 false: 未開啟時，聊天回合不會暴露任何 HTML 專案工具，
+   * 意圖分類完全略過，避免一般聊天助理誤觸專案工具而造成錯誤。
+   * 僅在明確 opt-in（或選用 HTML 開發代理範本）時啟用。
+   */
+  htmlProjectEnabled?: boolean;
 }
 
 export type SubagentRunStatus = 'running' | 'complete' | 'failed' | 'aborted';
@@ -558,6 +564,8 @@ export interface AgentRunCheckpoint {
   };
   agentHarnessEnabled: boolean;
   subagentDelegationEnabled?: boolean;
+  /** HTML 專案模式開關快照,確保 resume 時維持與原回合一致的工具暴露。 */
+  htmlProjectEnabled?: boolean;
   sharedMode: boolean;
   createdAt: number;
   updatedAt: number;

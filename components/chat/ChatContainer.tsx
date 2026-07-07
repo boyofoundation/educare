@@ -95,6 +95,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   headerActions,
   agentHarnessEnabled = true,
   subagentDelegationEnabled = false,
+  htmlProjectEnabled = false,
 }) => {
   const actions = useContext(AppContext)?.actions ?? null;
   const [input, setInput] = useState('');
@@ -456,6 +457,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         agentHarnessEnabled: resumeCheckpoint?.agentHarnessEnabled ?? agentHarnessEnabled,
         subagentDelegationEnabled:
           resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
+        htmlProjectEnabled: resumeCheckpoint?.htmlProjectEnabled ?? htmlProjectEnabled,
         sharedMode: resumeCheckpoint?.sharedMode ?? sharedMode,
         resumeFrom: resumeCheckpoint,
         callbacks: {

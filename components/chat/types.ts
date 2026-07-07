@@ -56,6 +56,8 @@ export interface ChatContainerProps {
   agentHarnessEnabled?: boolean;
   /** 子代理人委派開關。由父層從 assistant.subagentDelegationEnabled 傳入。 */
   subagentDelegationEnabled?: boolean;
+  /** HTML 專案模式開關。由父層從 assistant.htmlProjectEnabled 傳入;預設 false。 */
+  htmlProjectEnabled?: boolean;
 }
 
 export interface WelcomeMessageProps {

@@ -28,6 +28,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   const [newStarterPrompt, setNewStarterPrompt] = useState('');
   const [agentHarnessEnabled, setAgentHarnessEnabled] = useState(true);
   const [subagentDelegationEnabled, setSubagentDelegationEnabled] = useState(false);
+  const [htmlProjectEnabled, setHtmlProjectEnabled] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [highlightFields, setHighlightFields] = useState(false);
 
@@ -44,6 +45,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setNewStarterPrompt('');
       setAgentHarnessEnabled(assistant.agentHarnessEnabled ?? true);
       setSubagentDelegationEnabled(assistant.subagentDelegationEnabled ?? false);
+      setHtmlProjectEnabled(assistant.htmlProjectEnabled ?? false);
     } else {
       setName('');
       setDescription('');
@@ -53,6 +55,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setNewStarterPrompt('');
       setAgentHarnessEnabled(true);
       setSubagentDelegationEnabled(false);
+      setHtmlProjectEnabled(false);
     }
   }, [assistant]);
 
@@ -79,6 +82,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         createdAt: assistant?.createdAt || Date.now(),
         agentHarnessEnabled,
         subagentDelegationEnabled,
+        htmlProjectEnabled,
       };
 
       console.log('Assistant saved locally. Use migration settings to sync to Turso if needed.');
@@ -131,6 +135,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             setName(template.name);
             setDescription(template.description);
             setSystemPrompt(template.systemPrompt);
+            setHtmlProjectEnabled(template.htmlProjectEnabled ?? false);
             setHighlightFields(true);
             setTimeout(() => setHighlightFields(false), 1000);
           }}
@@ -285,6 +290,32 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             >
               開啟後,主模型可把研究或受限 HTML 工作委派給 1-4 個子代理人並行處理。這會增加 token
               成本,且 shared mode 會在執行時強制停用。
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div className='mb-6'>
+        <label
+          htmlFor='html-project-enabled'
+          className='flex cursor-pointer select-none items-start gap-3'
+        >
+          <input
+            id='html-project-enabled'
+            type='checkbox'
+            checked={htmlProjectEnabled}
+            onChange={e => setHtmlProjectEnabled(e.target.checked)}
+            disabled={isSaving}
+            className='mt-1 h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0'
+            aria-describedby='html-project-help'
+          />
+          <span className='flex flex-col'>
+            <span className='text-sm font-semibold text-gray-300'>
+              HTML 專案模式 (畫布與專案工具)
+            </span>
+            <span id='html-project-help' className='mt-1 text-xs leading-relaxed text-gray-500'>
+              開啟後,此助理才會在聊天中暴露 HTML
+              專案工具(建立專案、讀寫檔案、預覽等)。一般教學或行政助理請保持關閉,以免誤觸專案工具造成錯誤。
             </span>
           </span>
         </label>
