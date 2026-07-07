@@ -34,7 +34,7 @@ const formatTimestamp = (timestamp?: number): string | null => {
   });
 };
 
-const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index }) => {
+const MessageBubbleBase: React.FC<MessageBubbleProps> = ({ message, index: _index }) => {
   const [syntheticExpanded, setSyntheticExpanded] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const copyFeedbackTimerRef = useRef<number | null>(null);
@@ -210,5 +210,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, index: _index })
     </div>
   );
 };
+
+// Phase 4 note: session switches and checkpoint merges still replace the backing array,
+// and ChatContainer currently uses list index as the rendered key. Memoization therefore
+// mainly protects already-committed rows from rerendering during live streaming updates.
+const MessageBubble = React.memo(MessageBubbleBase);
 
 export default MessageBubble;
