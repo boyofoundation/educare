@@ -531,10 +531,16 @@ describe('ChatContainer', () => {
 
     await sendMessage('Delegate this');
 
+    // Wait for the run to finish committing so only the persisted timeline remains.
     await waitFor(() => {
-      expect(screen.getByText('子代理活動')).toBeInTheDocument();
-      expect(screen.getByText('Researcher')).toBeInTheDocument();
+      expect(defaultProps.onNewMessage).toHaveBeenCalled();
     });
+    expect(screen.getByText('代理活動')).toBeInTheDocument();
+    expect(screen.getByText('1 個子任務')).toBeInTheDocument();
+
+    // The committed timeline is collapsed by default; expand it to see the run row.
+    fireEvent.click(screen.getByRole('button', { name: /代理活動/ }));
+    expect(screen.getByText('Researcher')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(defaultProps.onNewMessage).toHaveBeenCalledWith(
@@ -599,11 +605,17 @@ describe('ChatContainer', () => {
 
     await sendMessage('Use tools');
 
+    // Wait for the run to finish committing so only the persisted timeline remains.
     await waitFor(() => {
-      expect(screen.getByText('工具活動')).toBeInTheDocument();
-      expect(screen.getByText('getProjectSummary')).toBeInTheDocument();
-      expect(screen.getByText('lintProject')).toBeInTheDocument();
+      expect(defaultProps.onNewMessage).toHaveBeenCalled();
     });
+    expect(screen.getByText('代理活動')).toBeInTheDocument();
+    expect(screen.getByText('2 個步驟')).toBeInTheDocument();
+
+    // The committed timeline is collapsed by default; expand it to see the step rows.
+    fireEvent.click(screen.getByRole('button', { name: /代理活動/ }));
+    expect(screen.getByText('getProjectSummary')).toBeInTheDocument();
+    expect(screen.getByText('lintProject')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(defaultProps.onNewMessage).toHaveBeenCalledWith(

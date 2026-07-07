@@ -737,6 +737,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   };
 
   const isRunning = runState?.status === 'running';
+  const hasLiveActivity =
+    toolCallRecords.length > 0 || Object.values(subagentBatches).some(runs => runs.length > 0);
+  const showStreamingResponse = streamingResponse !== '' || (isLoading && hasLiveActivity);
   const interruptedTurnLabel = interruptedCheckpoint
     ? `${Math.min(interruptedCheckpoint.turnIndex + 1, interruptedCheckpoint.maxTurns)}/${interruptedCheckpoint.maxTurns}`
     : null;
@@ -895,11 +898,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               }}
             />
 
-            {isThinking && !streamingResponse && (
+            {isThinking && !streamingResponse && !hasLiveActivity && (
               <ThinkingIndicator assistantName={assistantName} statusText={statusText} />
             )}
 
-            {streamingResponse && (
+            {showStreamingResponse && (
               <StreamingResponse
                 content={streamingResponse}
                 assistantName={assistantName}

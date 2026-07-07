@@ -129,21 +129,12 @@ describe('StreamingResponse', () => {
       expect(streamingDot).not.toBeInTheDocument();
     });
 
-    it('should display real-time typing message', () => {
+    it('should not render the removed typing footer text', () => {
       // Arrange & Act
       render(<StreamingResponse content='Test content' />);
 
       // Assert
-      expect(screen.getByText('正在輸入...')).toBeInTheDocument();
-    });
-
-    it('should apply proper styling to typing indicator', () => {
-      // Arrange & Act
-      render(<StreamingResponse content='Test content' />);
-
-      // Assert
-      const typingIndicator = screen.getByText('正在輸入...');
-      expect(typingIndicator).toHaveClass('text-xs', 'text-gray-300', 'mt-1', 'px-2', 'opacity-70');
+      expect(screen.queryByText('正在輸入...')).not.toBeInTheDocument();
     });
   });
 
@@ -162,13 +153,13 @@ describe('StreamingResponse', () => {
       });
     });
 
-    it('should handle empty content', () => {
+    it('should not render the text bubble for empty content', () => {
       // Arrange & Act
       render(<StreamingResponse content='' />);
 
       // Assert
-      expect(screen.getByTestId('markdown-content')).toBeInTheDocument();
-      expect(screen.getByTestId('markdown-content')).toHaveTextContent('');
+      expect(screen.queryByTestId('markdown-content')).not.toBeInTheDocument();
+      expect(screen.getByTestId('gemini-icon')).toBeInTheDocument();
     });
 
     it('should handle partial markdown content during streaming', () => {
@@ -258,7 +249,6 @@ describe('StreamingResponse', () => {
       rerender(<StreamingResponse content='Updated content' />);
 
       // Assert
-      expect(screen.getByText('正在輸入...')).toBeInTheDocument();
       const cursor = document.querySelector('.animate-pulse');
       expect(cursor).toBeInTheDocument();
     });
@@ -296,7 +286,7 @@ describe('StreamingResponse', () => {
 
       // Assert
       expect(screen.getByTestId('markdown-content')).toHaveTextContent('aaaaaaaaaa');
-      expect(screen.getByText('正在輸入...')).toBeInTheDocument();
+      expect(document.querySelector('.animate-pulse')).toBeInTheDocument();
     });
   });
 
@@ -357,8 +347,8 @@ describe('StreamingResponse', () => {
     });
   });
 
-  describe('Subagent Activity Rendering', () => {
-    it('renders delegated batches above the streaming bubble', () => {
+  describe('Agent Activity Rendering', () => {
+    it('renders one live timeline for flattened delegated batches', () => {
       // Arrange
       const subagentBatches = {
         'batch-1': [
@@ -392,12 +382,17 @@ describe('StreamingResponse', () => {
         <StreamingResponse content='Streaming with delegation' subagentBatches={subagentBatches} />,
       );
 
-      // Assert
-      expect(screen.getAllByText('子代理活動')).toHaveLength(2);
+      // Assert - a single unified timeline, auto-expanded because it is live
+      expect(screen.getAllByTestId('agent-activity-timeline')).toHaveLength(1);
+      expect(screen.getByText('代理活動')).toBeInTheDocument();
+      expect(screen.getByText('2 個子任務')).toBeInTheDocument();
+      expect(screen.getByText('正在執行 Active planner…')).toBeInTheDocument();
       expect(screen.getByText('Completed researcher')).toBeInTheDocument();
       expect(screen.getByText('Active planner')).toBeInTheDocument();
+      // Row details stay collapsed until the row is toggled
+      expect(screen.queryByText('已完成摘要')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Completed researcher/ }));
       expect(screen.getByText('已完成摘要')).toBeInTheDocument();
-      expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
     });
 
     it('renders live tool call activity above the streaming bubble', () => {
@@ -426,15 +421,17 @@ describe('StreamingResponse', () => {
         />,
       );
 
-      expect(screen.getByText('工具活動')).toBeInTheDocument();
-      expect(screen.getByText('2 次呼叫')).toBeInTheDocument();
+      expect(screen.getByText('代理活動')).toBeInTheDocument();
+      expect(screen.getByText('2 個步驟')).toBeInTheDocument();
+      expect(screen.getByText('正在執行 getProjectSummary…')).toBeInTheDocument();
       expect(screen.getByText('getProjectSummary')).toBeInTheDocument();
       expect(screen.getByText('lintProject')).toBeInTheDocument();
       expect(screen.getByText('執行中')).toBeInTheDocument();
       expect(screen.getByText('可恢復')).toBeInTheDocument();
-      expect(screen.queryByText('Inspecting project context')).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: /getProjectSummary/i }));
+      // The collapsed row shows its summary as a subtitle; the code only after expansion
       expect(screen.getByText('Inspecting project context')).toBeInTheDocument();
+      expect(screen.queryByText('lint-path-not-found')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /lintProject/ }));
       expect(screen.getByText('lint-path-not-found')).toBeInTheDocument();
     });
   });
@@ -493,10 +490,11 @@ describe('StreamingResponse', () => {
       // Arrange & Act
       render(<StreamingResponse content='Streaming content' />);
 
-      // Assert
-      const typingIndicator = screen.getByText('正在輸入...');
-      expect(typingIndicator).toBeInTheDocument();
-      // This text serves as an accessible indication of the streaming state
+      // Assert - the live region carries the streaming semantics
+      const streamingRegion = screen
+        .getByTestId('markdown-content')
+        .closest('[aria-live="polite"]');
+      expect(streamingRegion).toBeInTheDocument();
     });
 
     it('should maintain proper text hierarchy', () => {
@@ -512,7 +510,9 @@ describe('StreamingResponse', () => {
     it('should expose the streaming region semantics for screen readers', () => {
       render(<StreamingResponse content='Accessible content' />);
 
-      const streamingRegion = screen.getByText('正在輸入...').closest('[aria-live="polite"]');
+      const streamingRegion = screen
+        .getByTestId('markdown-content')
+        .closest('[aria-live="polite"]');
       expect(streamingRegion).toHaveAttribute('aria-busy', 'true');
       expect(screen.queryAllByRole('button')).toHaveLength(0);
     });
@@ -524,7 +524,6 @@ describe('StreamingResponse', () => {
       render(<StreamingResponse content='Active stream' />);
 
       // Assert
-      expect(screen.getByText('正在輸入...')).toBeInTheDocument();
       expect(document.querySelector('.ml-1.animate-pulse')).toBeInTheDocument();
     });
 

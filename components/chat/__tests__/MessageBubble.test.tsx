@@ -132,7 +132,7 @@ describe('MessageBubble', () => {
       });
     });
 
-    it('should render persisted subagent runs above the assistant message', () => {
+    it('should render persisted subagent runs in a collapsed agent activity timeline', () => {
       // Arrange
       const assistantMessage = createMockChatMessage({
         role: 'model',
@@ -164,18 +164,32 @@ describe('MessageBubble', () => {
       // Act
       render(<MessageBubble message={assistantMessage} index={0} />);
 
-      // Assert
-      expect(screen.getByText('子代理活動')).toBeInTheDocument();
-      expect(screen.getByText('2 項任務')).toBeInTheDocument();
+      // Assert - collapsed header with summary count only
+      const header = screen.getByRole('button', { name: /代理活動/ });
+      expect(header).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getByText('2 個子任務')).toBeInTheDocument();
+      expect(screen.queryByText('Persisted researcher')).not.toBeInTheDocument();
+
+      // Act - expand the timeline
+      fireEvent.click(header);
+
+      // Assert - rows visible; complete is quiet (dot only), running shows a label
       expect(screen.getByText('Persisted researcher')).toBeInTheDocument();
       expect(screen.getByText('Live planner')).toBeInTheDocument();
-      expect(screen.getByText('完成')).toBeInTheDocument();
+      expect(screen.queryByText('完成')).not.toBeInTheDocument();
       expect(screen.getByText('執行中')).toBeInTheDocument();
+      expect(screen.queryByText('Delegated summary')).not.toBeInTheDocument();
+
+      // Act - expand the completed run row
+      fireEvent.click(screen.getByRole('button', { name: /Persisted researcher/ }));
+
+      // Assert
       expect(screen.getByText('Delegated summary')).toBeInTheDocument();
+      expect(screen.getByText('Read → Search')).toBeInTheDocument();
       expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
     });
 
-    it('should render persisted tool call activity above the assistant message', () => {
+    it('should render persisted tool call activity in the agent activity timeline', () => {
       const assistantMessage = createMockChatMessage({
         role: 'model',
         content: 'Assistant response with tool activity',
@@ -202,60 +216,26 @@ describe('MessageBubble', () => {
 
       render(<MessageBubble message={assistantMessage} index={0} />);
 
-      expect(screen.getByText('工具活動')).toBeInTheDocument();
-      expect(screen.getByText('2 次呼叫')).toBeInTheDocument();
+      const header = screen.getByRole('button', { name: /代理活動/ });
+      expect(screen.getByText('2 個步驟')).toBeInTheDocument();
+
+      fireEvent.click(header);
+
       expect(screen.getByText('writeFiles')).toBeInTheDocument();
       expect(screen.getByText('lintProject')).toBeInTheDocument();
-      expect(screen.getByText('成功')).toBeInTheDocument();
+      // ok is a quiet status (dot only); recoverable_error keeps its label
+      expect(screen.queryByText('成功')).not.toBeInTheDocument();
       expect(screen.getByText('可恢復')).toBeInTheDocument();
+      // Collapsed rows surface their summary as a subtitle
       expect(screen.getByText('Updated /index.html')).toBeInTheDocument();
       expect(
         screen.getByText('lintProject could not find 1 requested path(s).'),
       ).toBeInTheDocument();
+      expect(screen.queryByText('lint-path-not-found')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /lintProject/ }));
+
       expect(screen.getByText('lint-path-not-found')).toBeInTheDocument();
-    });
-
-    it('should render persisted subagent runs above the assistant message', () => {
-      // Arrange
-      const assistantMessage = createMockChatMessage({
-        role: 'model',
-        content: 'Assistant response with delegated work',
-        subagentRuns: [
-          {
-            id: 'run-1',
-            batchId: 'batch-1',
-            name: 'Persisted researcher',
-            task: 'Investigate prior context',
-            status: 'complete',
-            output: 'Delegated summary',
-            toolSequence: ['Read', 'Search'],
-            durationMs: 1800,
-          },
-          {
-            id: 'run-2',
-            batchId: 'batch-1',
-            name: 'Live planner',
-            task: 'Outline next steps',
-            status: 'running',
-            output: 'Partial plan',
-            toolSequence: ['Plan'],
-            durationMs: 300,
-          },
-        ],
-      });
-
-      // Act
-      render(<MessageBubble message={assistantMessage} index={0} />);
-
-      // Assert
-      expect(screen.getByText('子代理活動')).toBeInTheDocument();
-      expect(screen.getByText('2 項任務')).toBeInTheDocument();
-      expect(screen.getByText('Persisted researcher')).toBeInTheDocument();
-      expect(screen.getByText('Live planner')).toBeInTheDocument();
-      expect(screen.getByText('完成')).toBeInTheDocument();
-      expect(screen.getByText('執行中')).toBeInTheDocument();
-      expect(screen.getByText('Delegated summary')).toBeInTheDocument();
-      expect(screen.queryByText('Partial plan')).not.toBeInTheDocument();
     });
   });
 

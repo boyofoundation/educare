@@ -10,10 +10,6 @@ export interface ChatTokenInfo {
   model?: string;
 }
 
-export interface SubagentActivityCardProps {
-  runs: SubagentRunRecord[];
-}
-
 export interface MessageBubbleProps {
   message: ChatMessage;
   index: number;

@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MessageBubbleProps } from './types';
 import { UserIcon, GeminiIcon } from '../ui/Icons';
-import SubagentActivityCard from './SubagentActivityCard';
-import ToolCallCard from './ToolCallCard';
+import AgentActivityTimeline from './AgentActivityTimeline';
 import MarkdownContent from './MarkdownContent';
 
 const EMPTY_MESSAGE_FALLBACK = '（本次回覆沒有內容）';
@@ -169,12 +168,10 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({ message, index: _inde
           </div>
         </div>
         <div className='group flex min-w-0 flex-col gap-3'>
-          {message.toolCallLog && message.toolCallLog.length > 0 && (
-            <ToolCallCard records={message.toolCallLog} />
-          )}
-          {message.subagentRuns && message.subagentRuns.length > 0 && (
-            <SubagentActivityCard runs={message.subagentRuns} />
-          )}
+          <AgentActivityTimeline
+            toolCalls={message.toolCallLog}
+            subagentRuns={message.subagentRuns}
+          />
           <div
             className={`w-full max-w-[85%] rounded-2xl rounded-bl-md px-5 py-3 shadow-lg md:max-w-[65ch] ${
               message.isError
