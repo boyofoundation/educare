@@ -1,0 +1,45 @@
+# Ralph Progress — HTML Project isomorphic-git migration
+
+Source plan: .omc/plans/2026-07-08-html-project-isomorphic-git.md
+Branch: feat/html-project-isomorphic-git
+Session: 933dc4de-03e2-4796-be77-096f3167bc4b
+
+## Environment facts (verified iteration 1)
+- Branch created from main (clean): feat/html-project-isomorphic-git
+- Deps NOT yet installed (no isomorphic-git/lightning-fs/diff in package.json)
+- Test env: vitest.config.ts uses environment 'jsdom' + setup './src/test/setup.ts'; vite.config.ts ALSO has test config with environment 'happy-dom'. The dedicated vitest.config.ts wins for `vitest` runs. fake-indexeddb/auto already in setup.ts (LightningFS can run on top in tests).
+- htmlProjectStore.ts (1099 lines): current file storage is IndexedDB via 'idb', 4 stores (projects/files/snapshots/todos). public API surface to preserve.
+- htmlProjectStore.test.ts (1203 lines): entirely mocks 'idb' module with in-memory Map mockDb — Phase 2b requires rewriting file/snapshot test paths to run real LightningFS-on-fake-indexeddb.
+- vite.config.ts has manualChunks convention (react-vendor, transformers, ai-libs, static-validation, pdf-worker, turso, markdown, highlight, utils, vendor).
+
+## Key plan decisions (must honor)
+- D1: LightningFS = sole source of truth for file content; metadata in repo /.educare/meta.json (kind/dependencies/encoding). encoding MUST persist (not derivable from kind).
+- D2: API stays string; FS stores bytes. base64→Uint8Array on write, encode back on read. size=byte count.
+- D3: commit trailers — 'Preview-Version: <n>' on ALL commits; 'Educare-Snapshot: true' ONLY on createSnapshot commits. listSnapshots filters by snapshot trailer. revert = restore tree + new commit (linear), no HEAD move.
+- D4: commit points = createProject initial / run-start(createSnapshot) / run-end(best-effort) / ZIP import. writeFiles etc do NOT commit (dirty working tree OK). commitAll statusMatrix must pass ignored:true. run-start dedup: skip if clean tree + same Preview-Version snapshot exists.
+- D6: reserved-path guard in store normalizePath (segment match .git/.educare), code 'reserved-path'. NOT in tool service.
+- D7: gitService fully lazy import + independent vite chunk.
+- D9: FS dir deletion in shared deleteProjectRecords (covers deleteProjectsByAssistant).
+- Migration (F1/F5/F6/F7): completion signal = idb file+snapshot records empty (NOT "FS has .git"); trigger = idb has file OR snapshot; replay idempotent (clear dir first); Web Locks cross-tab mutex + recheck after lock; verify via git log before deleting idb.
+
+## Subagent delegation note
+- proxy model aliases opus/sonnet broken; subagents use model "fable".
+
+## US-001 COMPLETE (Phase 1 — deps + htmlProjectGitService + spike)
+Files: services/htmlProjectGitService.ts, services/htmlProjectGitService.test.ts, diff.d.ts.
+Spike: 11/11 green. Typecheck clean on new files.
+
+### CRITICAL learnings (apply to Phase 2/3/4)
+1. **isomorphic-git workdir walker does NOT skip `.git`.** statusMatrix returns `.git/index`, `.git/HEAD`, `.git/objects/...` as `[filepath,0,2,0]` (untracked). If staged → `.git` files get COMMITTED into the tree → next statusMatrix reads HEAD tree containing `.git` → isomorphic-git throws `UnsafeFilepathError: The filepath ".git" contains unsafe character sequences`. FIX: `isGitInternalPath(filepath)` (any segment === '.git') filter on every statusMatrix row BEFORE git.add/remove (in commitAll born path, status(), diff() workdir collect). Note: `.educare` must NOT be filtered here (it's committed metadata).
+2. **`git.add` needs `force: true`** to override `.gitignore` (D4 "ignored" semantics). statusMatrix(`ignored:true`) only makes ignored files VISIBLE; add still respects .gitignore without force.
+3. **`.educare/meta.json` IS committed** (travels with tree for metadata versioning). Filtered only from USER-FACING lists: log().files (via listCommitFiles isReservedPath), status() results, diff() results. restoreCommitTree restores it (walk doesn't filter). commitAll unborn+born paths stage it.
+4. **commit message trailing newlines**: isomorphic-git stores `'body\n\nTrailer: v\n'`. stripTrailers must `replace(/\n+$/,'')` before splitting, else trailing empty line breaks the backward trailer scan.
+5. **`isSnapshot:true` ⇒ `allowEmpty:true`** (snapshots always record state = createSnapshot semantics). `allowEmpty = options.allowEmpty ?? Boolean(isSnapshot)`. run-start dedup (D4) is the CALLER's (store) responsibility before calling.
+6. **WalkerEntry.content() returns `Promise<Uint8Array | void>`** — use `toBytes()` helper (void → empty Uint8Array) for Uint8Array constructor type safety.
+7. **readCommit result**: tree oid is at `result.commit.tree` (not `.tree`).
+8. **statusMatrix column semantics confirmed**: [filepath, HEAD(0|1), WORKDIR(0|1|2), STAGE(0|1|2|3)]. WORKDIR=2 detects modification. Recipe: workdir===0&&head===1→git.remove; workdir===2→git.add(force).
+9. **diff 5.x ships NO types; @types/diff@8 is a deprecated stub resolving nothing.** Wrote ambient `diff.d.ts` shim (createPatch/diffLines/diffWords/diffChars + Change/Options types) mirroring csstree-validator.d.ts. lightning-fs 4.6.2 HAS built-in index.d.ts (no shim needed).
+
+### gitService public API (consumed by store in Phase 2)
+ensureRepo, commitAll(id,msg,{previewVersion,isSnapshot,allowEmpty,timestamp}), log(id,{depth})→GitCommitSummary[], resolveVersion(id,version)→oid|undefined, restoreCommitTree(id,oid), status(id)→GitStatusResult, diff(id,{refA,refB}), listBranches/createBranch/switchBranch/currentBranch, deleteProjectDir(id), writeProjectFile/readProjectFile/deleteProjectFile/renameProjectFile, readMeta/writeMeta, __setFsInstanceForTesting/__resetGitServiceForTesting/createIsolatedFs (test helpers).
+
