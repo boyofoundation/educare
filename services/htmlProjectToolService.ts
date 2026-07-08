@@ -699,7 +699,7 @@ const normalizeReadFileRange = (
   startLineValue: unknown,
   endLineValue: unknown,
   totalLines: number,
-): { startLine: number; endLine: number; contentRangeOnly: boolean } => {
+): { startLine: number; endLine: number; contentRangeOnly: boolean; endLineClamped: boolean } => {
   const normalizedStartLine = normalizeOptionalLineNumber(startLineValue);
   const normalizedEndLine = normalizeOptionalLineNumber(endLineValue);
 
@@ -708,6 +708,7 @@ const normalizeReadFileRange = (
       startLine: totalLines > 0 ? 1 : 0,
       endLine: totalLines,
       contentRangeOnly: false,
+      endLineClamped: false,
     };
   }
 
@@ -748,14 +749,13 @@ const normalizeReadFileRange = (
     });
   }
 
-  if (normalizedStartLine > totalLines || effectiveEndLine > totalLines) {
+  if (normalizedStartLine > totalLines) {
     throw new HtmlProjectToolRecoverableError({
       ok: false,
       recoverable: true,
       code: 'invalid-read-file-range',
-      message: `readFile line range ${normalizedStartLine}-${effectiveEndLine} is outside the file (total lines: ${totalLines}).`,
-      guidance:
-        'Call readFile without a range or inspect totalLines before retrying with valid 1-based line numbers.',
+      message: `readFile startLine ${normalizedStartLine} is outside the file (total lines: ${totalLines}).`,
+      guidance: `Use a startLine between 1 and ${totalLines}, or call readFile without a range to read the whole file.`,
       details: {
         startLine: normalizedStartLine,
         endLine: effectiveEndLine,
@@ -766,8 +766,9 @@ const normalizeReadFileRange = (
 
   return {
     startLine: normalizedStartLine,
-    endLine: effectiveEndLine,
+    endLine: Math.min(effectiveEndLine, totalLines),
     contentRangeOnly: true,
+    endLineClamped: effectiveEndLine > totalLines,
   };
 };
 
@@ -1701,7 +1702,9 @@ const handleReadFile = async (
       : file.content;
   const numberedContent = formatNumberedContent(selectedContent, range.startLine || 1);
   const summary = range.contentRangeOnly
-    ? `已讀取檔案 ${file.path} 的第 ${range.startLine}-${range.endLine} 行。`
+    ? `已讀取檔案 ${file.path} 的第 ${range.startLine}-${range.endLine} 行${
+        range.endLineClamped ? ` (endLine 已收斂至檔案結尾，全檔共 ${totalLines} 行)` : ''
+      }。`
     : `已讀取檔案 ${file.path}。`;
 
   return {
@@ -1718,6 +1721,7 @@ const handleReadFile = async (
       lineEnd: range.endLine,
       totalLines,
       contentRangeOnly: range.contentRangeOnly,
+      endLineClamped: range.endLineClamped,
       dependencies: file.dependencies || [],
       updatedAt: file.updatedAt,
     },
@@ -2807,8 +2811,15 @@ export const getHtmlProjectToolDefinitions = (): ToolDefinition[] => [
       properties: {
         projectId: { type: 'string' },
         path: { type: 'string', description: VIRTUAL_PROJECT_PATH_GUIDANCE },
-        startLine: { type: 'number' },
-        endLine: { type: 'number' },
+        startLine: {
+          type: 'number',
+          description: '1-based first line to read. Must be within the file.',
+        },
+        endLine: {
+          type: 'number',
+          description:
+            '1-based inclusive last line to read. Values past the end of the file are clamped to the last line, so endLine can be used as a max-lines cap.',
+        },
       },
       required: ['path'],
     },

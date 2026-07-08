@@ -1195,6 +1195,96 @@ describe('executeHtmlProjectToolCall', () => {
     });
   });
 
+  it('clamps readFile endLine to the last line instead of failing when it overshoots', async () => {
+    mockReadFile.mockResolvedValue({
+      path: '/index.html',
+      kind: 'html',
+      content: 'alpha\nbeta\ngamma',
+      encoding: 'utf-8',
+      dependencies: [],
+      size: 16,
+      updatedAt: 1700000001000,
+    });
+
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+
+    const result = await executeHtmlProjectToolCall(
+      {
+        name: 'readFile',
+        args: {
+          projectId: 'project-1',
+          path: '/index.html',
+          startLine: 1,
+          endLine: 400,
+        },
+      },
+      {
+        assistantId: 'assistant-1',
+        activeProjectId: 'project-1',
+      },
+    );
+
+    expect(result).toMatchObject({
+      toolName: 'readFile',
+      summary: '已讀取檔案 /index.html 的第 1-3 行 (endLine 已收斂至檔案結尾，全檔共 3 行)。',
+      result: {
+        content: 'alpha\nbeta\ngamma',
+        numberedContent: '1 | alpha\n2 | beta\n3 | gamma',
+        lineStart: 1,
+        lineEnd: 3,
+        totalLines: 3,
+        contentRangeOnly: true,
+        endLineClamped: true,
+      },
+    });
+  });
+
+  it('returns a recoverable result when readFile startLine is beyond the end of the file', async () => {
+    mockReadFile.mockResolvedValue({
+      path: '/index.html',
+      kind: 'html',
+      content: 'alpha\nbeta\ngamma',
+      encoding: 'utf-8',
+      dependencies: [],
+      size: 16,
+      updatedAt: 1700000001000,
+    });
+
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+
+    const result = await executeHtmlProjectToolCall(
+      {
+        name: 'readFile',
+        args: {
+          projectId: 'project-1',
+          path: '/index.html',
+          startLine: 10,
+          endLine: 20,
+        },
+      },
+      {
+        assistantId: 'assistant-1',
+        activeProjectId: 'project-1',
+      },
+    );
+
+    expect(result).toMatchObject({
+      toolName: 'readFile',
+      summary: 'readFile startLine 10 is outside the file (total lines: 3).',
+      result: {
+        ok: false,
+        recoverable: true,
+        code: 'invalid-read-file-range',
+        message: 'readFile startLine 10 is outside the file (total lines: 3).',
+        details: {
+          startLine: 10,
+          endLine: 20,
+          totalLines: 3,
+        },
+      },
+    });
+  });
+
   it('lists project todos for the owned project', async () => {
     mockListTodos.mockResolvedValue([
       {
