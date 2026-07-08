@@ -1203,10 +1203,29 @@ class HtmlProjectStore {
     await gitService.writeMeta(projectId, currentMeta);
     await gitService.commitAll(projectId, 'Migrated to git storage', { allowEmpty: true });
 
-    // 驗證:git log 至少有 migration commit
+    // 驗證 (F1):replay 應產出 ≥ (N snapshot + 1 migration) 個 commit,且 snapshot commit
+    // 數量相符。若 replay 中途部分失敗仍可能通過單純「log 非空」檢查,導致刪 idb 後資料
+    // 永久遺失 — 故嚴格校驗數量 + 抽樣比對當前檔案內容,失敗則保留 idb 供下次重試。
+    const expectedMinCommits = sortedSnapshots.length + 1; // N snapshot + 1 migration
     const verifyLog = await gitService.log(projectId);
-    if (verifyLog.length === 0) {
-      throw new Error(`Migration verification failed for ${projectId}: no commits produced.`);
+    const verifySnapshotCommits = verifyLog.filter(commit => commit.isSnapshot);
+    if (
+      verifyLog.length < expectedMinCommits ||
+      verifySnapshotCommits.length < sortedSnapshots.length
+    ) {
+      throw new Error(
+        `Migration verification failed for ${projectId}: expected >= ${expectedMinCommits} commits (${sortedSnapshots.length} snapshots + migration), got ${verifyLog.length} commits / ${verifySnapshotCommits.length} snapshots.`,
+      );
+    }
+    if (legacyFiles.length > 0) {
+      const sample = legacyFiles[0];
+      const sampleBytes = await gitService.readProjectFile(projectId, sample.path);
+      const expectedBytes = encodeContent(sample.content, sample.encoding || 'utf-8');
+      if (!sampleBytes || sampleBytes.length !== expectedBytes.length) {
+        throw new Error(
+          `Migration verification failed for ${projectId}: current file ${sample.path} content mismatch.`,
+        );
+      }
     }
 
     // 驗證後才刪 idb legacy 記錄 (失敗則保留 idb,下次重試)
