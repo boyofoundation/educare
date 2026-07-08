@@ -82,13 +82,17 @@ export default defineConfig(() => {
               return 'static-validation';
             }
 
-            // 本地 git 版控 (isomorphic-git + lightning-fs + diff + buffer polyfill)
+            // 本地 git 版控 (isomorphic-git + lightning-fs + diff)
             // htmlProjectGitService 全程動態 import,獨立 chunk 延遲載入,不進首屏 bundle (D7)
+            // 注意:buffer polyfill 不能放進這個 chunk — isomorphic-git 的間接依賴
+            // (safe-buffer/readable-stream/sha.js) 落在 vendor 且 require('buffer'),
+            // 會造成 vendor ↔ html-git 循環 chunk 依賴,production 下初始化順序錯亂
+            // (base64-js exports 尚未初始化即被存取 → "Cannot set properties of
+            // undefined (setting 'byteLength')")。buffer 留在 vendor 與其消費者同 chunk。
             if (
               id.includes('node_modules/isomorphic-git') ||
               id.includes('node_modules/@isomorphic-git') ||
-              id.includes('node_modules/diff/') ||
-              id.includes('node_modules/buffer/')
+              id.includes('node_modules/diff/')
             ) {
               return 'html-git';
             }
