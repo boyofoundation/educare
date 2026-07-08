@@ -73,5 +73,13 @@ Tests: services/htmlProjectGitTools.test.ts (13: pack composition, subagent excl
 - **Path normalization**: gitService user-facing outputs (log.files, status arrays, diff paths) now prefix `/` to match the store's `/`-path convention (createSnapshot.files consistency; agent sees uniform paths). Internal FS/git operations stay relative (no leading /) for correct FS path joining. Spike test assertions updated to expect `/`-prefixed paths.
 - gitSwitchBranch wraps gitService errors (dirty tree / missing branch) in HtmlProjectToolRecoverableError so the agent can recover.
 
+### CRITICAL FIX — browser Buffer polyfill (reported by user: "GIT似乎無法COMMIT" + readFile errors)
+**Root cause**: isomorphic-git internally uses Node's `Buffer` (`_GitIndex.from` / `updateCachedIndexFile` during git.add/commit/index ops). Browsers have NO `Buffer` global → `ReferenceError: Buffer is not defined` on ANY commit path (gitCommit, createSnapshot, run-start snapshot, migration). This crashed the agent turn. readFile/writeFiles (LightningFS-only, no isomorphic-git) were NOT affected — the user's "readFile errors" were the cascade from the crashed turn. Tests passed because vitest/Node provide Buffer.
+**Fix**: `ensureBufferPolyfill()` in htmlProjectGitService — lazily `import('buffer')` and set `globalThis.Buffer` before the dynamic `import('isomorphic-git')` (and lightning-fs). Added `buffer@6.0.3` dep. Lazy (D7 — only loads when git used).
+**Verification**: chrome-devtools browser eval of the REAL tool path (executeHtmlProjectToolCall) — writeFiles/readFile/createSnapshot/gitCommit/gitLog/gitStatus ALL pass in the browser after the polyfill.
+**Regression guard**: cannot test in vitest (Node needs Buffer; deleting globalThis.Buffer destroys the process — confirmed 752k errors). Browser-verified instead; documented in spike test file.
+**Lesson**: dynamic-imported Node-origin libs (isomorphic-git) need browser polyfills (Buffer, possibly others). Verify in REAL browser, not just jsdom — jsdom runs under Node so hides Node-global dependencies.
+
+
 
 

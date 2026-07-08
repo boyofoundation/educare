@@ -55,9 +55,34 @@ const FS_CACHE: { fs: Promise<FsInstance> | null } = { fs: null };
 /** 單檔 diff 內容上限 (沿用 store MAX_SEARCHABLE_FILE_SIZE),超過僅回狀態不產 unified diff。 */
 const MAX_DIFF_CONTENT_SIZE = 250 * 1024;
 
+/**
+ * 瀏覽器環境缺少 Node 的 Buffer 全域,isomorphic-git 內部 (_GitIndex / hashBlob /
+ * commit 等) 直接使用 Buffer 會拋 ReferenceError。在動態載入 isomorphic-git 前
+ * 注入 buffer polyfill (lazy,僅在使用 git 時載入,不影響首屏 bundle — D7)。
+ */
+let bufferPolyfilled = false;
+/** 測試專用:重置 polyfill 旗標 (搭配 vi.resetModules 模擬無 Buffer 環境)。 */
+export function __resetBufferPolyfillFlagForTesting(): void {
+  bufferPolyfilled = false;
+}
+async function ensureBufferPolyfill(): Promise<void> {
+  if (bufferPolyfilled) {
+    return;
+  }
+  if (typeof globalThis.Buffer === 'undefined') {
+    const { Buffer } = await import('buffer');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).Buffer = Buffer;
+  }
+  bufferPolyfilled = true;
+}
+
 async function getGit(): Promise<GitModule> {
   if (!GIT_MOD_CACHE.mod) {
-    GIT_MOD_CACHE.mod = import('isomorphic-git');
+    GIT_MOD_CACHE.mod = (async () => {
+      await ensureBufferPolyfill();
+      return import('isomorphic-git');
+    })();
   }
   return GIT_MOD_CACHE.mod;
 }
@@ -69,6 +94,7 @@ async function getGit(): Promise<GitModule> {
 async function getFs(): Promise<FsInstance> {
   if (!FS_CACHE.fs) {
     FS_CACHE.fs = (async () => {
+      await ensureBufferPolyfill();
       const mod = await import('@isomorphic-git/lightning-fs');
       // `export = FS` → esModuleInterop 下掛於 default
       const LightningFS = (mod as unknown as { default: new (name: string) => FsInstance }).default;
@@ -487,7 +513,7 @@ export async function log(
   const summaries: GitCommitSummary[] = [];
   for (const entry of commits) {
     const message = entry.commit.message;
-    const files = await listCommitFiles(git, fs, dir, gitdir, entry.oid);
+    const files = (await listCommitFiles(git, fs, dir, gitdir, entry.oid)).map(f => `/${f}`);
     summaries.push({
       oid: entry.oid,
       shortOid: entry.oid.slice(0, 7),
@@ -631,7 +657,7 @@ export async function status(projectId: string): Promise<GitStatusResult> {
   const workdirSet = new Set(workdirFiles);
 
   if (!born) {
-    result.untracked.push(...workdirFiles);
+    result.untracked.push(...workdirFiles.map(f => `/${f}`));
     result.clean = workdirFiles.length === 0;
     return result;
   }
@@ -642,13 +668,13 @@ export async function status(projectId: string): Promise<GitStatusResult> {
   for (const filepath of workdirFiles) {
     const headBlobOid = headOids.get(filepath);
     if (headBlobOid === undefined) {
-      result.added.push(filepath);
+      result.added.push(`/${filepath}`);
       continue;
     }
     const bytes = await promises.readFile(`${dir}/${filepath}`);
     const { oid } = await git.hashBlob({ object: bytes });
     if (oid !== headBlobOid) {
-      result.modified.push(filepath);
+      result.modified.push(`/${filepath}`);
     } else {
       result.unchanged += 1;
     }
@@ -658,7 +684,7 @@ export async function status(projectId: string): Promise<GitStatusResult> {
       continue;
     }
     if (!workdirSet.has(headFile)) {
-      result.deleted.push(headFile);
+      result.deleted.push(`/${headFile}`);
     }
   }
   result.clean =
@@ -747,12 +773,13 @@ export async function diff(
     }
 
     const binary = aDecoded.content === null || bDecoded.content === null;
+    const apiPath = `/${filepath}`;
     let patch: string | null = null;
     if (!binary) {
       const oldStr = aDecoded.content ?? '';
       const newStr = bDecoded.content ?? '';
       patch = createPatch(
-        filepath,
+        apiPath,
         oldStr,
         newStr,
         refA ?? 'working',
@@ -763,7 +790,7 @@ export async function diff(
       );
     }
 
-    changes.push({ path: filepath, status: statusValue, patch, binary });
+    changes.push({ path: apiPath, status: statusValue, patch, binary });
   }
 
   return { files: changes };

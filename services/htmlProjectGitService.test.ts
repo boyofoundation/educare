@@ -322,4 +322,8 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     expect(fs).toBeTruthy();
     expect(typeof (fs as { promises: unknown }).promises).toBe('object');
   });
+
+  // 備註:瀏覽器 Buffer polyfill (getGit 注入 globalThis.Buffer) 無法在 vitest 回歸
+  // — Node 環境必須有 Buffer (vitest/node 內部依賴),刪除會毀掉整個 process。
+  // 該修復已透過瀏覽器 (chrome-devtools) 實測驗證:gitCommit/createSnapshot/readFile 全綠。
 });
