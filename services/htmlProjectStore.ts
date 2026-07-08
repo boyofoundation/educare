@@ -921,6 +921,29 @@ class HtmlProjectStore {
    * 回傳型別 HtmlProjectSnapshot 不變;version = 當下 previewVersion。
    * isSnapshot:true 隱含 allowEmpty (快照一律記錄當前狀態)。
    */
+  /**
+   * D4 run-start 快照 (含去重)。工作樹乾淨「且」已存在同 previewVersion 的 snapshot
+   * commit 時跳過 (回傳 null),避免每次 run 疊一筆空 run-start commit 造成歷史膨脹。
+   * 其餘情況 (工作樹有變更,或尚無此 version 的 snapshot) 照常建立 snapshot。
+   * 供 agentRunController run-start 呼叫;回傳 null 時呼叫端不應更新 snapshotVersion。
+   */
+  async createRunStartSnapshot(
+    projectId: string,
+    note: string,
+  ): Promise<HtmlProjectSnapshot | null> {
+    const db = await getDb();
+    await this.ensureMigrated(projectId);
+    const project = await requireProject(db, projectId);
+    const treeStatus = await gitService.status(projectId);
+    if (treeStatus.clean) {
+      const existing = await this.listSnapshots(projectId);
+      if (existing.snapshots.some(snap => snap.version === project.previewVersion)) {
+        return null; // D4 去重:clean + 同 version snapshot 已存在 → 跳過
+      }
+    }
+    return this.createSnapshot(projectId, note);
+  }
+
   async createSnapshot(projectId: string, note?: string): Promise<HtmlProjectSnapshot> {
     const db = await getDb();
     await this.ensureMigrated(projectId);

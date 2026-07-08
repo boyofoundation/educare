@@ -80,6 +80,16 @@ Tests: services/htmlProjectGitTools.test.ts (13: pack composition, subagent excl
 **Regression guard**: cannot test in vitest (Node needs Buffer; deleting globalThis.Buffer destroys the process — confirmed 752k errors). Browser-verified instead; documented in spike test file.
 **Lesson**: dynamic-imported Node-origin libs (isomorphic-git) need browser polyfills (Buffer, possibly others). Verify in REAL browser, not just jsdom — jsdom runs under Node so hides Node-global dependencies.
 
+## E2E BUG FIXES (2026-07-08, 手動 e2e 抓到 4+1 bug,全數修復)
+User's manual e2e (chrome-devtools dev server) found 5 bugs after the 5 phases. All fixed + regression tests added:
+1. **commit timestamp ms↔seconds** (htmlProjectGitService commitAll): isomorphic-git author/committer timestamp is SECONDS; callers passed Date.now() ms; log() then ×1000 → double-wrong (commits dated far future, UI relative-time always "剛剛"). FIX: commitAll does `Math.floor((timestamp ?? now())/1000)`; log() ×1000 still correct. Regression: commit at fixed ms → log returns same ms.
+2. **log() swallowed real errors** (htmlProjectGitService log): broad catch regex `/Could not find|does not exist|unborn/` masked missing-object (repo corruption) as empty history. FIX: explicit `hasCommits()` check returns [] ONLY for unborn HEAD; all other git.log errors propagate (surfaces corruption). (Also indirectly surfaces Bug 4.)
+3. **run-start dedup (D4) not implemented** (store + agentRunController): run-start createSnapshot was unconditional → empty run-start commit every run. FIX: store `createRunStartSnapshot(projectId, note)` returns null (skip) when working tree clean AND a snapshot with current previewVersion already exists; agentRunController calls it + skips snapshotVersion update on null. Regression: dedup + dirty-still-creates + clean-no-prior-snapshot tests.
+4. **revert object-loss surfacing** (htmlProjectGitService restoreCommitTree): occasional race left ref pointing to missing object; restore silently produced empty. FIX: explicit `git.readCommit(oid)` guard at start throws `Cannot restore commit ... (object missing or corrupt)`. Regression: bogus oid → clear error.
+5. **preview blob charset** (htmlPreviewService): blob MIME `text/html` lacked charset → zh-TW locale rendered Chinese as Big5 garbage. FIX: `text/html;charset=utf-8` (matches the existing data-URL path which already had charset).
+All 1114 tests green (was 1110, +4 regression); typecheck clean.
+
+
 
 
 

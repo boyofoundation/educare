@@ -40,6 +40,7 @@ vi.mock('./htmlProjectToolService', () => ({
 vi.mock('./htmlProjectStore', () => ({
   htmlProjectStore: {
     createSnapshot: mockCreateSnapshot,
+    createRunStartSnapshot: mockCreateSnapshot,
     listSnapshots: vi.fn(),
     revertToSnapshot: vi.fn(),
   },

@@ -334,7 +334,9 @@ export async function commitAll(
   // snapshot commit 一律記錄當前狀態 (createSnapshot 語意);其餘預設無變更即回傳 null。
   // run-start 去重 (D4) 由呼叫端 (store) 在呼叫前判斷。
   const allowEmpty = options.allowEmpty ?? Boolean(isSnapshot);
-  const commitTime = timestamp ?? now();
+  // isomorphic-git 的 author/committer timestamp 規格為「Unix 秒」(非毫秒)。
+  // 呼叫端傳毫秒 (Date.now);此處統一轉秒,log() 讀回時再 ×1000 還原毫秒。
+  const commitTime = Math.floor((timestamp ?? now()) / 1000);
   const identity = {
     author: { ...COMMIT_AUTHOR, timestamp: commitTime, timezoneOffset: 0 },
     committer: { ...COMMIT_AUTHOR, timestamp: commitTime, timezoneOffset: 0 },
@@ -498,18 +500,14 @@ export async function log(
   options: { depth?: number } = {},
 ): Promise<GitCommitSummary[]> {
   const { fs, git, dir, gitdir } = await ensureContext(projectId);
-  // unborn HEAD (fresh repo 無 commit):git.log 拋 'Could not find refs/heads/main';
-  // 視為空歷史 (listSnapshots/resolveVersion 於全新專案應回空,而非拋錯)。
-  let commits;
-  try {
-    commits = await git.log({ fs: fs as AnyFs, dir, gitdir, depth: options.depth });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/Could not find|does not exist|unborn/i.test(message)) {
-      return [];
-    }
-    throw error;
+  // unborn HEAD (fresh repo 無 commit):視為空歷史 (非錯誤)。
+  // 注意:不可在此用寬鬆 try/catch 吞 git.log 的錯誤 — missing-object (repo 損壞)
+  // 也會丟「Could not find...」訊息,會被誤判為空歷史而遮蔽真正的問題。
+  // 故先以 hasCommits 明確區分 unborn,其餘錯誤一律往上拋。
+  if (!(await hasCommits(git, fs, dir, gitdir))) {
+    return [];
   }
+  const commits = await git.log({ fs: fs as AnyFs, dir, gitdir, depth: options.depth });
   const summaries: GitCommitSummary[] = [];
   for (const entry of commits) {
     const message = entry.commit.message;
@@ -552,6 +550,15 @@ export async function restoreCommitTree(
   oid: string,
 ): Promise<{ filesRestored: number }> {
   const { fs, promises, git, dir, gitdir } = await ensureContext(projectId);
+
+  // 0. 先驗證目標 commit 物件存在可讀。LightningFS 持久化偶發 race 可能使 ref 指向
+  // 不存在的 object — 此處明確報錯,避免後續 walk 靜默回空導致「還原成空專案」。
+  try {
+    await git.readCommit({ fs: fs as AnyFs, dir, gitdir, oid });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cannot restore commit ${oid} (object missing or corrupt): ${message}`);
+  }
 
   // 1. 收集目標 tree 全部檔案 (含 .educare) 並寫回工作樹
   const targetFiles = new Set<string>();

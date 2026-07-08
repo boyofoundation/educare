@@ -825,7 +825,9 @@ class HtmlPreviewService {
       typeof URL.createObjectURL === 'function' &&
       typeof globalThis.Blob === 'function'
     ) {
-      url = URL.createObjectURL(new globalThis.Blob([artifact.html], { type: 'text/html' }));
+      url = URL.createObjectURL(
+        new globalThis.Blob([artifact.html], { type: 'text/html;charset=utf-8' }),
+      );
     } else {
       urlType = 'data';
       url = toDataUrl(artifact.html);

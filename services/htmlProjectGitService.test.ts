@@ -308,6 +308,27 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     expect(commits).toHaveLength(1); // 舊歷史已清除,只剩新 commit
   });
 
+  it('commit timestamp: 呼叫端傳毫秒,log() 回傳正確毫秒 (Bug 1 regression)', async () => {
+    const projectId = 'proj-ts';
+    await ensureRepo(projectId);
+    await writeProjectFile(projectId, 'index.html', '<html></html>');
+    // 1700000000000 ms (可被 1000 整除 → floor(ms/1000)*1000 == ms)
+    const fixedMs = 1_700_000_000_000;
+    await commitAll(projectId, 'ts-test', { previewVersion: 1, timestamp: fixedMs });
+    const commits = await log(projectId);
+    expect(commits[0].timestamp).toBe(fixedMs); // 舊 bug 會得到 fixedMs*1000 (遙遠未來)
+  });
+
+  it('restoreCommitTree:目標 commit 不存在時拋明確錯誤 (Bug 4 regression)', async () => {
+    const projectId = 'proj-restore-missing';
+    await ensureRepo(projectId);
+    await writeProjectFile(projectId, 'index.html', '<html></html>');
+    await commitAll(projectId, 'init', { previewVersion: 1 });
+    await expect(restoreCommitTree(projectId, '0'.repeat(40))).rejects.toThrow(
+      /Cannot restore commit.*missing or corrupt/,
+    );
+  });
+
   it('lightning-fs 自訂 backend 選項存在 (in-memory fallback 前提)', async () => {
     // 驗證 LightningFS Options 接受自訂 db backend (供無 IndexedDB 環境 fallback)
     // 透過 createIsolatedFs 已驗證 wipe 選項;此處驗證 db 選項介面存在不拋錯
