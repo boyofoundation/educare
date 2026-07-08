@@ -4,6 +4,9 @@ import {
   HtmlProjectFile,
   HtmlProjectFileDescriptor,
   HtmlProjectFileKind,
+  HtmlProjectGitCommitResult,
+  HtmlProjectGitLogCommit,
+  HtmlProjectGitStatusResult,
   HtmlProjectListSnapshotsResult,
   HtmlProjectRevertToSnapshotResult,
   HtmlProjectSnapshot,
@@ -1025,6 +1028,54 @@ class HtmlProjectStore {
       runtimeDiagnosticsCleared: true,
       filesRestored,
     };
+  }
+
+  // --- Phase 3/4 git 版本歷史 (供 AgentRunPanel UI) ---
+
+  /**
+   * 取得完整 commit 歷史 (新到舊,不設 20 筆上限)。
+   * 供版本歷史面板顯示 (區別 listSnapshots 只回 snapshot commits 且上限 20)。
+   */
+  async getHistory(projectId: string): Promise<HtmlProjectGitLogCommit[]> {
+    const db = await getDb();
+    await requireProject(db, projectId);
+    await this.ensureMigrated(projectId);
+    return (await gitService.log(projectId)) as HtmlProjectGitLogCommit[];
+  }
+
+  /** 工作樹狀態 (dirty 偵測,供「提交變更」按鈕亮起)。 */
+  async getWorkingTreeStatus(projectId: string): Promise<HtmlProjectGitStatusResult> {
+    const db = await getDb();
+    await requireProject(db, projectId);
+    await this.ensureMigrated(projectId);
+    const result = await gitService.status(projectId);
+    return { projectId, ...result };
+  }
+
+  /**
+   * 提交目前工作樹的未提交變更 (供 UI「提交變更」按鈕)。
+   * 成功後 previewVersion +1 (維持單調遞增)。無變更時 committed=false。
+   */
+  async commitChanges(projectId: string, message: string): Promise<HtmlProjectGitCommitResult> {
+    const db = await getDb();
+    await this.ensureMigrated(projectId);
+    const project = await requireProject(db, projectId);
+    const trimmed = (message ?? '').trim();
+    if (!trimmed) {
+      throw new Error('Commit message is required.');
+    }
+    const oid = await gitService.commitAll(projectId, trimmed, {
+      previewVersion: project.previewVersion,
+    });
+    if (oid) {
+      const nextProject: HtmlProject = {
+        ...project,
+        updatedAt: now(),
+        previewVersion: project.previewVersion + 1,
+      };
+      await updateProjectRecord(db, nextProject);
+    }
+    return { projectId, committed: oid !== null, oid, message: trimmed };
   }
 
   /**

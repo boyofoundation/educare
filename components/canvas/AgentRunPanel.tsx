@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import type { AgentRunState, HtmlProjectSnapshot } from '../../types';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import type { AgentRunState, HtmlProjectGitLogCommit } from '../../types';
 import { htmlProjectStore } from '../../services/htmlProjectStore';
 import { htmlPreviewService } from '../../services/htmlPreviewService';
 import { useAppContext } from '../core/useAppContext';
@@ -42,51 +42,105 @@ const formatTime = (ms: number): string => {
   return date.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
 };
 
+const formatRelativeTime = (ms: number): string => {
+  const now = Date.now();
+  const diff = Math.max(0, now - ms);
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) {
+    return '剛剛';
+  }
+  if (minutes < 60) {
+    return `${minutes} 分鐘前`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} 小時前`;
+  }
+  const days = Math.floor(hours / 24);
+  if (days < 7) {
+    return `${days} 天前`;
+  }
+  return new Date(ms).toLocaleDateString('zh-TW');
+};
+
 export function AgentRunPanel({ projectId, runState }: AgentRunPanelProps): React.JSX.Element {
   const { actions } = useAppContext();
-  const [snapshots, setSnapshots] = useState<HtmlProjectSnapshot[]>([]);
-  const [isLoadingSnapshots, setIsLoadingSnapshots] = useState(false);
-  const [isReverting, setIsReverting] = useState<number | null>(null);
-  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [history, setHistory] = useState<HtmlProjectGitLogCommit[]>([]);
+  const [dirtyCount, setDirtyCount] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [revertingVersion, setRevertingVersion] = useState<number | null>(null);
+  const [expandedOid, setExpandedOid] = useState<string | null>(null);
+  const [commitDraftOpen, setCommitDraftOpen] = useState(false);
+  const [commitMessage, setCommitMessage] = useState('');
+  const [isCommitting, setIsCommitting] = useState(false);
 
-  const refreshSnapshots = useCallback(async () => {
-    setIsLoadingSnapshots(true);
-    setSnapshotError(null);
+  const refreshHistory = useCallback(async () => {
+    setIsLoading(true);
+    setHistoryError(null);
     try {
-      const result = await htmlProjectStore.listSnapshots(projectId);
-      setSnapshots(result.snapshots);
+      const [commits, status] = await Promise.all([
+        htmlProjectStore.getHistory(projectId),
+        htmlProjectStore.getWorkingTreeStatus(projectId),
+      ]);
+      setHistory(commits);
+      setDirtyCount(status.added.length + status.modified.length + status.deleted.length);
     } catch (error) {
-      setSnapshotError((error as Error).message);
+      setHistoryError((error as Error).message);
     } finally {
-      setIsLoadingSnapshots(false);
+      setIsLoading(false);
     }
   }, [projectId]);
 
-  // Load snapshots on mount, on run end, and when runState.snapshotVersion changes.
+  // Load history on mount, on run end, and when runState.snapshotVersion changes.
   useEffect(() => {
-    refreshSnapshots().catch(() => {
+    refreshHistory().catch(() => {
       // best-effort — handled in callback.
     });
-  }, [refreshSnapshots, runState?.status, runState?.snapshotVersion]);
+  }, [refreshHistory, runState?.status, runState?.snapshotVersion]);
 
   const handleRevert = async (version: number) => {
-    const confirmed = window.confirm(`還原至快照 v${version}?目前未儲存的變更會遺失。`);
+    const confirmed = window.confirm(`還原至版本 v${version}?目前未提交的變更會遺失。`);
     if (!confirmed) {
       return;
     }
-    setIsReverting(version);
-    setSnapshotError(null);
+    setRevertingVersion(version);
+    setHistoryError(null);
     try {
       await htmlProjectStore.revertToSnapshot(projectId, version);
       const nextPreview = await htmlPreviewService.resolveProjectForPreview(projectId);
       actions.setProjectPreview(nextPreview);
-      actions.appendProjectActivity(`已還原至快照 v${version}。`);
-      await refreshSnapshots();
+      actions.appendProjectActivity(`已還原至版本 v${version}。`);
+      await refreshHistory();
     } catch (error) {
-      setSnapshotError((error as Error).message);
-      actions.appendProjectActivity(`還原快照失敗:${(error as Error).message}`);
+      setHistoryError((error as Error).message);
+      actions.appendProjectActivity(`還原失敗:${(error as Error).message}`);
     } finally {
-      setIsReverting(null);
+      setRevertingVersion(null);
+    }
+  };
+
+  const handleCommit = async () => {
+    const trimmed = commitMessage.trim();
+    if (!trimmed) {
+      return;
+    }
+    setIsCommitting(true);
+    setHistoryError(null);
+    try {
+      const result = await htmlProjectStore.commitChanges(projectId, trimmed);
+      if (result.committed) {
+        actions.appendProjectActivity(`已提交變更 (${result.oid?.slice(0, 7)}):${trimmed}`);
+      } else {
+        actions.appendProjectActivity('無變更可提交。');
+      }
+      setCommitMessage('');
+      setCommitDraftOpen(false);
+      await refreshHistory();
+    } catch (error) {
+      setHistoryError((error as Error).message);
+    } finally {
+      setIsCommitting(false);
     }
   };
 
@@ -96,6 +150,14 @@ export function AgentRunPanel({ projectId, runState }: AgentRunPanelProps): Reac
   const todoPct = todoTotal > 0 ? Math.round((todoCompleted / todoTotal) * 100) : 0;
   const toolTrace = runState?.toolTrace ?? [];
   const recentTools = toolTrace.slice(-8);
+
+  const hasDirtyChanges = dirtyCount > 0;
+  const canCommit = hasDirtyChanges && commitMessage.trim().length > 0 && !isCommitting;
+
+  const revertableCommits = useMemo(
+    () => history.filter(commit => commit.isSnapshot && typeof commit.previewVersion === 'number'),
+    [history],
+  );
 
   return (
     <div
@@ -218,52 +280,152 @@ export function AgentRunPanel({ projectId, runState }: AgentRunPanelProps): Reac
         </div>
       </div>
 
-      {/* Snapshots section (G11) */}
+      {/* Version history section (git log + commit + revert) */}
       <div className='rounded-xl border border-gray-800 bg-gray-950/40 p-3'>
         <div className='mb-2 flex flex-wrap items-center gap-2'>
-          <span className='text-[10px] uppercase tracking-wider text-gray-500'>快照</span>
+          <span className='text-[10px] uppercase tracking-wider text-gray-500'>版本歷史</span>
+          {hasDirtyChanges ? (
+            <span
+              className='rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200'
+              data-testid='dirty-badge'
+            >
+              {dirtyCount} 個未提交變更
+            </span>
+          ) : (
+            <span className='text-[10px] text-emerald-300/80' data-testid='clean-badge'>
+              工作樹乾淨
+            </span>
+          )}
           <button
             type='button'
-            onClick={refreshSnapshots}
-            disabled={isLoadingSnapshots}
-            className='ml-auto rounded-full border border-gray-700 bg-gray-800/80 px-2 py-0.5 text-[10px] text-gray-300 transition hover:border-gray-600 hover:text-white disabled:opacity-50'
-            aria-label='重新載入快照'
+            onClick={() => setCommitDraftOpen(open => !open)}
+            disabled={!hasDirtyChanges || isCommitting}
+            className='ml-auto rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-40'
+            aria-label='提交變更'
+            data-testid='commit-changes-button'
           >
-            {isLoadingSnapshots ? '載入中…' : '重新載入'}
+            提交變更
+          </button>
+          <button
+            type='button'
+            onClick={refreshHistory}
+            disabled={isLoading}
+            className='rounded-full border border-gray-700 bg-gray-800/80 px-2 py-0.5 text-[10px] text-gray-300 transition hover:border-gray-600 hover:text-white disabled:opacity-50'
+            aria-label='重新載入歷史'
+          >
+            {isLoading ? '載入中…' : '重新載入'}
           </button>
         </div>
-        {snapshotError && (
+
+        {commitDraftOpen && (
+          <div className='mb-2 flex flex-wrap items-center gap-2' data-testid='commit-draft'>
+            <input
+              type='text'
+              value={commitMessage}
+              onChange={event => setCommitMessage(event.target.value)}
+              placeholder='提交訊息 (例如:加入首頁導覽列)'
+              className='min-w-0 flex-1 rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-[11px] text-gray-100 placeholder:text-gray-600 focus:border-cyan-500 focus:outline-none'
+              data-testid='commit-message-input'
+              disabled={isCommitting}
+            />
+            <button
+              type='button'
+              onClick={handleCommit}
+              disabled={!canCommit}
+              className='rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-100 transition hover:bg-emerald-500/20 disabled:opacity-40'
+              data-testid='commit-confirm-button'
+            >
+              {isCommitting ? '提交中…' : '確認提交'}
+            </button>
+            <button
+              type='button'
+              onClick={() => {
+                setCommitDraftOpen(false);
+                setCommitMessage('');
+              }}
+              disabled={isCommitting}
+              className='rounded-md border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200 disabled:opacity-40'
+            >
+              取消
+            </button>
+          </div>
+        )}
+
+        {historyError && (
           <p className='mb-2 text-[11px] text-rose-300' role='alert'>
-            快照錯誤:{snapshotError}
+            歷史錯誤:{historyError}
           </p>
         )}
-        {snapshots.length === 0 ? (
-          <p className='text-[11px] text-gray-500'>沒有可用的快照。</p>
+        {history.length === 0 ? (
+          <p className='text-[11px] text-gray-500'>尚無版本歷史。</p>
         ) : (
           <ul className='divide-y divide-gray-800'>
-            {snapshots.map(snapshot => {
-              const isRevertingThis = isReverting === snapshot.version;
+            {history.map(commit => {
+              const isExpanded = expandedOid === commit.oid;
+              const canRevert = revertableCommits.some(c => c.oid === commit.oid);
+              const isRevertingThis = canRevert && revertingVersion === commit.previewVersion;
               return (
                 <li
-                  key={snapshot.version}
-                  className='flex flex-wrap items-center gap-2 py-2 text-[11px]'
-                  data-testid={`snapshot-row-${snapshot.version}`}
+                  key={commit.oid}
+                  className='py-2 text-[11px]'
+                  data-testid={`history-row-${commit.shortOid}`}
                 >
-                  <span className='font-mono text-gray-300'>v{snapshot.version}</span>
-                  <span className='text-gray-500'>·</span>
-                  <span className='text-gray-400'>{formatTime(snapshot.createdAt)}</span>
-                  {snapshot.note && (
-                    <span className='truncate text-gray-500'>· {snapshot.note}</span>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <button
+                      type='button'
+                      onClick={() => setExpandedOid(isExpanded ? null : commit.oid)}
+                      className='font-mono text-gray-400 transition hover:text-gray-200'
+                      aria-label={isExpanded ? '收合檔案清單' : '展開檔案清單'}
+                      aria-expanded={isExpanded}
+                      data-testid={`history-expand-${commit.shortOid}`}
+                    >
+                      {isExpanded ? '▾' : '▸'}
+                    </button>
+                    <span className='font-mono text-gray-300' title={commit.oid}>
+                      {commit.shortOid}
+                    </span>
+                    <span className='text-gray-500'>·</span>
+                    <span className='max-w-[12rem] truncate text-gray-200' title={commit.note}>
+                      {commit.note || '(無訊息)'}
+                    </span>
+                    {commit.isSnapshot && (
+                      <span className='rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] text-cyan-200'>
+                        snapshot
+                      </span>
+                    )}
+                    <span className='text-gray-500' title={formatTime(commit.timestamp)}>
+                      · {formatRelativeTime(commit.timestamp)}
+                    </span>
+                    <span className='text-gray-600'>· {commit.files.length} 檔</span>
+                    {canRevert && (
+                      <button
+                        type='button'
+                        onClick={() => handleRevert(commit.previewVersion as number)}
+                        disabled={revertingVersion !== null}
+                        className='ml-auto rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50'
+                        aria-label={`還原至版本 v${commit.previewVersion}`}
+                        data-testid={`history-revert-${commit.shortOid}`}
+                      >
+                        {isRevertingThis ? '還原中…' : '還原'}
+                      </button>
+                    )}
+                  </div>
+                  {isExpanded && (
+                    <ul
+                      className='mt-1 ml-6 list-disc space-y-0.5 text-[10px] text-gray-500'
+                      data-testid={`history-files-${commit.shortOid}`}
+                    >
+                      {commit.files.length === 0 ? (
+                        <li className='list-none text-gray-600'>無檔案</li>
+                      ) : (
+                        commit.files.map(path => (
+                          <li key={path} className='font-mono'>
+                            {path}
+                          </li>
+                        ))
+                      )}
+                    </ul>
                   )}
-                  <button
-                    type='button'
-                    onClick={() => handleRevert(snapshot.version)}
-                    disabled={isReverting !== null}
-                    className='ml-auto rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50'
-                    aria-label={`還原至快照 v${snapshot.version}`}
-                  >
-                    {isRevertingThis ? '還原中…' : '還原'}
-                  </button>
                 </li>
               );
             })}
