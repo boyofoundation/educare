@@ -61,10 +61,6 @@ const MAX_DIFF_CONTENT_SIZE = 250 * 1024;
  * 注入 buffer polyfill (lazy,僅在使用 git 時載入,不影響首屏 bundle — D7)。
  */
 let bufferPolyfilled = false;
-/** 測試專用:重置 polyfill 旗標 (搭配 vi.resetModules 模擬無 Buffer 環境)。 */
-export function __resetBufferPolyfillFlagForTesting(): void {
-  bufferPolyfilled = false;
-}
 async function ensureBufferPolyfill(): Promise<void> {
   if (bufferPolyfilled) {
     return;
@@ -1031,7 +1027,4 @@ export async function createIsolatedFs(name: string): Promise<FsInstance> {
   return new LightningFS(name, { wipe: true });
 }
 
-// Date.now() 在 workflow script 不可用,但本檔為執行期模組 (非 workflow),Date.now() 可用。
 const now = (): number => Date.now();
-
-export type { HtmlProjectFileKind };
