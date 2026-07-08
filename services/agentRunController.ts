@@ -243,17 +243,15 @@ export class AgentRunController {
     this.linkCallerSignal();
 
     // G11: best-effort run-start snapshot (only when project mode is active).
-    // D4 去重:createRunStartSnapshot 在「工作樹乾淨且已有同 version snapshot」時回傳 null,
-    // 不再每次 run 疊一筆空 run-start commit。
+    // D4 去重:createRunStartSnapshot 在「工作樹乾淨且已有同 version snapshot」時
+    // 重用既有 snapshot,不疊空 run-start commit。
     if (!resumeFrom && effectiveHtmlProjectEnabled && options.activeProjectId) {
       try {
         const snapshot = await htmlProjectStore.createRunStartSnapshot(
           options.activeProjectId,
           RUN_START_SNAPSHOT_NOTE,
         );
-        if (snapshot) {
-          this.state.snapshotVersion = snapshot.version;
-        }
+        this.state.snapshotVersion = snapshot.version;
       } catch {
         // best-effort — swallow.
       }

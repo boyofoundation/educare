@@ -122,6 +122,32 @@ describe('htmlPreviewService', () => {
     expect(artifact.html).toContain('console.log("preview");');
   });
 
+  it('preview blob type 含 charset=utf-8,中文內容不亂碼 (B5 regression)', async () => {
+    const chineseFile: HtmlProjectFile = {
+      ...htmlFile,
+      content:
+        '<!doctype html><html><head></head><body><p>中文測試內容:繁體字預覽</p></body></html>',
+      dependencies: [],
+    };
+    mockGetProject.mockResolvedValue(project);
+    mockListFiles.mockResolvedValue([{ path: '/index.html' }]);
+    mockReadFile.mockResolvedValue(chineseFile);
+
+    const { htmlPreviewService } = await import('./htmlPreviewService');
+
+    const artifact = await htmlPreviewService.resolveProjectForPreview('project-1');
+
+    expect(artifact.previewReady).toBe(true);
+    expect(artifact.html).toContain('中文測試內容:繁體字預覽');
+    // 捕捉傳給 createObjectURL 的 Blob,驗證 MIME type 明確標示 charset
+    // (缺 charset 時瀏覽器可能以非 utf-8 解碼,中文變亂碼)
+    const createObjectURL = URL.createObjectURL as ReturnType<typeof vi.fn>;
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    const blob = createObjectURL.mock.calls[0][0] as InstanceType<typeof globalThis.Blob>;
+    expect(blob).toBeInstanceOf(globalThis.Blob);
+    expect(blob.type).toBe('text/html;charset=utf-8');
+  });
+
   it('returns missing_reference diagnostics when preview dependencies are missing', async () => {
     mockGetProject.mockResolvedValue(project);
     mockListFiles.mockResolvedValue([{ path: '/index.html' }]);

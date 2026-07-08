@@ -136,17 +136,22 @@ describe('htmlProjectStore snapshots + migration (US-003)', () => {
     expect(list.snapshots.every(s => s.note !== 'Manual edit')).toBe(true);
   });
 
-  it('createRunStartSnapshot:clean + 同 version snapshot 已存在時去重回傳 null (Bug 3 / D4)', async () => {
+  it('createRunStartSnapshot:clean + 同 version snapshot 已存在時去重回傳既有 snapshot (Bug 3 / D4)', async () => {
     const project = await createProject();
     await htmlProjectStore.writeFiles(project.id, [
       { path: '/index.html', kind: 'html', content: '<html>v1</html>' },
     ]);
     const snap = await htmlProjectStore.createSnapshot(project.id, 'snap1');
     const versionAtSnap = snap.version;
+    const existingBefore = (await htmlProjectStore.listSnapshots(project.id)).snapshots;
+    expect(existingBefore).toHaveLength(1);
 
-    // 工作樹乾淨 + 已有同 version snapshot → 去重,不新增 commit
+    // 工作樹乾淨 + 已有同 version snapshot → 去重,不新增 commit,回傳既有 snapshot
     const deduped = await htmlProjectStore.createRunStartSnapshot(project.id, 'run-start');
-    expect(deduped).toBeNull();
+    const currentVersion = (await htmlProjectStore.getProject(project.id))!.previewVersion;
+    expect(deduped.version).toBe(currentVersion);
+    expect(deduped.version).toBe(versionAtSnap);
+    expect(deduped.oid).toBe(existingBefore[0].oid);
     const logAfterDedup = await gitLog(project.id);
     const snapshotCommitsAfter = (await htmlProjectStore.listSnapshots(project.id)).snapshots;
     expect(snapshotCommitsAfter).toHaveLength(1); // 仍只有 snap1,無多餘 run-start commit

@@ -9,6 +9,11 @@
  * - D7: isomorphic-git / lightning-fs / diff 全程動態 import，獨立 vite chunk，不進首屏 bundle。
  *
  * 本檔僅處理 git 層；檔案 metadata、encoding 邊界、reserved-path 防護由 htmlProjectStore 负责。
+ *
+ * 已知限制 (2026-07-08 手動 e2e 一次性觀察,無法重現):LightningFS superblock 的 debounce
+ * flush 與操作交錯可能產生持久化 race,使 branch ref 指向不存在的 commit object(repo 損壞)。
+ * 此類損壞會由 log()/status()/restoreCommitTree() 以錯誤浮現(不靜默回空歷史);
+ * 人工修復方式:把 ref 寫回最近一個有效 commit oid。
  */
 import type { HtmlProjectFileKind } from '../types';
 
@@ -291,6 +296,22 @@ export async function ensureRepo(projectId: string): Promise<void> {
   await ensureContext(projectId);
 }
 
+/**
+ * 是否為 unborn HEAD 訊號 (fresh repo 尚無任何 commit)。
+ * isomorphic-git 對「branch ref 不存在 (unborn)」與「ref 指向的 object 不存在 (repo 損壞)」
+ * 拋的都是 NotFoundError /「Could not find ...」,必須以「缺的目標」區分:
+ * ref 名稱 (HEAD / refs/...) = unborn;40-hex oid = 損壞,不得吞掉。
+ * 優先用結構化欄位 (code/data.what),訊息 regex 僅作 fallback。
+ */
+function isUnbornHeadError(error: unknown): boolean {
+  const err = error as { code?: string; data?: { what?: string } };
+  if (err?.code === 'NotFoundError' && typeof err.data?.what === 'string') {
+    return err.data.what === 'HEAD' || err.data.what.startsWith('refs/');
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /unborn|could not find (?:HEAD|refs\/)/i.test(message);
+}
+
 /** repo 是否已有 commit (HEAD 已 born)。 */
 async function hasCommits(
   git: GitModule,
@@ -301,8 +322,13 @@ async function hasCommits(
   try {
     await git.log({ fs: fs as AnyFs, dir, gitdir, depth: 1 });
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isUnbornHeadError(error)) {
+      return false;
+    }
+    // 其他錯誤 (如 ref 指向不存在的 object = repo 損壞) 不可誤判為「無 commit」,
+    // 否則 log()/status() 會靜默回報空歷史/全 untracked,遮蔽損壞訊號 (Bug 2)。
+    throw error;
   }
 }
 
@@ -488,6 +514,16 @@ function stripTrailers(message: string): string {
 }
 
 /**
+ * commit timestamp (Unix 秒) → 毫秒。
+ * 向下相容 (Bug 1):2026-07-08 修復前的 commitAll 誤把毫秒值存進 commit 物件;
+ * 合法秒值不可能 ≥ 1e11 (≈ 西元 5138 年),故 ≥ 1e11 視為 legacy 毫秒原樣回傳。
+ * 所有含 legacy commits 的 repo 淘汰後可移除此 heuristic。
+ */
+function normalizeCommitTimestamp(raw: number): number {
+  return raw >= 1e11 ? raw : raw * 1000;
+}
+
+/**
  * 取得 commit 歷史 (新到舊)。
  * files 欄位由 tree walk 取得 (濾除 .educare)。
  */
@@ -514,7 +550,7 @@ export async function log(
       message,
       note: stripTrailers(message),
       previewVersion: parsePreviewVersion(message),
-      timestamp: entry.commit.committer.timestamp * 1000,
+      timestamp: normalizeCommitTimestamp(entry.commit.committer.timestamp),
       isSnapshot: isSnapshotCommit(message),
       files,
     });

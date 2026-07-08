@@ -32,11 +32,12 @@ import {
 describe('htmlProjectGitService (Phase 1 spike)', () => {
   let counter = 0;
   const uniqueId = () => `spike-${Date.now()}-${counter++}`;
+  let fsInstance: Awaited<ReturnType<typeof createIsolatedFs>>;
 
   beforeEach(async () => {
     __resetGitServiceForTesting();
-    const fs = await createIsolatedFs(uniqueId());
-    __setFsInstanceForTesting(fs);
+    fsInstance = await createIsolatedFs(uniqueId());
+    __setFsInstanceForTesting(fsInstance);
   });
 
   afterEach(() => {
@@ -310,13 +311,29 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
 
   it('commit timestamp: 呼叫端傳毫秒,log() 回傳正確毫秒 (Bug 1 regression)', async () => {
     const projectId = 'proj-ts';
+    const dir = `/projects/${projectId}`;
+    const gitdir = `${dir}/.git`;
     await ensureRepo(projectId);
     await writeProjectFile(projectId, 'index.html', '<html></html>');
     // 1700000000000 ms (可被 1000 整除 → floor(ms/1000)*1000 == ms)
     const fixedMs = 1_700_000_000_000;
-    await commitAll(projectId, 'ts-test', { previewVersion: 1, timestamp: fixedMs });
+    const oid = await commitAll(projectId, 'ts-test', { previewVersion: 1, timestamp: fixedMs });
     const commits = await log(projectId);
     expect(commits[0].timestamp).toBe(fixedMs); // 舊 bug 會得到 fixedMs*1000 (遙遠未來)
+
+    // 額外驗證:commit 物件實際「儲存」的是 Unix 秒 (非毫秒)。單靠上面 log() 的斷言無法
+    // 抓到「秒轉換本身」的再回歸 — 若 commitAll 回歸成直接存毫秒 (>= 1e11),
+    // normalizeCommitTimestamp 的 legacy heuristic 會原樣回傳,log() 斷言仍會通過而
+    // 掩蓋問題。故直接以 raw isomorphic-git 讀出 commit object 檢查 committer.timestamp。
+    const git = await import('isomorphic-git');
+    type RawGitFs = Parameters<typeof git.readCommit>[0]['fs'];
+    const { commit } = await git.readCommit({
+      fs: fsInstance as unknown as RawGitFs,
+      dir,
+      gitdir,
+      oid: oid!,
+    });
+    expect(commit.committer.timestamp).toBe(Math.floor(fixedMs / 1000));
   });
 
   it('restoreCommitTree:目標 commit 不存在時拋明確錯誤 (Bug 4 regression)', async () => {
@@ -342,6 +359,63 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     const fs = new LightningFS(`opt-check-${uniqueId()}`, { wipe: true });
     expect(fs).toBeTruthy();
     expect(typeof (fs as { promises: unknown }).promises).toBe('object');
+  });
+
+  it('log timestamp heuristic:legacy 毫秒 commit 原樣回傳,正常 commit 秒→毫秒還原 (B1 regression)', async () => {
+    const projectId = 'proj-legacy-ms';
+    const dir = `/projects/${projectId}`;
+    const gitdir = `${dir}/.git`;
+    await ensureRepo(projectId);
+    await writeProjectFile(projectId, 'index.html', '<html></html>');
+    // 正常路徑:commitAll 傳毫秒 → commit 物件存 Unix 秒 → log 還原毫秒
+    const normalMs = 1_700_000_000_000;
+    await commitAll(projectId, 'normal', { previewVersion: 1, timestamp: normalMs });
+
+    // 模擬 2026-07-08 修復前的 legacy commit:直接以 raw isomorphic-git 寫入「毫秒」timestamp。
+    // (上面的 commitAll 已觸發 service 的 isomorphic-git 載入含 Buffer polyfill,此處可安全直用)
+    const legacyMs = 1_783_505_750_952; // ≥ 1e11 → heuristic 視為 legacy 毫秒,原樣回傳
+    const git = await import('isomorphic-git');
+    type RawGitFs = Parameters<typeof git.commit>[0]['fs'];
+    const signature = {
+      name: 'EduCare',
+      email: 'educare@local',
+      timestamp: legacyMs,
+      timezoneOffset: 0,
+    };
+    await git.commit({
+      fs: fsInstance as unknown as RawGitFs,
+      dir,
+      gitdir,
+      message: 'legacy',
+      author: signature,
+      committer: signature,
+    });
+
+    const commits = await log(projectId);
+    expect(commits).toHaveLength(2);
+    expect(commits[0].note).toBe('legacy');
+    expect(commits[0].timestamp).toBe(legacyMs); // 不可再 ×1000 (否則變成遙遠未來)
+    expect(commits[1].note).toBe('normal');
+    expect(commits[1].timestamp).toBe(normalMs); // 正常 commit:存秒,log ×1000 還原毫秒
+  });
+
+  it('repo 損壞 (ref 指向不存在 object) 時 log/status 拋錯不吞 (B2 regression)', async () => {
+    const projectId = 'proj-corrupt';
+    await ensureRepo(projectId);
+    await writeProjectFile(projectId, 'index.html', '<html></html>');
+    await commitAll(projectId, 'init', { previewVersion: 1 });
+
+    // 覆寫 branch ref 為不存在的 oid,模擬 repo 損壞 (ref 指向 missing object)
+    const badOid = '1'.repeat(40);
+    await fsInstance.promises.writeFile(
+      `/projects/${projectId}/.git/refs/heads/main`,
+      `${badOid}\n`,
+      'utf8',
+    );
+
+    // hasCommits 僅 unborn HEAD 回空歷史;損壞訊號必須往上拋,不得靜默回空/全 untracked
+    await expect(log(projectId)).rejects.toThrow(new RegExp(`${badOid}|Could not find`));
+    await expect(status(projectId)).rejects.toThrow();
   });
 
   // 備註:瀏覽器 Buffer polyfill (getGit 注入 globalThis.Buffer) 無法在 vitest 回歸

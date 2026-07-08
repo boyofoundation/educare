@@ -93,3 +93,15 @@ All 1114 tests green (was 1110, +4 regression); typecheck clean.
 
 
 
+
+## 2026-07-09 — e2e bugfix plan 完整性驗證 + 補漏 (ralph session 47f3fbea)
+Task: 檢查 .omc/plans/2026-07-08-html-git-e2e-bugfix.md 是否完全修復。
+結論:4638a54 修了主體,但對照計畫驗收標準有 5 個缺口,本次補齊:
+- B1 缺 legacy 毫秒 heuristic(計畫標「必要」):log() 加 normalizeCommitTimestamp(raw>=1e11 原樣回傳)— gitService.ts
+- B2 hasCommits 仍吞所有錯誤 → 損壞 repo 靜默空歷史/全 untracked:加 isUnbornHeadError(結構化 code/data.what 優先,regex fallback),其餘 rethrow — gitService.ts
+- B3 驗收 4:dedup 命中時 snapshotVersion 未設值:createRunStartSnapshot 改回傳既有 snapshot(不再 null),controller 一律設 snapshotVersion — htmlProjectStore.ts / agentRunController.ts
+- B4 檔頭已知限制註記 + 母計畫風險表補列(兩處文件)
+- B5 缺測試:補 blob charset 斷言
+測試(test-automator 補):legacy-ms heuristic、corruption log/status 拋錯、dedup 回傳既有 snapshot、charset — 5 檔 62 tests 綠。
+Learnings: isomorphic-git unborn HEAD 與 missing-object 都拋 NotFoundError/'Could not find',要用 data.what 是 ref 名稱還是 oid 區分;proxy 上 subagent model 一律用 fable。
+後續:architect APPROVED(附非阻斷建議:readCommit 秒儲存斷言 → 已補);deslop pass(移正 createSnapshot 的 D3 docblock、精簡 controller 註解);lint 修正 Blob no-undef(依 eslint.config.js 慣例用 globalThis.Blob)。最終 gate:vitest 全綠 + typecheck 0 + lint 0。全套件曾出現 1 次非本區 flaky failure(同 code 前後兩次全綠,changed-area 測試 3 連跑 62/62 穩定)。
