@@ -174,7 +174,7 @@ describe('buildHtmlProjectSystemPrompt', () => {
       'All HTML project tools are available for this turn. Recommended HTML tool packs for this turn: inspect, edit, todo_finalize, preview_recheck.',
     );
     expect(prompt).toContain(
-      'Available HTML project tools: createProject, listProjects, openProject, getProjectSummary, searchFiles, writeFiles, replaceInFile, listFiles, modifyLinesInFile, readFile, listProjectTodos, setProjectTodos, updateProjectTodo, deleteProjectTodo, checkProjectTodos, deleteFile, copyFile, renameFile, setEntrypoint, renderPreview, reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot, lintProject.',
+      'Available HTML project tools: createProject, listProjects, openProject, getProjectSummary, searchFiles, writeFiles, replaceInFile, listFiles, modifyLinesInFile, readFile, listProjectTodos, setProjectTodos, updateProjectTodo, deleteProjectTodo, checkProjectTodos, deleteFile, copyFile, renameFile, setEntrypoint, renderPreview, reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot, lintProject, gitStatus, gitLog, gitDiff, gitCommit, gitListBranches, gitSwitchBranch.',
     );
     expect(prompt).toContain(
       'The system already injected a current project summary for this turn:',
@@ -203,7 +203,7 @@ describe('buildHtmlProjectSystemPrompt', () => {
       'HTML tool packs exposed for this turn: inspect, todo_finalize, preview_recheck.',
     );
     expect(prompt).toContain(
-      'Visible HTML project tools: getProjectSummary, listFiles, searchFiles, readFile, listProjectTodos, checkProjectTodos, renderPreview, reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot, lintProject.',
+      'Visible HTML project tools: getProjectSummary, listFiles, searchFiles, readFile, listProjectTodos, gitStatus, gitLog, gitDiff, gitListBranches, checkProjectTodos, renderPreview, reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot, lintProject.',
     );
     expect(prompt).not.toContain(
       'Visible HTML project tools: getProjectSummary, listFiles, searchFiles, readFile, listProjectTodos, writeFiles',

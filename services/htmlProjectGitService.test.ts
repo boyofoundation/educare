@@ -57,8 +57,8 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     let commits = await log(projectId);
     expect(commits).toHaveLength(1);
     expect(commits[0].previewVersion).toBe(1);
-    expect(commits[0].files).toContain('index.html');
-    expect(commits[0].files).toContain('src/app.js');
+    expect(commits[0].files).toContain('/index.html');
+    expect(commits[0].files).toContain('/src/app.js');
 
     // 第二個 commit (modify 偵測)
     await writeProjectFile(projectId, 'index.html', '<html><body>updated</body></html>');
@@ -128,9 +128,9 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     // 驗證 .gitignore 符合的檔案仍收錄進 commit (ignored:true 語意)
     const commits = await log(projectId);
     const files = commits[0].files;
-    expect(files).toContain('debug.log');
-    expect(files).toContain('secrets/key.txt');
-    expect(files).toContain('app.js');
+    expect(files).toContain('/debug.log');
+    expect(files).toContain('/secrets/key.txt');
+    expect(files).toContain('/app.js');
 
     // 新增變更後 restore 回此 commit → 符合 .gitignore 的檔案存活
     await writeProjectFile(projectId, 'extra.txt', 'extra');
@@ -204,8 +204,8 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     await writeProjectFile(projectId, 'index.html', '<html>modified</html>');
     await writeProjectFile(projectId, 'new.js', 'console.log(2);');
     s = await status(projectId);
-    expect(s.modified).toContain('index.html');
-    expect(s.added).toContain('new.js');
+    expect(s.modified).toContain('/index.html');
+    expect(s.added).toContain('/new.js');
     expect(s.clean).toBe(false);
 
     // staged 後 status (commitAll 內部已 stage) — 重新取 clean
@@ -224,8 +224,8 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     await writeProjectFile(projectId, 'new.txt', 'hello');
 
     const result = await diff(projectId);
-    const htmlChange = result.files.find(f => f.path === 'index.html');
-    const newChange = result.files.find(f => f.path === 'new.txt');
+    const htmlChange = result.files.find(f => f.path === '/index.html');
+    const newChange = result.files.find(f => f.path === '/new.txt');
     expect(htmlChange?.status).toBe('modified');
     expect(htmlChange?.patch).toBeTruthy();
     expect(htmlChange?.patch).toContain('-<a>1</a>');
@@ -261,14 +261,20 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     await ensureRepo(projectId);
     await writeProjectFile(projectId, 'index.html', '<html></html>');
     const meta: HtmlProjectFileMetaMap = {
-      'index.html': { kind: 'html', encoding: 'utf-8', dependencies: ['/style.css'] },
+      'index.html': {
+        kind: 'html',
+        encoding: 'utf-8',
+        dependencies: ['/style.css'],
+        size: 13,
+        updatedAt: 1000,
+      },
     };
     await writeMeta(projectId, meta);
     await commitAll(projectId, 'Initial with meta', { previewVersion: 1 });
 
     // log files 濾除 .educare
     const commits = await log(projectId);
-    expect(commits[0].files).toContain('index.html');
+    expect(commits[0].files).toContain('/index.html');
     expect(commits[0].files.some(f => f.startsWith('.educare'))).toBe(false);
 
     // meta 可讀回
@@ -276,7 +282,9 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     expect(read['index.html']).toEqual(meta['index.html']);
 
     // restoreCommitTree 後 meta 仍存在 (隨 tree 還原)
-    await writeMeta(projectId, { 'index.html': { kind: 'html', encoding: 'utf-8' } });
+    await writeMeta(projectId, {
+      'index.html': { kind: 'html', encoding: 'utf-8', size: 13, updatedAt: 2000 },
+    });
     await commitAll(projectId, 'Overwrite meta', { previewVersion: 2 });
     await restoreCommitTree(projectId, commits[0].oid);
     const restored = await readMeta(projectId);

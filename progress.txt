@@ -61,6 +61,17 @@ Spike `gitStatus`/`commitAll` tests pass with the rewrite.
 
 ### Test isolation notes
 - Shared idb DB 'educare-html-projects' persists across tests/files. deleteDatabase HANGS (open connection blocks). Isolate via: unique FS name per test (createIsolatedFs wipe) + unique assistantId/projectId (timestamp-based) for count-sensitive tests. Do NOT use deleteDatabase in beforeEach.
-- Consumer test files (agentRunController/subagentService/llmService/toolService/etc.) — verify they mock htmlProjectStore (full-suite run in progress to confirm no regression).
+- Consumer test files (agentRunController/subagentService/llmService/toolService/etc.) — verified they mock htmlProjectStore (full-suite 1092/1092 green after Phase 2).
+
+## US-004 COMPLETE (Phase 3 — agent git tools + subagent exclusion)
+Files: types.ts (HtmlProjectGitToolName + 6 result types), services/htmlProjectToolService.ts (6 tools: names+packs+defs+handlers+dispatch), services/subagentService.ts (SUBAGENT_HTML_TOOL_EXCLUSIONS += gitCommit/gitSwitchBranch + prompt string), services/htmlProjectPrompting.ts (git guidance in edit pack), components/assistant/TemplateSelector.tsx (HTML Dev Agent 風險管理 point 6 → git vocabulary).
+Tests: services/htmlProjectGitTools.test.ts (13: pack composition, subagent exclusion, handler schema incl dirty-switch recoverable). 150 html-project tests green; typecheck clean.
+
+### US-004 design decisions
+- Git tools are **pack-dispatched, NOT harness-resident** (plan step 9): gitStatus/gitLog/gitDiff/gitListBranches → inspect pack (read-only, subagent-allowed); gitCommit/gitSwitchBranch → edit pack (excluded from subagents via SUBAGENT_HTML_TOOL_EXCLUSIONS).
+- Did NOT add git tools to HtmlProjectHarnessToolName (that would auto-attach them; plan step 9 says pack-dispatched). Added HtmlProjectGitToolName type + result types to types.ts instead.
+- **Path normalization**: gitService user-facing outputs (log.files, status arrays, diff paths) now prefix `/` to match the store's `/`-path convention (createSnapshot.files consistency; agent sees uniform paths). Internal FS/git operations stay relative (no leading /) for correct FS path joining. Spike test assertions updated to expect `/`-prefixed paths.
+- gitSwitchBranch wraps gitService errors (dirty tree / missing branch) in HtmlProjectToolRecoverableError so the agent can recover.
+
 
 

@@ -396,6 +396,9 @@ const buildPackSpecificGuidance = (packSet: HtmlProjectToolPackName[]): string[]
     guidance.push(
       'For path-level duplication or moves, prefer copyFile and renameFile instead of manually simulating those operations with readFile plus writeFiles plus deleteFile.',
     );
+    guidance.push(
+      'Version control: this project is a local git repository. writeFiles and other edit tools modify the working tree but do NOT auto-commit — uncommitted changes are visible via gitStatus. Commit small, coherent checkpoints with gitCommit (provide a concise message) rather than accumulating a large dirty tree. Before reporting completion, run gitStatus to confirm a clean tree (or commit remaining changes); use gitDiff to self-review pending changes, and gitLog to review history. Avoid gitSwitchBranch mid-task unless explicitly branching work. The historical snapshot tools (listSnapshots / revertToSnapshot) remain available for rolling back to a prior named snapshot if a sequence goes wrong.',
+    );
   }
 
   if (packSetLookup.has('todo_finalize')) {
