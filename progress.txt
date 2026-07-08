@@ -41,5 +41,26 @@ Spike: 11/11 green. Typecheck clean on new files.
 9. **diff 5.x ships NO types; @types/diff@8 is a deprecated stub resolving nothing.** Wrote ambient `diff.d.ts` shim (createPatch/diffLines/diffWords/diffChars + Change/Options types) mirroring csstree-validator.d.ts. lightning-fs 4.6.2 HAS built-in index.d.ts (no shim needed).
 
 ### gitService public API (consumed by store in Phase 2)
-ensureRepo, commitAll(id,msg,{previewVersion,isSnapshot,allowEmpty,timestamp}), log(id,{depth})→GitCommitSummary[], resolveVersion(id,version)→oid|undefined, restoreCommitTree(id,oid), status(id)→GitStatusResult, diff(id,{refA,refB}), listBranches/createBranch/switchBranch/currentBranch, deleteProjectDir(id), writeProjectFile/readProjectFile/deleteProjectFile/renameProjectFile, readMeta/writeMeta, __setFsInstanceForTesting/__resetGitServiceForTesting/createIsolatedFs (test helpers).
+ensureRepo, commitAll(id,msg,{previewVersion,isSnapshot,allowEmpty,timestamp}), log(id,{depth})→GitCommitSummary[], resolveVersion(id,version)→oid|undefined, restoreCommitTree(id,oid)→{filesRestored}, status(id)→GitStatusResult, diff(id,{refA,refB}), listBranches/createBranch/switchBranch/currentBranch, deleteProjectDir(id), writeProjectFile/readProjectFile/deleteProjectFile/renameProjectFile, readMeta/writeMeta, __setFsInstanceForTesting/__resetGitServiceForTesting/createIsolatedFs (test helpers).
+
+## US-002 + US-003 COMPLETE (Phase 2 — store LightningFS migration + snapshot shim + migration)
+Files: services/htmlProjectStore.ts (rewritten file ops + snapshots + ensureMigrated), types.ts (HtmlProjectSnapshot.oid added), htmlProjectGitService.ts (restoreCommitTree returns file count, log handles unborn HEAD, commitAll+status rewritten content-based).
+Tests: htmlProjectStore.test.ts (17: project CRUD/path/dep/todos/retention), htmlProjectStore.files.test.ts (10), htmlProjectStore.snapshots.test.ts (8: incl 4 migration scenarios). All 46 green + spike 11.
+
+### CRITICAL learning — isomorphic-git stat-cache false-unchanged (would cause SILENT DATA LOSS)
+isomorphic-git `statusMatrix`/workdir walker uses a **stat-cache fast-path** (`compareStats`): it reuses the cached index SHA when the file's `size`, `mtimeSeconds`, `ctimeSeconds`, and `ino` all match the staged entry — WITHOUT recomputing the content SHA. For files edited to the **same byte size within the same second** as the previous `git.add` (e.g. `v2`→`v3`, or any single-char edit committed fast), statusMatrix reports `unchanged` and the edit is DROPPED from the commit. LightningFS mtime is second-granular and inode is stable per path, so the cache hits. This is unacceptable for local versioning.
+**FIX**: `commitAll` and `status` NO LONGER use statusMatrix. They detect changes **content-based**: walk HEAD tree → `path→blobOid` (via `entry.oid()`, reads committed objects reliably); for each workdir file compute `git.hashBlob({object: bytes})` and compare. Deletions = HEAD files absent from workdir. This is correct regardless of stat cache. `diff()` was already content-based (bytesEqual) — unaffected.
+Spike `gitStatus`/`commitAll` tests pass with the rewrite.
+
+### Migration design (ensureMigrated, verified)
+- completion signal = idb PROJECT_FILES_STORE + PROJECT_SNAPSHOTS_STORE empty for project (NOT "FS has .git").
+- trigger = idb has file OR snapshot record (snapshot-only legacy covered).
+- replay idempotent: deleteProjectDir (clear) → ensureRepo → replay snapshots by createdAt asc (fileEntries undefined → empty tree commit) → write current files → "Migrated to git storage" commit → verify git.log non-empty → delete idb records. Failure keeps idb + throws (retry).
+- Web Locks `educare-migrate-<id>` cross-tab mutex + recheck; jsdom fallback to in-context `migrationPromises` Map dedup.
+- Called from ALL file/snapshot store entries (listFiles/listProjectFiles/readFile/writeFiles/copyFile/renameFile/deleteFile/searchFiles/createSnapshot/listSnapshots/revertToSnapshot). createSnapshot/createProject's ensureRepo best-effort.
+
+### Test isolation notes
+- Shared idb DB 'educare-html-projects' persists across tests/files. deleteDatabase HANGS (open connection blocks). Isolate via: unique FS name per test (createIsolatedFs wipe) + unique assistantId/projectId (timestamp-based) for count-sensitive tests. Do NOT use deleteDatabase in beforeEach.
+- Consumer test files (agentRunController/subagentService/llmService/toolService/etc.) — verify they mock htmlProjectStore (full-suite run in progress to confirm no regression).
+
 

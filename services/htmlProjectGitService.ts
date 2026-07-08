@@ -285,9 +285,18 @@ async function hasCommits(
 }
 
 /**
- * 暫存所有變更並 commit (D4)。statusMatrix({ignored:true}) → add/modify/remove。
- * - unborn HEAD: statusMatrix 對無 commit HEAD 不可靠,改以手動列舉工作樹 git.add 全部。
+ * 暫存所有變更並 commit (D4)。
+ *
+ * 變更偵測採 content-based (hashBlob 比對 HEAD tree blob oid),**不依賴 statusMatrix 的
+ * stat-cache 快速路徑**。isomorphic-git 的 statusMatrix 對「同 size 且同一秒內覆寫」的檔案
+ * 會因 mtimeSeconds/size/inode 命中快取而誤判為 unchanged (compareStats),造成實際內容變更
+ * 漏 commit — 對本地版控是不可接受的靜默資料遺失。故此處顯式比對內容 SHA。
+ *
+ * - added: 工作樹檔案不在 HEAD。
+ * - modified: 在兩處但 blob oid 不同。
+ * - deleted: HEAD 檔案不在工作樹 (排除 .git)。
  * - 無變更時:allowEmpty=false 回傳 null;allowEmpty=true 以 HEAD tree 建立 commit (run-start 語意)。
+ * - unborn HEAD: 全部工作樹檔案視為 added,建立 root commit。
  */
 export async function commitAll(
   projectId: string,
@@ -299,78 +308,104 @@ export async function commitAll(
   // snapshot commit 一律記錄當前狀態 (createSnapshot 語意);其餘預設無變更即回傳 null。
   // run-start 去重 (D4) 由呼叫端 (store) 在呼叫前判斷。
   const allowEmpty = options.allowEmpty ?? Boolean(isSnapshot);
+  const commitTime = timestamp ?? now();
+  const identity = {
+    author: { ...COMMIT_AUTHOR, timestamp: commitTime, timezoneOffset: 0 },
+    committer: { ...COMMIT_AUTHOR, timestamp: commitTime, timezoneOffset: 0 },
+  };
+  const builtMessage = buildCommitMessage(message, previewVersion, isSnapshot);
+
+  const workdirFiles = await listWorkdirFiles(promises, dir);
+  const workdirSet = new Set(workdirFiles);
 
   const born = await hasCommits(git, fs, dir, gitdir);
-
+  let headOid: string | null = null;
+  let headOids: Map<string, string> = new Map();
   if (born) {
-    const matrix = await git.statusMatrix({ fs: fs as AnyFs, dir, gitdir, ignored: true });
-    let staged = false;
-    for (const row of matrix) {
-      const [filepath, head, workdir] = row as [string, number, number, number];
-      // 跳過 git 內部路徑 (statusMatrix 不會自動排除 .git — 見 isGitInternalPath 說明)
-      if (isGitInternalPath(filepath)) {
-        continue;
-      }
-      // workdir: 0 absent | 1 identical-to-HEAD | 2 different-from-HEAD
-      // head:    0 absent | 1 present
-      if (workdir === 0) {
-        if (head === 1) {
-          await git.remove({ fs: fs as AnyFs, dir, gitdir, filepath });
-          staged = true;
-        }
-        // head=0 workdir=0:不存在於兩處,略過
-      } else if (workdir === 2) {
-        // added (head=0) 或 modified (head=1);force:true 覆寫 .gitignore (D4 ignored 語意)
-        await git.add({ fs: fs as AnyFs, dir, gitdir, filepath, force: true });
-        staged = true;
-      }
-      // workdir===1:與 HEAD 相同,無變更
-    }
+    headOid = await git.resolveRef({ fs: fs as AnyFs, dir, gitdir, ref: 'HEAD' });
+    headOids = await collectTreeOids(git, fs, dir, gitdir, headOid);
+  }
 
-    if (!staged && !allowEmpty) {
-      return null;
+  const toAdd: string[] = [];
+  for (const filepath of workdirFiles) {
+    const headBlobOid = headOids.get(filepath);
+    if (headBlobOid === undefined) {
+      toAdd.push(filepath); // added
+      continue;
     }
-
-    if (!staged && allowEmpty) {
-      // 以 HEAD tree 建立空 commit (run-start 快照邊界)
-      const headOid = await git.resolveRef({ fs: fs as AnyFs, dir, gitdir, ref: 'HEAD' });
-      const headCommit = await git.readCommit({ fs: fs as AnyFs, dir, gitdir, oid: headOid });
-      return git.commit({
-        fs: fs as AnyFs,
-        dir,
-        gitdir,
-        message: buildCommitMessage(message, previewVersion, isSnapshot),
-        author: { ...COMMIT_AUTHOR, timestamp: timestamp ?? now(), timezoneOffset: 0 },
-        committer: { ...COMMIT_AUTHOR, timestamp: timestamp ?? now(), timezoneOffset: 0 },
-        tree: headCommit.commit.tree,
-        parent: [headOid],
-      });
+    const bytes = await promises.readFile(`${dir}/${filepath}`);
+    const { oid } = await git.hashBlob({ object: bytes });
+    if (oid !== headBlobOid) {
+      toAdd.push(filepath); // modified (content-based,不受 stat cache 影響)
     }
+  }
+  const toDelete = born
+    ? Array.from(headOids.keys()).filter(
+        filepath => !workdirSet.has(filepath) && !isGitInternalPath(filepath),
+      )
+    : [];
 
+  const hasChanges = toAdd.length > 0 || toDelete.length > 0;
+
+  if (!hasChanges && !allowEmpty) {
+    return null;
+  }
+
+  for (const filepath of toAdd) {
+    await git.add({ fs: fs as AnyFs, dir, gitdir, filepath, force: true }); // force 覆寫 .gitignore (D4)
+  }
+  for (const filepath of toDelete) {
+    await git.remove({ fs: fs as AnyFs, dir, gitdir, filepath });
+  }
+
+  if (!hasChanges && allowEmpty && headOid) {
+    // 以 HEAD tree 建立空 commit (run-start 快照邊界)
+    const headCommit = await git.readCommit({ fs: fs as AnyFs, dir, gitdir, oid: headOid });
     return git.commit({
       fs: fs as AnyFs,
       dir,
       gitdir,
-      message: buildCommitMessage(message, previewVersion, isSnapshot),
-      author: { ...COMMIT_AUTHOR, timestamp: timestamp ?? now(), timezoneOffset: 0 },
-      committer: { ...COMMIT_AUTHOR, timestamp: timestamp ?? now(), timezoneOffset: 0 },
+      message: builtMessage,
+      ...identity,
+      tree: headCommit.commit.tree,
+      parent: [headOid],
     });
   }
 
-  // unborn HEAD:手動列舉工作樹全部 add (statusMatrix 對 unborn HEAD 不可靠)
-  const files = await listWorkdirFiles(promises, dir);
-  for (const filepath of files) {
-    await git.add({ fs: fs as AnyFs, dir, gitdir, filepath, force: true });
-  }
+  return git.commit({ fs: fs as AnyFs, dir, gitdir, message: builtMessage, ...identity });
+}
 
-  return git.commit({
+/** 收集 commit tree 的 path → blob oid (供 content-based 變更比對;排除 .git/.educare)。 */
+async function collectTreeOids(
+  git: GitModule,
+  fs: FsInstance,
+  dir: string,
+  gitdir: string,
+  oid: string,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  await git.walk({
     fs: fs as AnyFs,
     dir,
     gitdir,
-    message: buildCommitMessage(message, previewVersion, isSnapshot),
-    author: { ...COMMIT_AUTHOR, timestamp: timestamp ?? now(), timezoneOffset: 0 },
-    committer: { ...COMMIT_AUTHOR, timestamp: timestamp ?? now(), timezoneOffset: 0 },
+    trees: [git.TREE({ ref: oid })],
+    map: async (filepath, [entry]) => {
+      if (!entry) {
+        return undefined;
+      }
+      if (isGitInternalPath(filepath)) {
+        return undefined;
+      } // .git 不應在 tree,防禦
+      const type = await entry.type();
+      if (type !== 'blob') {
+        return undefined;
+      }
+      const blobOid = await entry.oid();
+      map.set(filepath, blobOid);
+      return undefined;
+    },
   });
+  return map;
 }
 
 /**
@@ -437,7 +472,18 @@ export async function log(
   options: { depth?: number } = {},
 ): Promise<GitCommitSummary[]> {
   const { fs, git, dir, gitdir } = await ensureContext(projectId);
-  const commits = await git.log({ fs: fs as AnyFs, dir, gitdir, depth: options.depth });
+  // unborn HEAD (fresh repo 無 commit):git.log 拋 'Could not find refs/heads/main';
+  // 視為空歷史 (listSnapshots/resolveVersion 於全新專案應回空,而非拋錯)。
+  let commits;
+  try {
+    commits = await git.log({ fs: fs as AnyFs, dir, gitdir, depth: options.depth });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/Could not find|does not exist|unborn/i.test(message)) {
+      return [];
+    }
+    throw error;
+  }
   const summaries: GitCommitSummary[] = [];
   for (const entry of commits) {
     const message = entry.commit.message;
@@ -475,7 +521,10 @@ export async function resolveVersion(
  * - 刪除工作樹中不在該 tree 的多餘檔案。
  * - 不動 HEAD ref / 不建立新 commit (revert 由 store 層於寫回後再 commitAll)。
  */
-export async function restoreCommitTree(projectId: string, oid: string): Promise<void> {
+export async function restoreCommitTree(
+  projectId: string,
+  oid: string,
+): Promise<{ filesRestored: number }> {
   const { fs, promises, git, dir, gitdir } = await ensureContext(projectId);
 
   // 1. 收集目標 tree 全部檔案 (含 .educare) 並寫回工作樹
@@ -518,6 +567,10 @@ export async function restoreCommitTree(projectId: string, oid: string): Promise
       }
     }
   }
+
+  // 使用者可見檔案數 (排除 .educare/.git)
+  const filesRestored = Array.from(targetFiles).filter(f => !isReservedPath(f)).length;
+  return { filesRestored };
 }
 
 /** 列舉工作樹所有檔案 (含 .educare,排除 .git) — restore 用。 */
@@ -559,9 +612,12 @@ export interface GitStatusResult {
   unchanged: number;
 }
 
-/** 工作樹狀態摘要 (statusMatrix)。 */
+/**
+ * 工作樹狀態摘要。content-based (hashBlob 比對 HEAD tree blob oid),
+ * 不依賴 statusMatrix stat-cache (同 commitAll,避免同秒同 size 誤判)。
+ */
 export async function status(projectId: string): Promise<GitStatusResult> {
-  const { fs, git, dir, gitdir } = await ensureContext(projectId);
+  const { fs, promises, git, dir, gitdir } = await ensureContext(projectId);
   const born = await hasCommits(git, fs, dir, gitdir);
   const result: GitStatusResult = {
     clean: true,
@@ -571,32 +627,38 @@ export async function status(projectId: string): Promise<GitStatusResult> {
     untracked: [],
     unchanged: 0,
   };
+  const workdirFiles = (await listWorkdirFiles(promises, dir)).filter(f => !isReservedPath(f));
+  const workdirSet = new Set(workdirFiles);
+
   if (!born) {
-    // unborn: 所有工作樹檔案為 untracked (排除 .git/.educare 對 agent 的呈現)
-    const files = (await listWorkdirFiles(fs.promises, dir)).filter(f => !isReservedPath(f));
-    result.untracked.push(...files);
-    result.clean = files.length === 0;
+    result.untracked.push(...workdirFiles);
+    result.clean = workdirFiles.length === 0;
     return result;
   }
-  const matrix = await git.statusMatrix({ fs: fs as AnyFs, dir, gitdir, ignored: true });
-  for (const row of matrix) {
-    const [filepath, head, workdir] = row as [string, number, number, number];
-    if (isReservedPath(filepath)) {
+
+  const headOid = await git.resolveRef({ fs: fs as AnyFs, dir, gitdir, ref: 'HEAD' });
+  const headOids = await collectTreeOids(git, fs, dir, gitdir, headOid);
+
+  for (const filepath of workdirFiles) {
+    const headBlobOid = headOids.get(filepath);
+    if (headBlobOid === undefined) {
+      result.added.push(filepath);
       continue;
     }
-    if (head === 1 && workdir === 1) {
-      result.unchanged += 1;
-    } else if (head === 1 && workdir === 0) {
-      result.deleted.push(filepath);
-    } else if (head === 1 && workdir === 2) {
+    const bytes = await promises.readFile(`${dir}/${filepath}`);
+    const { oid } = await git.hashBlob({ object: bytes });
+    if (oid !== headBlobOid) {
       result.modified.push(filepath);
-    } else if (head === 0 && workdir === 2) {
-      result.added.push(filepath);
-    } else if (head === 0 && workdir === 0) {
-      // 不存在於兩處,略過
     } else {
-      // 其他邊界狀態 (如 staged 但 workdir=1) 視為 untracked-adjacent,歸類為 modified
-      result.modified.push(filepath);
+      result.unchanged += 1;
+    }
+  }
+  for (const headFile of headOids.keys()) {
+    if (isReservedPath(headFile)) {
+      continue;
+    }
+    if (!workdirSet.has(headFile)) {
+      result.deleted.push(headFile);
     }
   }
   result.clean =
@@ -886,6 +948,10 @@ export interface HtmlProjectFileMeta {
   kind: HtmlProjectFileKind;
   encoding: 'utf-8' | 'base64';
   dependencies?: string[];
+  /** 檔案位元組數 (D2 size 語意)。 */
+  size: number;
+  /** 檔案最後更新時間 (epoch ms)。 */
+  updatedAt: number;
 }
 
 export type HtmlProjectFileMetaMap = Record<string, HtmlProjectFileMeta>;

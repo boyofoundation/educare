@@ -227,6 +227,8 @@ export interface HtmlProjectSnapshot {
   files: string[];
   createdAt: number;
   note?: string;
+  /** short SHA (git commit oid) — D3 由 git commit 實現的快照,供 UI/進階使用。 */
+  oid?: string;
 }
 
 /**
