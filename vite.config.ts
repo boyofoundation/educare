@@ -82,6 +82,17 @@ export default defineConfig(() => {
               return 'static-validation';
             }
 
+            // 本地 git 版控 (isomorphic-git + lightning-fs + diff + buffer polyfill)
+            // htmlProjectGitService 全程動態 import,獨立 chunk 延遲載入,不進首屏 bundle (D7)
+            if (
+              id.includes('node_modules/isomorphic-git') ||
+              id.includes('node_modules/@isomorphic-git') ||
+              id.includes('node_modules/diff/') ||
+              id.includes('node_modules/buffer/')
+            ) {
+              return 'html-git';
+            }
+
             // 文件處理 - 按需分割
             if (id.includes('pdfjs-dist')) {
               return 'pdf-worker';

@@ -38,6 +38,10 @@ const SUBAGENT_HTML_TOOL_EXCLUSIONS = new Set([
   'listSnapshots',
   'revertToSnapshot',
   'lintProject',
+  // Phase 3:歷史/工作樹變動類 git 工具禁止 subagent 使用 (避免子代理在主代理執行中途
+  // 切換 working tree 或建立 commit,擾亂主代理的版本歷史)。唯讀 git 工具可用。
+  'gitCommit',
+  'gitSwitchBranch',
 ]);
 
 export interface RecoverableToolErrorResult {
@@ -369,7 +373,7 @@ export const buildSubagentTools = (
         .map(tool => tool.name)
         .join(
           ', ',
-        )}. Harness-resident tools such as reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot, and lintProject are not available inside subagents.`,
+        )}. Harness-resident tools such as reportTurnOutcome, getPreviewRuntimeErrors, listSnapshots, revertToSnapshot, and lintProject are not available inside subagents. History/working-tree mutating git tools (gitCommit, gitSwitchBranch) are also unavailable inside subagents — never attempt to commit or switch branches from a subagent; the parent agent owns version history. Read-only git tools (gitStatus, gitLog, gitDiff, gitListBranches) are permitted.`,
     );
     const visibleHtmlToolNames = new Set(htmlDefinitions.map(tool => tool.name));
     executors.push(async call => {

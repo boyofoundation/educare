@@ -236,7 +236,7 @@ describe('streamChat', () => {
       mode: 'requireSpecific',
       name: 'getProjectSummary',
     });
-    expect(observedChatParams[0]?.tools).toHaveLength(25);
+    expect(observedChatParams[0]?.tools).toHaveLength(31);
     expect(observedChatParams[0]?.tools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: 'createProject' }),
@@ -250,6 +250,12 @@ describe('streamChat', () => {
         expect.objectContaining({ name: 'listSnapshots' }),
         expect.objectContaining({ name: 'revertToSnapshot' }),
         expect.objectContaining({ name: 'lintProject' }),
+        expect.objectContaining({ name: 'gitStatus' }),
+        expect.objectContaining({ name: 'gitLog' }),
+        expect.objectContaining({ name: 'gitDiff' }),
+        expect.objectContaining({ name: 'gitCommit' }),
+        expect.objectContaining({ name: 'gitListBranches' }),
+        expect.objectContaining({ name: 'gitSwitchBranch' }),
       ]),
     );
   });

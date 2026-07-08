@@ -227,6 +227,8 @@ export interface HtmlProjectSnapshot {
   files: string[];
   createdAt: number;
   note?: string;
+  /** short SHA (git commit oid) — D3 由 git commit 實現的快照,供 UI/進階使用。 */
+  oid?: string;
 }
 
 /**
@@ -494,6 +496,75 @@ export type HtmlProjectHarnessToolName =
   | 'listSnapshots'
   | 'revertToSnapshot'
   | 'lintProject';
+
+/**
+ * Agent 本地 git 工具名稱 (Phase 3)。走 pack 分發 (非 harness-resident):
+ * - inspect pack:gitStatus/gitLog/gitDiff/gitListBranches (唯讀)。
+ * - edit pack:gitCommit/gitSwitchBranch (變動歷史/工作樹)。
+ */
+export type HtmlProjectGitToolName =
+  | 'gitStatus'
+  | 'gitLog'
+  | 'gitDiff'
+  | 'gitCommit'
+  | 'gitListBranches'
+  | 'gitSwitchBranch';
+
+/** gitStatus 工具回傳。 */
+export interface HtmlProjectGitStatusResult {
+  projectId: string;
+  clean: boolean;
+  added: string[];
+  modified: string[];
+  deleted: string[];
+  untracked: string[];
+  unchanged: number;
+}
+
+export interface HtmlProjectGitLogCommit {
+  oid: string;
+  shortOid: string;
+  message: string;
+  note: string;
+  previewVersion?: number;
+  timestamp: number;
+  isSnapshot: boolean;
+  files: string[];
+}
+
+/** gitLog 工具回傳 (新到舊)。 */
+export interface HtmlProjectGitLogResult {
+  projectId: string;
+  commits: HtmlProjectGitLogCommit[];
+}
+
+export interface HtmlProjectGitDiffFileChange {
+  path: string;
+  status: 'added' | 'modified' | 'deleted';
+  patch: string | null;
+  binary: boolean;
+}
+
+/** gitDiff 工具回傳 (working tree vs HEAD 或兩 ref)。 */
+export interface HtmlProjectGitDiffResult {
+  projectId: string;
+  files: HtmlProjectGitDiffFileChange[];
+}
+
+/** gitCommit 工具回傳。 */
+export interface HtmlProjectGitCommitResult {
+  projectId: string;
+  committed: boolean;
+  oid: string | null;
+  message: string;
+}
+
+/** gitListBranches 工具回傳。 */
+export interface HtmlProjectGitBranchesResult {
+  projectId: string;
+  branches: string[];
+  current: string | null;
+}
 
 /** reportTurnOutcome 工具的回報結果 (G2/G4)。*/
 export type ReportTurnOutcome = 'complete' | 'continue_needed';

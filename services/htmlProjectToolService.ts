@@ -1,6 +1,11 @@
 import {
   HtmlProject,
   HtmlProjectFileKind,
+  HtmlProjectGitBranchesResult,
+  HtmlProjectGitCommitResult,
+  HtmlProjectGitDiffResult,
+  HtmlProjectGitLogResult,
+  HtmlProjectGitStatusResult,
   HtmlProjectHarnessToolName,
   HtmlProjectListSnapshotsResult,
   HtmlProjectPreviewArtifact,
@@ -17,6 +22,7 @@ import {
 } from '../types';
 import type { ToolCall, ToolDefinition } from './llmAdapter';
 import { htmlPreviewService } from './htmlPreviewService';
+import * as gitService from './htmlProjectGitService';
 import {
   HtmlProjectPathValidationError,
   htmlProjectStore,
@@ -58,6 +64,13 @@ const HTML_PROJECT_TOOL_NAMES = [
   'listSnapshots',
   'revertToSnapshot',
   'lintProject',
+  // Phase 3 本地 git 工具 (走 pack 分發,非 harness-resident)
+  'gitStatus',
+  'gitLog',
+  'gitDiff',
+  'gitCommit',
+  'gitListBranches',
+  'gitSwitchBranch',
 ] as const;
 
 type HtmlProjectToolName = (typeof HTML_PROJECT_TOOL_NAMES)[number];
@@ -75,7 +88,17 @@ const HARNESS_RESIDENT_TOOL_NAMES: HtmlProjectHarnessToolName[] = [
 
 const HTML_PROJECT_TOOL_PACKS: Record<HtmlProjectToolPackName, HtmlProjectToolName[]> = {
   bootstrap: ['createProject', 'listProjects', 'openProject'],
-  inspect: ['getProjectSummary', 'listFiles', 'searchFiles', 'readFile', 'listProjectTodos'],
+  inspect: [
+    'getProjectSummary',
+    'listFiles',
+    'searchFiles',
+    'readFile',
+    'listProjectTodos',
+    'gitStatus',
+    'gitLog',
+    'gitDiff',
+    'gitListBranches',
+  ],
   edit: [
     'writeFiles',
     'replaceInFile',
@@ -87,6 +110,8 @@ const HTML_PROJECT_TOOL_PACKS: Record<HtmlProjectToolPackName, HtmlProjectToolNa
     'setProjectTodos',
     'updateProjectTodo',
     'deleteProjectTodo',
+    'gitCommit',
+    'gitSwitchBranch',
   ],
   todo_finalize: ['checkProjectTodos'],
   preview_recheck: ['renderPreview'],
@@ -246,6 +271,37 @@ interface RevertToSnapshotArgs {
 interface LintProjectArgs {
   projectId?: string;
   paths?: string[];
+}
+
+// --- Phase 3 git 工具 Args ---
+
+interface GitStatusArgs {
+  projectId?: string;
+}
+
+interface GitLogArgs {
+  projectId?: string;
+  depth?: number;
+}
+
+interface GitDiffArgs {
+  projectId?: string;
+  refA?: string;
+  refB?: string;
+}
+
+interface GitCommitArgs {
+  projectId?: string;
+  message: string;
+}
+
+interface GitListBranchesArgs {
+  projectId?: string;
+}
+
+interface GitSwitchBranchArgs {
+  projectId?: string;
+  ref: string;
 }
 
 interface ToolRequiredArgsMeta {
@@ -2354,6 +2410,161 @@ const handleRevertToSnapshot = async (
   };
 };
 
+// --- Phase 3 git 工具 handlers (委派 htmlProjectGitService) ---
+
+const handleGitStatus = async (
+  args: GitStatusArgs,
+  context: HtmlProjectToolContext,
+): Promise<HtmlProjectToolExecutionResult> => {
+  const project = await requireOwnedProject(args.projectId, context);
+  const s = await gitService.status(project.id);
+  const result: HtmlProjectGitStatusResult = { projectId: project.id, ...s };
+  const summary = s.clean
+    ? '工作樹乾淨 (無未提交變更)。'
+    : `工作樹有未提交變更:新增 ${s.added.length}、修改 ${s.modified.length}、刪除 ${s.deleted.length}、未追蹤 ${s.untracked.length}。`;
+  return {
+    toolName: 'gitStatus',
+    summary,
+    result: result as unknown as Record<string, unknown>,
+    workspace: createWorkspaceUpdate(project.id, summary),
+  };
+};
+
+const handleGitLog = async (
+  args: GitLogArgs,
+  context: HtmlProjectToolContext,
+): Promise<HtmlProjectToolExecutionResult> => {
+  const project = await requireOwnedProject(args.projectId, context);
+  const depth = typeof args.depth === 'number' && args.depth > 0 ? args.depth : undefined;
+  const commits = await gitService.log(project.id, depth ? { depth } : {});
+  const result: HtmlProjectGitLogResult = { projectId: project.id, commits };
+  const summary =
+    commits.length === 0
+      ? '專案尚無任何 commit。'
+      : `專案共 ${commits.length} 筆 commit (新到舊),最新:${commits[0].note} (${commits[0].shortOid})。`;
+  return {
+    toolName: 'gitLog',
+    summary,
+    result: result as unknown as Record<string, unknown>,
+    workspace: createWorkspaceUpdate(project.id, summary),
+  };
+};
+
+const handleGitDiff = async (
+  args: GitDiffArgs,
+  context: HtmlProjectToolContext,
+): Promise<HtmlProjectToolExecutionResult> => {
+  const project = await requireOwnedProject(args.projectId, context);
+  const diffResult = await gitService.diff(project.id, {
+    refA: args.refA,
+    refB: args.refB,
+  });
+  const result: HtmlProjectGitDiffResult = { projectId: project.id, files: diffResult.files };
+  const changed = result.files.filter(f => f.status !== undefined).length;
+  const summary =
+    changed === 0
+      ? '無檔案變更 (工作樹與目標一致)。'
+      : `${changed} 個檔案變更:${result.files.map(f => `${f.path}(${f.status})`).join(', ')}。`;
+  return {
+    toolName: 'gitDiff',
+    summary,
+    result: result as unknown as Record<string, unknown>,
+    workspace: createWorkspaceUpdate(project.id, summary),
+  };
+};
+
+const handleGitCommit = async (
+  args: GitCommitArgs,
+  context: HtmlProjectToolContext,
+): Promise<HtmlProjectToolExecutionResult> => {
+  const project = await requireOwnedProject(args.projectId, context);
+  const message = typeof args.message === 'string' ? args.message.trim() : '';
+  if (!message) {
+    throw new HtmlProjectToolRecoverableError({
+      ok: false,
+      recoverable: true,
+      code: 'invalid-commit-message',
+      message: 'gitCommit requires a non-empty message.',
+      guidance: 'Provide a concise message describing the changes being committed.',
+    });
+  }
+  const oid = await gitService.commitAll(project.id, message, {
+    previewVersion: project.previewVersion,
+  });
+  const result: HtmlProjectGitCommitResult = {
+    projectId: project.id,
+    committed: oid !== null,
+    oid,
+    message,
+  };
+  const summary =
+    oid !== null
+      ? `已提交變更 (${oid.slice(0, 7)}):${message}`
+      : '無變更可提交 (工作樹與 HEAD 一致)。';
+  return {
+    toolName: 'gitCommit',
+    summary,
+    result: result as unknown as Record<string, unknown>,
+    workspace: createWorkspaceUpdate(project.id, summary),
+  };
+};
+
+const handleGitListBranches = async (
+  args: GitListBranchesArgs,
+  context: HtmlProjectToolContext,
+): Promise<HtmlProjectToolExecutionResult> => {
+  const project = await requireOwnedProject(args.projectId, context);
+  const [branches, current] = await Promise.all([
+    gitService.listBranches(project.id),
+    gitService.currentBranch(project.id),
+  ]);
+  const result: HtmlProjectGitBranchesResult = { projectId: project.id, branches, current };
+  const summary = `分支:${branches.join(', ')} (目前:${current ?? '無'})。`;
+  return {
+    toolName: 'gitListBranches',
+    summary,
+    result: result as unknown as Record<string, unknown>,
+    workspace: createWorkspaceUpdate(project.id, summary),
+  };
+};
+
+const handleGitSwitchBranch = async (
+  args: GitSwitchBranchArgs,
+  context: HtmlProjectToolContext,
+): Promise<HtmlProjectToolExecutionResult> => {
+  const project = await requireOwnedProject(args.projectId, context);
+  const ref = typeof args.ref === 'string' ? args.ref.trim() : '';
+  if (!ref) {
+    throw new HtmlProjectToolRecoverableError({
+      ok: false,
+      recoverable: true,
+      code: 'invalid-branch-ref',
+      message: 'gitSwitchBranch requires a non-empty ref (branch name).',
+      guidance: 'Call gitListBranches first and pass the target branch name.',
+    });
+  }
+  try {
+    await gitService.switchBranch(project.id, ref);
+  } catch (error) {
+    // dirty tree / 分支不存在等 → recoverable,引導 agent 先 commit 或確認分支名
+    throw new HtmlProjectToolRecoverableError({
+      ok: false,
+      recoverable: true,
+      code: 'switch-branch-failed',
+      message: error instanceof Error ? error.message : String(error),
+      guidance:
+        'gitSwitchBranch requires a clean working tree and an existing branch. Run gitStatus; if dirty, gitCommit (or revert) first. Verify the branch name with gitListBranches.',
+    });
+  }
+  const summary = `已切換至分支 ${ref}。`;
+  return {
+    toolName: 'gitSwitchBranch',
+    summary,
+    result: { projectId: project.id, switchedTo: ref } as unknown as Record<string, unknown>,
+    workspace: createWorkspaceUpdate(project.id, summary),
+  };
+};
+
 const handleLintProject = async (
   args: LintProjectArgs,
   context: HtmlProjectToolContext,
@@ -2847,6 +3058,84 @@ export const getHtmlProjectToolDefinitions = (): ToolDefinition[] => [
       required: [],
     },
   },
+  {
+    name: 'gitStatus',
+    description:
+      'Local git tool. Show working-tree status (added/modified/deleted/untracked vs HEAD). Use to see uncommitted changes before deciding to commit. Read-only.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { projectId: { type: 'string' } },
+      required: [],
+    },
+  },
+  {
+    name: 'gitLog',
+    description:
+      'Local git tool. List commit history (newest-first) with message, short oid, file count, and preview-version. Use to review what has been committed. Read-only.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        projectId: { type: 'string' },
+        depth: { type: 'number', description: 'Optional max number of commits to return.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'gitDiff',
+    description:
+      'Local git tool. Show file-level changes and unified diff. Defaults to working-tree vs HEAD; pass refA/refB (oids or branch names) to compare two commits. Read-only.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        projectId: { type: 'string' },
+        refA: { type: 'string', description: 'Optional base ref (default HEAD).' },
+        refB: { type: 'string', description: 'Optional target ref (default working tree).' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'gitCommit',
+    description:
+      'Local git tool. Commit current working-tree changes with a message. Use for small, logical checkpoints after a coherent set of edits. No-op (committed=false) if there are no changes. Mutates history.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        projectId: { type: 'string' },
+        message: { type: 'string', description: 'Concise commit message describing the changes.' },
+      },
+      required: ['message'],
+    },
+  },
+  {
+    name: 'gitListBranches',
+    description: 'Local git tool. List local branches and the current branch. Read-only.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { projectId: { type: 'string' } },
+      required: [],
+    },
+  },
+  {
+    name: 'gitSwitchBranch',
+    description:
+      'Local git tool. Switch to an existing branch. Refuses (error) if the working tree has uncommitted changes — commit first. Mutates the working tree.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        projectId: { type: 'string' },
+        ref: { type: 'string', description: 'The target branch name (from gitListBranches).' },
+      },
+      required: ['ref'],
+    },
+  },
 ];
 
 export const getHtmlProjectToolNamesForPacks = (
@@ -2971,6 +3260,18 @@ export const executeHtmlProjectToolCall = async (
         return await handleRevertToSnapshot(safeArgs as unknown as RevertToSnapshotArgs, context);
       case 'lintProject':
         return await handleLintProject(safeArgs as unknown as LintProjectArgs, context);
+      case 'gitStatus':
+        return await handleGitStatus(safeArgs as unknown as GitStatusArgs, context);
+      case 'gitLog':
+        return await handleGitLog(safeArgs as unknown as GitLogArgs, context);
+      case 'gitDiff':
+        return await handleGitDiff(safeArgs as unknown as GitDiffArgs, context);
+      case 'gitCommit':
+        return await handleGitCommit(safeArgs as unknown as GitCommitArgs, context);
+      case 'gitListBranches':
+        return await handleGitListBranches(safeArgs as unknown as GitListBranchesArgs, context);
+      case 'gitSwitchBranch':
+        return await handleGitSwitchBranch(safeArgs as unknown as GitSwitchBranchArgs, context);
       default:
         throw new Error(`Unsupported HTML project tool: ${call.name}`);
     }

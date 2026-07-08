@@ -4,6 +4,9 @@ import {
   HtmlProjectFile,
   HtmlProjectFileDescriptor,
   HtmlProjectFileKind,
+  HtmlProjectGitCommitResult,
+  HtmlProjectGitLogCommit,
+  HtmlProjectGitStatusResult,
   HtmlProjectListSnapshotsResult,
   HtmlProjectRevertToSnapshotResult,
   HtmlProjectSnapshot,
@@ -11,6 +14,40 @@ import {
   HtmlProjectTodoStatus,
   HtmlProjectTodoSummary,
 } from '../types';
+import * as gitService from './htmlProjectGitService';
+import type { HtmlProjectFileMeta, HtmlProjectFileMetaMap } from './htmlProjectGitService';
+
+// --- encoding 邊界 (D2):API 維持 string,FS 存 bytes ---
+// base64 ↔ Uint8Array (byte-exact, 供 asset 二進位資產);utf-8 ↔ Uint8Array (TextEncoder/Decoder)。
+const base64ToBytes = (base64: string): Uint8Array => {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+};
+
+const bytesToBase64 = (bytes: Uint8Array): string => {
+  let binary = '';
+  const chunkSize = 0x8000; // 避免超大字串 stack 溢出
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+};
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder('utf-8', { fatal: false });
+
+/** 將 API string content 依 encoding 編碼為 bytes 寫入 FS。回傳 byte 數 (size)。 */
+const encodeContent = (content: string, encoding: 'utf-8' | 'base64'): Uint8Array =>
+  encoding === 'base64' ? base64ToBytes(content) : textEncoder.encode(content);
+
+/** 將 FS bytes 依 encoding 解碼回 API string。 */
+const decodeContent = (bytes: Uint8Array, encoding: 'utf-8' | 'base64'): string =>
+  encoding === 'base64' ? bytesToBase64(bytes) : textDecoder.decode(bytes);
 
 const HTML_PROJECT_DB_NAME = 'educare-html-projects';
 const HTML_PROJECT_DB_VERSION = 2;
@@ -227,6 +264,15 @@ export const normalizePath = (path: string): string => {
         `Project file path must not use parent-directory traversal: ${path}`,
       );
     }
+    // D6 reserved-path 防護:任一路徑 segment 等於 .git 或 .educare 即拒絕
+    // (擋 /assets/.git/config 等繞法;覆蓋 agent 工具 / UI / ZIP 匯入所有入口)。
+    if (segment === '.git' || segment === '.educare') {
+      throw new HtmlProjectPathValidationError(
+        path,
+        'reserved-path',
+        `Project file path must not target reserved directory (.git or .educare): ${path}`,
+      );
+    }
     resolvedSegments.push(segment);
   }
 
@@ -368,12 +414,23 @@ const buildTodoSummary = (projectId: string, todos: HtmlProjectTodo[]): HtmlProj
   return summary;
 };
 
-const buildFileDescriptor = (file: HtmlProjectFile): HtmlProjectFileDescriptor => ({
-  path: file.path,
-  kind: file.kind,
-  size: file.size,
-  updatedAt: file.updatedAt,
-  dependencies: file.dependencies,
+/** meta.json 內的保留路徑 (.git / .educare) — 對外不可見 (D6)。 */
+const isReservedMetaPath = (path: string): boolean =>
+  path
+    .split('/')
+    .filter(Boolean)
+    .some(segment => segment === '.git' || segment === '.educare');
+
+/** 由 meta entry 建構 descriptor (避免逐檔讀 FS)。 */
+const buildDescriptorFromMeta = (
+  path: string,
+  entry: HtmlProjectFileMeta,
+): HtmlProjectFileDescriptor => ({
+  path,
+  kind: entry.kind,
+  size: entry.size,
+  updatedAt: entry.updatedAt,
+  dependencies: entry.dependencies,
 });
 
 const buildSearchSnippet = (content: string, matchIndex: number, queryLength: number): string => {
@@ -415,6 +472,13 @@ class HtmlProjectStore {
     };
 
     await db.put(PROJECTS_STORE, project);
+
+    // D1: 專案目錄 + git repo 就地 init (檔案內容存 LightningFS /projects/<id>/)。
+    // initial commit 由首次寫入後或 run-start/createSnapshot 觸發 (D4)。
+    await gitService.ensureRepo(project.id).catch(error => {
+      // best-effort:repo 初始化失敗不阻斷專案建立 (後續寫入會重試 ensureContext)。
+      console.warn(`[htmlProjectStore] ensureRepo failed for ${project.id}:`, error);
+    });
     return project;
   }
 
@@ -460,22 +524,60 @@ class HtmlProjectStore {
   }
 
   async listFiles(projectId: string): Promise<HtmlProjectFileDescriptor[]> {
-    const db = await getDb();
-    const files = await db.getAllFromIndex(PROJECT_FILES_STORE, 'by-project', projectId);
-    return files
-      .sort((a, b) => a.path.localeCompare(b.path))
-      .map(file => buildFileDescriptor(file));
+    await this.ensureMigrated(projectId);
+    const meta = await gitService.readMeta(projectId);
+    return Object.entries(meta)
+      .filter(([path]) => !isReservedMetaPath(path))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([path, entry]) => buildDescriptorFromMeta(path, entry));
   }
 
   async listProjectFiles(projectId: string): Promise<HtmlProjectFile[]> {
-    const db = await getDb();
-    const files = await db.getAllFromIndex(PROJECT_FILES_STORE, 'by-project', projectId);
-    return files.sort((a, b) => a.path.localeCompare(b.path));
+    await this.ensureMigrated(projectId);
+    const meta = await gitService.readMeta(projectId);
+    const entries = Object.entries(meta).filter(([path]) => !isReservedMetaPath(path));
+    const files: HtmlProjectFile[] = [];
+    for (const [path, entry] of entries.sort(([a], [b]) => a.localeCompare(b))) {
+      const bytes = await gitService.readProjectFile(projectId, path);
+      if (!bytes) {
+        continue; // meta 有記錄但 FS 缺檔 (不一致),略過
+      }
+      files.push({
+        projectId,
+        path,
+        kind: entry.kind,
+        content: decodeContent(bytes, entry.encoding),
+        encoding: entry.encoding,
+        dependencies: entry.dependencies,
+        size: entry.size,
+        updatedAt: entry.updatedAt,
+      });
+    }
+    return files;
   }
 
   async readFile(projectId: string, path: string): Promise<HtmlProjectFile | undefined> {
-    const db = await getDb();
-    return db.get(PROJECT_FILES_STORE, [projectId, normalizePath(path)]);
+    const normalizedPath = normalizePath(path);
+    await this.ensureMigrated(projectId);
+    const meta = await gitService.readMeta(projectId);
+    const entry = meta[normalizedPath];
+    if (!entry) {
+      return undefined;
+    }
+    const bytes = await gitService.readProjectFile(projectId, normalizedPath);
+    if (!bytes) {
+      return undefined;
+    }
+    return {
+      projectId,
+      path: normalizedPath,
+      kind: entry.kind,
+      content: decodeContent(bytes, entry.encoding),
+      encoding: entry.encoding,
+      dependencies: entry.dependencies,
+      size: entry.size,
+      updatedAt: entry.updatedAt,
+    };
   }
 
   async writeFile(
@@ -495,24 +597,25 @@ class HtmlProjectStore {
 
     const db = await getDb();
     const project = await requireProject(db, projectId);
+    await this.ensureMigrated(projectId);
     const timestamp = now();
     const updatedPaths: string[] = [];
     const assetPaths = new Set(project.assetPaths);
+    const meta = await gitService.readMeta(projectId);
 
     for (const file of files) {
-      const normalizedPath = normalizePath(file.path);
-      const projectFile: HtmlProjectFile = {
-        projectId,
-        path: normalizedPath,
+      const normalizedPath = normalizePath(file.path); // 含 reserved-path 防護 (D6)
+      const encoding = file.encoding || 'utf-8';
+      const bytes = encodeContent(file.content, encoding); // D2: string → bytes
+
+      await gitService.writeProjectFile(projectId, normalizedPath, bytes);
+      meta[normalizedPath] = {
         kind: file.kind,
-        content: file.content,
-        encoding: file.encoding || 'utf-8',
+        encoding,
         dependencies: inferDependencies(file.kind, file.content),
-        size: file.content.length,
+        size: bytes.length, // D2: 位元組數
         updatedAt: timestamp,
       };
-
-      await db.put(PROJECT_FILES_STORE, projectFile);
       updatedPaths.push(normalizedPath);
 
       if (file.kind === 'asset') {
@@ -521,6 +624,8 @@ class HtmlProjectStore {
         assetPaths.delete(normalizedPath);
       }
     }
+
+    await gitService.writeMeta(projectId, meta);
 
     const nextProject: HtmlProject = {
       ...project,
@@ -546,6 +651,7 @@ class HtmlProjectStore {
   ): Promise<{ sourcePath: string; destinationPath: string; previewVersion: number }> {
     const db = await getDb();
     const project = await requireProject(db, projectId);
+    await this.ensureMigrated(projectId);
     const normalizedSourcePath = normalizePath(sourcePath);
     const normalizedDestinationPath = normalizePath(destinationPath);
 
@@ -553,32 +659,30 @@ class HtmlProjectStore {
       throw new Error('Source and destination paths must be different.');
     }
 
-    const existingFile = await db.get(PROJECT_FILES_STORE, [projectId, normalizedSourcePath]);
-    if (!existingFile) {
+    const meta = await gitService.readMeta(projectId);
+    const sourceMeta = meta[normalizedSourcePath];
+    if (!sourceMeta) {
       throw new Error(`Project file ${normalizedSourcePath} not found.`);
     }
-
-    const destinationFile = await db.get(PROJECT_FILES_STORE, [
-      projectId,
-      normalizedDestinationPath,
-    ]);
-    if (destinationFile) {
+    if (meta[normalizedDestinationPath]) {
       throw new Error(`Project file ${normalizedDestinationPath} already exists.`);
     }
 
+    const sourceBytes = await gitService.readProjectFile(projectId, normalizedSourcePath);
+    if (!sourceBytes) {
+      throw new Error(`Project file ${normalizedSourcePath} not found.`);
+    }
+
     const timestamp = now();
-    const copiedFile: HtmlProjectFile = {
-      ...existingFile,
-      path: normalizedDestinationPath,
-      dependencies: inferDependencies(existingFile.kind, existingFile.content),
-      size: existingFile.content.length,
+    await gitService.writeProjectFile(projectId, normalizedDestinationPath, sourceBytes);
+    meta[normalizedDestinationPath] = {
+      ...sourceMeta,
       updatedAt: timestamp,
     };
+    await gitService.writeMeta(projectId, meta);
+
     const assetPaths = new Set(project.assetPaths);
-
-    await db.put(PROJECT_FILES_STORE, copiedFile);
-
-    if (copiedFile.kind === 'asset') {
+    if (sourceMeta.kind === 'asset') {
       assetPaths.add(normalizedDestinationPath);
     }
 
@@ -607,6 +711,7 @@ class HtmlProjectStore {
   ): Promise<{ sourcePath: string; destinationPath: string; previewVersion: number }> {
     const db = await getDb();
     const project = await requireProject(db, projectId);
+    await this.ensureMigrated(projectId);
     const normalizedSourcePath = normalizePath(sourcePath);
     const normalizedDestinationPath = normalizePath(destinationPath);
 
@@ -614,33 +719,23 @@ class HtmlProjectStore {
       throw new Error('Source and destination paths must be different.');
     }
 
-    const existingFile = await db.get(PROJECT_FILES_STORE, [projectId, normalizedSourcePath]);
-    if (!existingFile) {
+    const meta = await gitService.readMeta(projectId);
+    const sourceMeta = meta[normalizedSourcePath];
+    if (!sourceMeta) {
       throw new Error(`Project file ${normalizedSourcePath} not found.`);
     }
-
-    const destinationFile = await db.get(PROJECT_FILES_STORE, [
-      projectId,
-      normalizedDestinationPath,
-    ]);
-    if (destinationFile) {
+    if (meta[normalizedDestinationPath]) {
       throw new Error(`Project file ${normalizedDestinationPath} already exists.`);
     }
 
     const timestamp = now();
-    const renamedFile: HtmlProjectFile = {
-      ...existingFile,
-      path: normalizedDestinationPath,
-      dependencies: inferDependencies(existingFile.kind, existingFile.content),
-      size: existingFile.content.length,
-      updatedAt: timestamp,
-    };
+    await gitService.renameProjectFile(projectId, normalizedSourcePath, normalizedDestinationPath);
+    meta[normalizedDestinationPath] = { ...sourceMeta, updatedAt: timestamp };
+    delete meta[normalizedSourcePath];
+    await gitService.writeMeta(projectId, meta);
+
     const assetPaths = new Set(project.assetPaths);
-
-    await db.put(PROJECT_FILES_STORE, renamedFile);
-    await db.delete(PROJECT_FILES_STORE, [projectId, normalizedSourcePath]);
-
-    if (renamedFile.kind === 'asset') {
+    if (sourceMeta.kind === 'asset') {
       assetPaths.delete(normalizedSourcePath);
       assetPaths.add(normalizedDestinationPath);
     }
@@ -676,8 +771,13 @@ class HtmlProjectStore {
 
     const db = await getDb();
     await requireProject(db, projectId);
+    await this.ensureMigrated(projectId);
 
-    const files = await db.getAllFromIndex(PROJECT_FILES_STORE, 'by-project', projectId);
+    const meta = await gitService.readMeta(projectId);
+    const entries = Object.entries(meta)
+      .filter(([path]) => !isReservedMetaPath(path))
+      .sort(([a], [b]) => a.localeCompare(b));
+
     const normalizedQuery = input.caseSensitive ? query : query.toLowerCase();
     const maxResults = Math.max(1, input.maxResults ?? DEFAULT_SEARCH_RESULT_LIMIT);
     const matches: HtmlProjectSearchMatch[] = [];
@@ -685,24 +785,30 @@ class HtmlProjectStore {
     let truncated = false;
     let scannedFiles = 0;
 
-    for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) {
-      if (!SEARCHABLE_FILE_KINDS.has(file.kind)) {
-        skippedFiles.push({ path: file.path, reason: 'unsupported-kind' });
+    for (const [path, entry] of entries) {
+      if (!SEARCHABLE_FILE_KINDS.has(entry.kind)) {
+        skippedFiles.push({ path, reason: 'unsupported-kind' });
         continue;
       }
 
-      if (file.encoding === 'base64') {
-        skippedFiles.push({ path: file.path, reason: 'binary-encoding' });
+      if (entry.encoding === 'base64') {
+        skippedFiles.push({ path, reason: 'binary-encoding' });
         continue;
       }
 
-      if (file.size > MAX_SEARCHABLE_FILE_SIZE) {
-        skippedFiles.push({ path: file.path, reason: 'file-too-large' });
+      if (entry.size > MAX_SEARCHABLE_FILE_SIZE) {
+        skippedFiles.push({ path, reason: 'file-too-large' });
         continue;
       }
+
+      const bytes = await gitService.readProjectFile(projectId, path);
+      if (!bytes) {
+        continue;
+      }
+      const content = decodeContent(bytes, entry.encoding);
 
       scannedFiles += 1;
-      const haystack = input.caseSensitive ? file.content : file.content.toLowerCase();
+      const haystack = input.caseSensitive ? content : content.toLowerCase();
       let searchIndex = 0;
       let fileMatchCount = 0;
 
@@ -715,13 +821,13 @@ class HtmlProjectStore {
         fileMatchCount += 1;
 
         if (fileMatchCount <= MAX_SEARCH_RESULTS_PER_FILE && matches.length < maxResults) {
-          const { line, column } = getLineAndColumn(file.content, matchIndex);
+          const { line, column } = getLineAndColumn(content, matchIndex);
           matches.push({
-            path: file.path,
-            kind: file.kind,
+            path,
+            kind: entry.kind,
             line,
             column,
-            snippet: buildSearchSnippet(file.content, matchIndex, query.length),
+            snippet: buildSearchSnippet(content, matchIndex, query.length),
             matchCount: fileMatchCount,
           });
         }
@@ -756,17 +862,21 @@ class HtmlProjectStore {
   ): Promise<{ deleted: boolean; previewVersion: number }> {
     const db = await getDb();
     const project = await requireProject(db, projectId);
+    await this.ensureMigrated(projectId);
     const normalizedPath = normalizePath(path);
-    const existingFile = await db.get(PROJECT_FILES_STORE, [projectId, normalizedPath]);
+    const meta = await gitService.readMeta(projectId);
+    const existingMeta = meta[normalizedPath];
 
-    if (!existingFile) {
+    if (!existingMeta) {
       return {
         deleted: false,
         previewVersion: project.previewVersion,
       };
     }
 
-    await db.delete(PROJECT_FILES_STORE, [projectId, normalizedPath]);
+    await gitService.deleteProjectFile(projectId, normalizedPath);
+    delete meta[normalizedPath];
+    await gitService.writeMeta(projectId, meta);
 
     const nextProject: HtmlProject = {
       ...project,
@@ -806,81 +916,83 @@ class HtmlProjectStore {
     return nextProject;
   }
 
+  /**
+   * D4 run-start 快照 (含去重)。工作樹乾淨「且」已存在同 previewVersion 的 snapshot
+   * commit 時直接回傳該既有 snapshot (不建新 commit),避免每次 run 疊一筆空 run-start
+   * commit 造成歷史膨脹;呼叫端 (agentRunController) 仍能據回傳值設定 snapshotVersion。
+   * 其餘情況 (工作樹有變更,或尚無此 version 的 snapshot) 照常建立 snapshot。
+   */
+  async createRunStartSnapshot(projectId: string, note: string): Promise<HtmlProjectSnapshot> {
+    const db = await getDb();
+    await this.ensureMigrated(projectId);
+    const project = await requireProject(db, projectId);
+    const treeStatus = await gitService.status(projectId);
+    if (treeStatus.clean) {
+      const existing = await this.listSnapshots(projectId);
+      const match = existing.snapshots.find(snap => snap.version === project.previewVersion);
+      if (match) {
+        return match; // D4 去重:clean + 同 version snapshot 已存在 → 重用既有 snapshot
+      }
+    }
+    return this.createSnapshot(projectId, note);
+  }
+
+  /**
+   * D3:createSnapshot = git commit (附 Preview-Version + Educare-Snapshot:true trailer)。
+   * 回傳型別 HtmlProjectSnapshot 不變;version = 當下 previewVersion。
+   * isSnapshot:true 隱含 allowEmpty (快照一律記錄當前狀態)。
+   */
   async createSnapshot(projectId: string, note?: string): Promise<HtmlProjectSnapshot> {
     const db = await getDb();
+    await this.ensureMigrated(projectId);
     const project = await requireProject(db, projectId);
-    const files = await this.listProjectFiles(projectId);
-    const fileEntries: HtmlProjectSnapshotFileEntry[] = files.map(file => ({
-      path: file.path,
-      kind: file.kind,
-      content: file.content,
-      encoding: file.encoding || 'utf-8',
-      dependencies: file.dependencies,
-    }));
-    const snapshot: HtmlProjectSnapshotRecord = {
+    const timestamp = now();
+    await gitService.commitAll(projectId, note?.trim() || 'Snapshot', {
+      previewVersion: project.previewVersion,
+      isSnapshot: true,
+      timestamp,
+    });
+    const [latest] = await gitService.log(projectId, { depth: 1 });
+    return {
       projectId,
       version: project.previewVersion,
-      files: files.map(file => file.path),
-      createdAt: now(),
+      files: latest?.files ?? [],
+      createdAt: timestamp,
       note,
-      fileEntries,
-    };
-
-    await db.put(PROJECT_SNAPSHOTS_STORE, snapshot);
-    await this.enforceSnapshotRetention(db, projectId);
-    return {
-      projectId: snapshot.projectId,
-      version: snapshot.version,
-      files: snapshot.files,
-      createdAt: snapshot.createdAt,
-      note: snapshot.note,
+      oid: latest?.shortOid,
     };
   }
 
   /**
-   * G11:每專案保留最近 SNAPSHOT_RETENTION_LIMIT 份快照,超出按 version 升序淘汰最舊。
-   */
-  private async enforceSnapshotRetention(
-    db: IDBPDatabase<HtmlProjectDB>,
-    projectId: string,
-  ): Promise<void> {
-    const snapshots = (await db.getAllFromIndex(
-      PROJECT_SNAPSHOTS_STORE,
-      'by-project',
-      projectId,
-    )) as HtmlProjectSnapshotRecord[];
-    if (snapshots.length <= SNAPSHOT_RETENTION_LIMIT) {
-      return;
-    }
-
-    snapshots.sort((a, b) => a.version - b.version);
-    const evictCount = snapshots.length - SNAPSHOT_RETENTION_LIMIT;
-    for (let i = 0; i < evictCount; i += 1) {
-      const target = snapshots[i];
-      await db.delete(PROJECT_SNAPSHOTS_STORE, [projectId, target.version]);
-    }
-  }
-
-  /**
-   * G11:列出專案快照,依 version 降序 (最新在前),上限 SNAPSHOT_RETENTION_LIMIT。
+   * D3:listSnapshots = git log 過濾 Educare-Snapshot:true commits。
+   * 以 trailer 還原 version,同 version 取最新 (commits 已新到舊),上限 20,每筆含 oid。
+   * initial/run-end/ZIP/revert/gitCommit commit (無 snapshot trailer) 不會漏入。
    */
   async listSnapshots(projectId: string): Promise<HtmlProjectListSnapshotsResult> {
     const db = await getDb();
     await requireProject(db, projectId);
-    const records = (await db.getAllFromIndex(
-      PROJECT_SNAPSHOTS_STORE,
-      'by-project',
-      projectId,
-    )) as HtmlProjectSnapshotRecord[];
-    const sorted = records.sort((a, b) => b.version - a.version);
-    const capped = sorted.slice(0, SNAPSHOT_RETENTION_LIMIT);
-    const snapshots: HtmlProjectSnapshot[] = capped.map(record => ({
-      projectId: record.projectId,
-      version: record.version,
-      files: record.files,
-      createdAt: record.createdAt,
-      note: record.note,
-    }));
+    await this.ensureMigrated(projectId);
+    const commits = await gitService.log(projectId);
+    const byVersion = new Map<number, gitService.GitCommitSummary>();
+    for (const commit of commits) {
+      if (!commit.isSnapshot || commit.previewVersion === undefined) {
+        continue;
+      }
+      if (!byVersion.has(commit.previewVersion)) {
+        byVersion.set(commit.previewVersion, commit); // 新到舊,首筆為最新
+      }
+    }
+    const snapshots: HtmlProjectSnapshot[] = Array.from(byVersion.values())
+      .sort((a, b) => (b.previewVersion ?? 0) - (a.previewVersion ?? 0))
+      .slice(0, SNAPSHOT_RETENTION_LIMIT)
+      .map(commit => ({
+        projectId,
+        version: commit.previewVersion as number,
+        files: commit.files,
+        createdAt: commit.timestamp,
+        note: commit.note,
+        oid: commit.shortOid,
+      }));
     return {
       projectId,
       snapshots,
@@ -889,7 +1001,8 @@ class HtmlProjectStore {
   }
 
   /**
-   * G11:還原專案檔案至指定快照版本。還原後 previewVersion +1 (維持單調遞增)。
+   * D3:revertToSnapshot = 以 trailer 解析目標 commit → restoreCommitTree 寫回工作樹
+   * → 新建 revert commit (不帶 snapshot trailer,線性歷史) → previewVersion +1。
    * runtime 診斷清理由呼叫端 (T4 工具) 透過 previewRuntimeDiagnostics.clear() 處理。
    */
   async revertToSnapshot(
@@ -897,51 +1010,32 @@ class HtmlProjectStore {
     version: number,
   ): Promise<HtmlProjectRevertToSnapshotResult> {
     const db = await getDb();
+    await this.ensureMigrated(projectId);
     const project = await requireProject(db, projectId);
-    const record = (await db.get(PROJECT_SNAPSHOTS_STORE, [projectId, version])) as
-      | HtmlProjectSnapshotRecord
-      | undefined;
-
-    if (!record) {
+    const oid = await gitService.resolveVersion(projectId, version);
+    if (!oid) {
       throw new Error(`Project snapshot version ${version} not found.`);
     }
 
-    const entries = record.fileEntries ?? [];
-    const snapshotPaths = new Set(entries.map(entry => entry.path));
+    const { filesRestored } = await gitService.restoreCommitTree(projectId, oid);
+    const nextPreviewVersion = project.previewVersion + 1;
+    await gitService.commitAll(projectId, `Revert to version ${version}`, {
+      previewVersion: nextPreviewVersion,
+      allowEmpty: true,
+    });
 
-    // 刪除快照中不存在的現有檔案
-    const currentFiles = await db.getAllFromIndex(PROJECT_FILES_STORE, 'by-project', projectId);
-    for (const file of currentFiles) {
-      if (!snapshotPaths.has(file.path)) {
-        await db.delete(PROJECT_FILES_STORE, [projectId, file.path]);
-      }
-    }
-
-    // 還原快照中的檔案內容
-    const timestamp = now();
-    for (const entry of entries) {
-      const restoredFile: HtmlProjectFile = {
-        projectId,
-        path: entry.path,
-        kind: entry.kind,
-        content: entry.content,
-        encoding: entry.encoding,
-        dependencies: entry.dependencies,
-        size: entry.content.length,
-        updatedAt: timestamp,
-      };
-      await db.put(PROJECT_FILES_STORE, restoredFile);
-    }
-
-    const snapshotAssetPaths = entries
-      .filter(entry => entry.kind === 'asset')
-      .map(entry => entry.path);
+    // 從還原後的 meta 重建 assetPaths (restoreCommitTree 已還原 .educare/meta.json)
+    const meta = await gitService.readMeta(projectId);
+    const assetPaths = Object.entries(meta)
+      .filter(([path, entry]) => !isReservedMetaPath(path) && entry.kind === 'asset')
+      .map(([path]) => path)
+      .sort();
 
     const nextProject: HtmlProject = {
       ...project,
-      assetPaths: Array.from(new Set(snapshotAssetPaths)).sort(),
-      updatedAt: timestamp,
-      previewVersion: project.previewVersion + 1,
+      assetPaths,
+      updatedAt: now(),
+      previewVersion: nextPreviewVersion,
       status: 'draft',
       lastBuildError: null,
     };
@@ -953,8 +1047,192 @@ class HtmlProjectStore {
       revertedToVersion: version,
       previewVersion: nextProject.previewVersion,
       runtimeDiagnosticsCleared: true,
-      filesRestored: entries.length,
+      filesRestored,
     };
+  }
+
+  // --- Phase 3/4 git 版本歷史 (供 AgentRunPanel UI) ---
+
+  /**
+   * 取得完整 commit 歷史 (新到舊,不設 20 筆上限)。
+   * 供版本歷史面板顯示 (區別 listSnapshots 只回 snapshot commits 且上限 20)。
+   */
+  async getHistory(projectId: string): Promise<HtmlProjectGitLogCommit[]> {
+    const db = await getDb();
+    await requireProject(db, projectId);
+    await this.ensureMigrated(projectId);
+    return (await gitService.log(projectId)) as HtmlProjectGitLogCommit[];
+  }
+
+  /** 工作樹狀態 (dirty 偵測,供「提交變更」按鈕亮起)。 */
+  async getWorkingTreeStatus(projectId: string): Promise<HtmlProjectGitStatusResult> {
+    const db = await getDb();
+    await requireProject(db, projectId);
+    await this.ensureMigrated(projectId);
+    const result = await gitService.status(projectId);
+    return { projectId, ...result };
+  }
+
+  /**
+   * 提交目前工作樹的未提交變更 (供 UI「提交變更」按鈕)。
+   * 成功後 previewVersion +1 (維持單調遞增)。無變更時 committed=false。
+   */
+  async commitChanges(projectId: string, message: string): Promise<HtmlProjectGitCommitResult> {
+    const db = await getDb();
+    await this.ensureMigrated(projectId);
+    const project = await requireProject(db, projectId);
+    const trimmed = (message ?? '').trim();
+    if (!trimmed) {
+      throw new Error('Commit message is required.');
+    }
+    const oid = await gitService.commitAll(projectId, trimmed, {
+      previewVersion: project.previewVersion,
+    });
+    if (oid) {
+      const nextProject: HtmlProject = {
+        ...project,
+        updatedAt: now(),
+        previewVersion: project.previewVersion + 1,
+      };
+      await updateProjectRecord(db, nextProject);
+    }
+    return { projectId, committed: oid !== null, oid, message: trimmed };
+  }
+
+  /**
+   * 一次性懶遷移 (D1/F1/F5/F6/F7):把 idb 的舊 file/snapshot 記錄 replay 成 git commits。
+   * - 完成訊號 = idb 無 file 且無 snapshot 記錄 (非「FS 有 .git」)。
+   * - 觸發條件 = idb 有 file 或 snapshot 記錄 (只看 file 會漏 snapshot-only legacy)。
+   * - replay 冪等 (先清 /projects/<id>);驗證後才刪 idb;Web Locks 跨分頁互斥 + 取鎖後重查。
+   * 所有觸碰檔案/快照的 store 入口皆先行呼叫 (含 listSnapshots — AgentRunPanel 掛載即呼叫)。
+   */
+  private migrationPromises = new Map<string, Promise<void>>();
+
+  async ensureMigrated(projectId: string): Promise<void> {
+    const existing = this.migrationPromises.get(projectId);
+    if (existing) {
+      return existing;
+    }
+    const promise = this.runMigrationLocked(projectId).finally(() => {
+      this.migrationPromises.delete(projectId);
+    });
+    this.migrationPromises.set(projectId, promise);
+    return promise;
+  }
+
+  private async runMigrationLocked(projectId: string): Promise<void> {
+    const hasWebLocks =
+      typeof navigator !== 'undefined' && typeof navigator.locks?.request === 'function';
+    if (!hasWebLocks) {
+      // jsdom/無 Web Locks fallback:in-context dedup (migrationPromises) 已足夠 (單 context)。
+      return this.doMigrate(projectId);
+    }
+    return new Promise<void>((resolve, reject) => {
+      navigator.locks.request(`educare-migrate-${projectId}`, async () => {
+        try {
+          await this.doMigrate(projectId); // 取鎖後重查完成訊號 (doMigrate 開頭即查)
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  }
+
+  private async doMigrate(projectId: string): Promise<void> {
+    const db = await getDb();
+    const legacyFiles = await db.getAllFromIndex(PROJECT_FILES_STORE, 'by-project', projectId);
+    const legacySnapshots = (await db.getAllFromIndex(
+      PROJECT_SNAPSHOTS_STORE,
+      'by-project',
+      projectId,
+    )) as HtmlProjectSnapshotRecord[];
+
+    // 完成訊號/觸發條件
+    if (legacyFiles.length === 0 && legacySnapshots.length === 0) {
+      return;
+    }
+
+    // replay 冪等:先清空 /projects/<id> 再重建 (中斷重試不會產生重複/交錯 commits)
+    await gitService.deleteProjectDir(projectId).catch(error => {
+      console.warn(`[htmlProjectStore] migrate: clear dir failed for ${projectId}:`, error);
+    });
+    await gitService.ensureRepo(projectId);
+
+    // 依 createdAt 升序 replay 舊 snapshots (fileEntries undefined → 空 tree commit)
+    const sortedSnapshots = [...legacySnapshots].sort((a, b) => a.createdAt - b.createdAt);
+    for (const snapshot of sortedSnapshots) {
+      const entries = snapshot.fileEntries ?? [];
+      const meta: HtmlProjectFileMetaMap = {};
+      for (const entry of entries) {
+        const bytes = encodeContent(entry.content, entry.encoding);
+        await gitService.writeProjectFile(projectId, entry.path, bytes);
+        meta[entry.path] = {
+          kind: entry.kind,
+          encoding: entry.encoding,
+          dependencies: entry.dependencies,
+          size: bytes.length,
+          updatedAt: snapshot.createdAt,
+        };
+      }
+      await gitService.writeMeta(projectId, meta);
+      await gitService.commitAll(projectId, snapshot.note?.trim() || 'Snapshot', {
+        previewVersion: snapshot.version,
+        isSnapshot: true,
+        allowEmpty: true,
+        timestamp: snapshot.createdAt,
+      });
+    }
+
+    // 寫入當前檔案 (legacyFiles = 最新狀態) + migration commit
+    const currentMeta: HtmlProjectFileMetaMap = {};
+    for (const file of legacyFiles) {
+      const encoding = file.encoding || 'utf-8';
+      const bytes = encodeContent(file.content, encoding);
+      await gitService.writeProjectFile(projectId, file.path, bytes);
+      currentMeta[file.path] = {
+        kind: file.kind,
+        encoding,
+        dependencies: file.dependencies,
+        size: bytes.length,
+        updatedAt: file.updatedAt,
+      };
+    }
+    await gitService.writeMeta(projectId, currentMeta);
+    await gitService.commitAll(projectId, 'Migrated to git storage', { allowEmpty: true });
+
+    // 驗證 (F1):replay 應產出 ≥ (N snapshot + 1 migration) 個 commit,且 snapshot commit
+    // 數量相符。若 replay 中途部分失敗仍可能通過單純「log 非空」檢查,導致刪 idb 後資料
+    // 永久遺失 — 故嚴格校驗數量 + 抽樣比對當前檔案內容,失敗則保留 idb 供下次重試。
+    const expectedMinCommits = sortedSnapshots.length + 1; // N snapshot + 1 migration
+    const verifyLog = await gitService.log(projectId);
+    const verifySnapshotCommits = verifyLog.filter(commit => commit.isSnapshot);
+    if (
+      verifyLog.length < expectedMinCommits ||
+      verifySnapshotCommits.length < sortedSnapshots.length
+    ) {
+      throw new Error(
+        `Migration verification failed for ${projectId}: expected >= ${expectedMinCommits} commits (${sortedSnapshots.length} snapshots + migration), got ${verifyLog.length} commits / ${verifySnapshotCommits.length} snapshots.`,
+      );
+    }
+    if (legacyFiles.length > 0) {
+      const sample = legacyFiles[0];
+      const sampleBytes = await gitService.readProjectFile(projectId, sample.path);
+      const expectedBytes = encodeContent(sample.content, sample.encoding || 'utf-8');
+      if (!sampleBytes || sampleBytes.length !== expectedBytes.length) {
+        throw new Error(
+          `Migration verification failed for ${projectId}: current file ${sample.path} content mismatch.`,
+        );
+      }
+    }
+
+    // 驗證後才刪 idb legacy 記錄 (失敗則保留 idb,下次重試)
+    for (const file of legacyFiles) {
+      await db.delete(PROJECT_FILES_STORE, [projectId, file.path]);
+    }
+    for (const snapshot of legacySnapshots) {
+      await db.delete(PROJECT_SNAPSHOTS_STORE, [projectId, snapshot.version]);
+    }
   }
 
   async listTodos(projectId: string): Promise<HtmlProjectTodo[]> {
@@ -1076,6 +1354,12 @@ class HtmlProjectStore {
     }
 
     await db.delete(PROJECTS_STORE, projectId);
+
+    // D9: 遞迴刪除 LightningFS 專案目錄 (含 .git 歷史與 base64 assets)。
+    // 與 deleteProject / deleteProjectsByAssistant 共用此路徑,確保刪助理時不留殘留。
+    await gitService.deleteProjectDir(projectId).catch(error => {
+      console.warn(`[htmlProjectStore] deleteProjectDir failed for ${projectId}:`, error);
+    });
   }
 
   async deleteProject(projectId: string, assistantId: string): Promise<HtmlProject> {
