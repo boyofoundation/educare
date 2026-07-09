@@ -10,6 +10,7 @@ import {
   type HtmlProjectTodoSummary,
   type HtmlProjectToolPackName,
   type HtmlProjectWorkspaceUpdate,
+  type MessageCitation,
   type RagChunk,
   type SubagentActivityUpdate,
   type SubagentRunRecord,
@@ -23,6 +24,7 @@ import { previewRuntimeDiagnostics } from './previewRuntimeDiagnostics';
 import { htmlProjectStore } from './htmlProjectStore';
 import { executeHtmlProjectToolCall } from './htmlProjectToolService';
 import { getProjectSummaryFromToolResult, streamChat } from './llmService';
+import { gatherKnowledge } from './knowledgeGatherService';
 
 /**
  * Continuation prompt injected (as a synthetic user message) before each
@@ -141,6 +143,7 @@ export interface AgentRunResult {
   fullText: string;
   finalHistory: ChatMessage[];
   historyDelta: ChatMessage[];
+  citations?: MessageCitation[];
   tokenInfo: {
     promptTokenCount: number;
     candidatesTokenCount: number;
@@ -238,6 +241,12 @@ export class AgentRunController {
       ? [...resumeFrom.committedHistoryDelta]
       : [];
     const historyDelta: ChatMessage[] = [];
+    let gatheredContext = resumeFrom?.gatheredContext
+      ? {
+          ragContext: resumeFrom.gatheredContext.ragContext,
+          citations: [...resumeFrom.gatheredContext.citations],
+        }
+      : undefined;
 
     // Link caller signal → internal abort (one-time).
     this.linkCallerSignal();
@@ -297,6 +306,7 @@ export class AgentRunController {
       todoSummary: state.todoSummary,
       snapshotVersion: state.snapshotVersion,
       firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
+      gatheredContext,
       tokenTotals: {
         promptTokenCount: totalPromptTokens,
         candidatesTokenCount: totalCandidatesTokens,
@@ -330,6 +340,7 @@ export class AgentRunController {
         todoSummary: state.todoSummary,
         snapshotVersion: state.snapshotVersion,
         firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
+        gatheredContext,
         tokenTotals: {
           promptTokenCount: totalPromptTokens,
           candidatesTokenCount: totalCandidatesTokens,
@@ -354,6 +365,7 @@ export class AgentRunController {
         todoSummary: state.todoSummary,
         snapshotVersion: state.snapshotVersion,
         firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
+        gatheredContext,
         tokenTotals: {
           promptTokenCount: totalPromptTokens,
           candidatesTokenCount: totalCandidatesTokens,
@@ -386,6 +398,29 @@ export class AgentRunController {
           this.handleAbortTermination();
           await markTerminalCheckpoint(this.state.status);
           break;
+        }
+
+        if (
+          !resumeFrom &&
+          state.turnIndex === 0 &&
+          !gatheredContext &&
+          (options.knowledgeChunks?.length ?? 0) > 0
+        ) {
+          const nextGatheredContext = await gatherKnowledge({
+            message: originalMessage,
+            recentHistory: options.history.slice(-4),
+            knowledgeChunks: options.knowledgeChunks ?? [],
+            signal: this.internalAbort.signal,
+          });
+          gatheredContext = nextGatheredContext ?? undefined;
+
+          if (this.internalAbort.signal.aborted) {
+            this.handleAbortTermination();
+            await markTerminalCheckpoint(this.state.status);
+            break;
+          }
+
+          await flushCheckpointProgress(true);
         }
 
         callbacks.onTurnStart?.(state.turnIndex, state.maxTurns);
@@ -425,7 +460,7 @@ export class AgentRunController {
         try {
           await streamChat({
             systemPrompt: options.systemPrompt,
-            ragContext: options.ragContext,
+            ragContext: gatheredContext?.ragContext ?? options.ragContext,
             history,
             message: messageForTurn,
             assistantId: options.assistantId,
@@ -679,6 +714,7 @@ export class AgentRunController {
       fullText,
       finalHistory: history,
       historyDelta,
+      citations: gatheredContext?.citations,
       tokenInfo: {
         promptTokenCount: totalPromptTokens,
         candidatesTokenCount: totalCandidatesTokens,

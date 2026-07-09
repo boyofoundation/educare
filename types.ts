@@ -5,6 +5,14 @@ export interface RagChunk {
   relevanceScore?: number;
 }
 
+export interface MessageCitation {
+  marker: number;
+  chunkId: string;
+  fileName: string;
+  chunkIndex: number;
+  excerpt: string;
+}
+
 export interface QueryCacheEntry {
   id: string; // UUID
   queryText: string; // 原始查詢文字
@@ -107,6 +115,10 @@ export interface ChatMessage {
    * 工具呼叫活動紀錄。用於串流卡片與歷史訊息重建。
    */
   toolCallLog?: ToolCallRecord[];
+  /**
+   * 回答引用的知識片段。舊資料可能沒有此欄位，UI 需優雅退化。
+   */
+  citations?: MessageCitation[];
 }
 
 /**
@@ -621,6 +633,10 @@ export interface AgentRunCheckpoint {
   todoSummary?: HtmlProjectTodoSummary;
   snapshotVersion?: number;
   firstTurnPackSet?: HtmlProjectToolPackName[];
+  gatheredContext?: {
+    ragContext: string;
+    citations: MessageCitation[];
+  };
   tokenTotals: {
     promptTokenCount: number;
     candidatesTokenCount: number;

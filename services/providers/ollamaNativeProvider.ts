@@ -5,6 +5,7 @@ import {
   StreamingResponse,
   type ProviderUsageMetadata,
 } from '../llmAdapter';
+import { buildRagPreamble } from './ragContextPreamble';
 
 interface OllamaModel {
   name: string;
@@ -88,8 +89,10 @@ export class OllamaNativeProvider implements LLMProvider {
 
     let finalSystemPrompt = params.systemPrompt;
     if (params.ragContext) {
-      const ragPreamble = `Use the information from the following context to inform your response to the user's question. Provide a natural, conversational answer as if the information is part of your general knowledge, without mentioning the context or documents directly. If the answer is not found in the provided information, state that you don't have the relevant information to answer the question. <context> ${params.ragContext} </context>`;
-      finalSystemPrompt = `${params.systemPrompt}\n\n${ragPreamble}`;
+      const ragPreamble = buildRagPreamble(params.ragContext);
+      finalSystemPrompt = ragPreamble
+        ? `${params.systemPrompt}\n\n${ragPreamble}`
+        : params.systemPrompt;
     }
 
     const model = params.model || this.config.model || 'llama3.2:latest';

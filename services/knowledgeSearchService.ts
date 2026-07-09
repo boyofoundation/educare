@@ -14,7 +14,7 @@ export const KNOWLEDGE_SEARCH_TOOL_SCHEMA = {
     },
     maxResults: {
       type: 'number',
-      description: 'Maximum number of chunks to return.',
+      description: 'Maximum number of matching chunks to return.',
     },
     fileName: {
       type: 'string',
@@ -32,11 +32,22 @@ export interface KnowledgeSearchArgs {
   fileName?: string;
 }
 
+export interface IndexedKnowledgeChunk extends RagChunk {
+  chunkId: string;
+  chunkIndex: number;
+}
+
 export interface KnowledgeSearchMatch {
   fileName: string;
   content: string;
   score: number;
+  chunkId: string;
+  chunkIndex: number;
 }
+
+const CJK_CHAR_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const CJK_RUN_OR_OTHER_PATTERN =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
 
 const normalizeText = (value: string): string => {
   return value
@@ -46,14 +57,44 @@ const normalizeText = (value: string): string => {
     .trim();
 };
 
-const tokenize = (value: string): string[] => {
-  return normalizeText(value)
-    .split(' ')
-    .map(token => token.trim())
-    .filter(token => token.length > 1);
+const tokenizePart = (part: string): string[] => {
+  const value = part.trim();
+  if (!value) {
+    return [];
+  }
+
+  if (!CJK_CHAR_PATTERN.test(value)) {
+    return value.length > 1 ? [value] : [];
+  }
+
+  if (value.length === 1) {
+    return [value];
+  }
+
+  const bigrams: string[] = [];
+  for (let index = 0; index < value.length - 1; index += 1) {
+    bigrams.push(value.slice(index, index + 2));
+  }
+  return bigrams;
 };
 
-const createExcerpt = (content: string, limit = 800): string => {
+const tokenize = (value: string): string[] => {
+  const seen = new Set<string>();
+
+  return normalizeText(value)
+    .split(' ')
+    .flatMap(token => token.match(CJK_RUN_OR_OTHER_PATTERN) ?? [])
+    .flatMap(tokenizePart)
+    .filter(token => {
+      if (seen.has(token)) {
+        return false;
+      }
+      seen.add(token);
+      return true;
+    });
+};
+
+export const createExcerpt = (content: string, limit = 800): string => {
   if (content.length <= limit) {
     return content;
   }
@@ -63,6 +104,23 @@ const createExcerpt = (content: string, limit = 800): string => {
 
 export const hasKnowledgeChunks = (knowledgeChunks?: RagChunk[]): boolean => {
   return Array.isArray(knowledgeChunks) && knowledgeChunks.length > 0;
+};
+
+export const buildIndexedKnowledgeChunks = (
+  knowledgeChunks: RagChunk[],
+): IndexedKnowledgeChunk[] => {
+  const fileChunkCounters = new Map<string, number>();
+
+  return knowledgeChunks.map(chunk => {
+    const nextChunkIndex = fileChunkCounters.get(chunk.fileName) ?? 0;
+    fileChunkCounters.set(chunk.fileName, nextChunkIndex + 1);
+
+    return {
+      ...chunk,
+      chunkIndex: nextChunkIndex,
+      chunkId: `${chunk.fileName}#${nextChunkIndex}`,
+    };
+  });
 };
 
 export const searchKnowledgeBase = (
@@ -79,7 +137,7 @@ export const searchKnowledgeBase = (
   const requestedFile = args.fileName ? normalizeText(args.fileName) : '';
   const maxResults = Math.min(Math.max(Math.round(args.maxResults || 5), 1), 8);
 
-  const scored = knowledgeChunks
+  const scored = buildIndexedKnowledgeChunks(knowledgeChunks)
     .map(chunk => {
       const normalizedContent = normalizeText(chunk.content);
       const normalizedFileName = normalizeText(chunk.fileName);
@@ -90,11 +148,11 @@ export const searchKnowledgeBase = (
 
       let score = 0;
 
-      if (normalizedContent.includes(normalizedQuery)) {
+      if (normalizedQuery && normalizedContent.includes(normalizedQuery)) {
         score += 8;
       }
 
-      if (normalizedFileName.includes(normalizedQuery)) {
+      if (normalizedQuery && normalizedFileName.includes(normalizedQuery)) {
         score += 6;
       }
 
@@ -111,10 +169,15 @@ export const searchKnowledgeBase = (
         fileName: chunk.fileName,
         content: createExcerpt(chunk.content),
         score,
+        chunkId: chunk.chunkId,
+        chunkIndex: chunk.chunkIndex,
       } satisfies KnowledgeSearchMatch;
     })
     .filter((chunk): chunk is KnowledgeSearchMatch => chunk !== null && chunk.score > 0)
-    .sort((a, b) => b.score - a.score || a.fileName.localeCompare(b.fileName))
+    .sort(
+      (a, b) =>
+        b.score - a.score || a.fileName.localeCompare(b.fileName) || a.chunkIndex - b.chunkIndex,
+    )
     .slice(0, maxResults);
 
   return scored;

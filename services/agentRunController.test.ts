@@ -9,6 +9,7 @@ const {
   mockBuildSyntheticMessage,
   mockSaveCheckpoint,
   mockUpdateCheckpoint,
+  mockGatherKnowledge,
 } = vi.hoisted(() => ({
   mockStreamChat: vi.fn(),
   mockExecuteHtmlProjectToolCall: vi.fn(),
@@ -17,6 +18,7 @@ const {
   mockBuildSyntheticMessage: vi.fn(),
   mockSaveCheckpoint: vi.fn().mockResolvedValue(undefined),
   mockUpdateCheckpoint: vi.fn().mockResolvedValue(null),
+  mockGatherKnowledge: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('./llmService', () => ({
@@ -67,6 +69,10 @@ vi.mock('./conversationUtils', async importOriginal => {
 vi.mock('./agentRunCheckpointService', () => ({
   saveCheckpoint: mockSaveCheckpoint,
   updateCheckpoint: mockUpdateCheckpoint,
+}));
+
+vi.mock('./knowledgeGatherService', () => ({
+  gatherKnowledge: mockGatherKnowledge,
 }));
 
 import { AgentRunController, CONTINUATION_PROMPT } from './agentRunController';
@@ -256,6 +262,7 @@ describe('AgentRunController', () => {
       result: { projectSummary: completeProjectSummary },
       summary: 'summary',
     });
+    mockGatherKnowledge.mockResolvedValue(null);
     mockBuildSyntheticMessage.mockImplementation(
       (role: 'user' | 'model', content: string, agentTurnLog?: string) => ({
         role,
@@ -824,6 +831,47 @@ describe('AgentRunController', () => {
       .filter(i => i >= 0)
       .pop();
     expect(syntheticIdx).toBeLessThan(lastModelIdx ?? Number.POSITIVE_INFINITY);
+  });
+
+  it('runs gatherKnowledge before the first stream when knowledge chunks exist and returns citations', async () => {
+    mockGatherKnowledge.mockResolvedValueOnce({
+      ragContext: '[1] (員工手冊.pdf · 段落 1)\n特休假規定',
+      citations: [
+        {
+          marker: 1,
+          chunkId: '員工手冊.pdf#0',
+          fileName: '員工手冊.pdf',
+          chunkIndex: 0,
+          excerpt: '特休假規定',
+        },
+      ],
+    });
+    const invocations = installStreamChatTurns([buildStreamChatInvocation({ text: 'done' })]);
+    const controller = new AgentRunController(
+      buildOptions({
+        knowledgeChunks: [{ fileName: '員工手冊.pdf', content: '特休假規定' }],
+        activeProjectId: null,
+      }),
+    );
+
+    const result = await controller.run();
+
+    expect(mockGatherKnowledge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'kick off',
+        knowledgeChunks: [{ fileName: '員工手冊.pdf', content: '特休假規定' }],
+      }),
+    );
+    expect(invocations[0]?.params.ragContext).toBe('[1] (員工手冊.pdf · 段落 1)\n特休假規定');
+    expect(result.citations).toEqual([
+      {
+        marker: 1,
+        chunkId: '員工手冊.pdf#0',
+        fileName: '員工手冊.pdf',
+        chunkIndex: 0,
+        excerpt: '特休假規定',
+      },
+    ]);
   });
 
   it('sharedMode: persists the shared flag in checkpoints and uses a default budget of 1', async () => {
