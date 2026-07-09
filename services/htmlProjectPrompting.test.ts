@@ -318,4 +318,29 @@ describe('buildHtmlProjectSystemPrompt', () => {
     expect(prompt).toContain('style="..." attributes');
     expect(prompt).toContain('external CDN resources require live network');
   });
+
+  it('includes sandbox environment hard constraints (opaque origin, single document)', () => {
+    const prompt = buildHtmlProjectSystemPrompt({ activeProjectId: null });
+    // Opaque-origin iframe facts.
+    expect(prompt).toContain('sandbox="allow-scripts allow-forms allow-modals"');
+    expect(prompt).toContain('OPAQUE origin');
+    // Storage APIs are usable but ephemeral in the preview.
+    expect(prompt).toContain('Storage is ephemeral');
+    expect(prompt).toContain('localStorage');
+    expect(prompt).toContain('IndexedDB');
+    expect(prompt).toContain('does NOT survive');
+    expect(prompt).toContain('remind the user');
+    // Single-document navigation / blob URL routing limits.
+    expect(prompt).toContain('Single-document navigation only');
+    expect(prompt).toContain('history.pushState');
+    // Popup / top-navigation / download blocks and no-server forms.
+    expect(prompt).toContain('window.open()');
+    expect(prompt).toContain('preventDefault()');
+    // Build-time and diagnostics constraints.
+    expect(prompt).toContain('<base> tags are stripped');
+    expect(prompt).toContain('classic <script src>');
+    expect(prompt).toContain('console.error and console.warn calls are captured');
+    // Service Workers added to boundaries.
+    expect(prompt).toContain('Service Workers');
+  });
 });
