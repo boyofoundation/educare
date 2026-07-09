@@ -29,13 +29,28 @@ describe('knowledgeSearchService', () => {
       indexed.map(chunk => ({
         fileName: chunk.fileName,
         chunkIndex: chunk.chunkIndex,
-        chunkId: chunk.chunkId,
       })),
     ).toEqual([
-      { fileName: '員工手冊.pdf', chunkIndex: 0, chunkId: '員工手冊.pdf#0' },
-      { fileName: '員工手冊.pdf', chunkIndex: 1, chunkId: '員工手冊.pdf#1' },
-      { fileName: 'leave-policy.md', chunkIndex: 0, chunkId: 'leave-policy.md#0' },
+      { fileName: '員工手冊.pdf', chunkIndex: 0 },
+      { fileName: '員工手冊.pdf', chunkIndex: 1 },
+      { fileName: 'leave-policy.md', chunkIndex: 0 },
     ]);
+    expect(indexed[0]?.chunkId).toMatch(/^員工手冊\.pdf#0:\d+:[0-9a-f]+$/);
+    expect(indexed[1]?.chunkId).toMatch(/^員工手冊\.pdf#1:\d+:[0-9a-f]+$/);
+    expect(indexed[2]?.chunkId).toMatch(/^leave-policy\.md#0:\d+:[0-9a-f]+$/);
+  });
+
+  it('includes content fingerprint in chunk ids so same file names stay distinguishable', () => {
+    const duplicateNameChunks: RagChunk[] = [
+      { fileName: 'syllabus.pdf', content: 'First document content' },
+      { fileName: 'syllabus.pdf', content: 'Second document content' },
+    ];
+
+    const indexed = buildIndexedKnowledgeChunks(duplicateNameChunks);
+
+    expect(indexed[0]?.chunkId).not.toBe(indexed[1]?.chunkId);
+    expect(indexed[0]?.chunkId).toContain('syllabus.pdf#0');
+    expect(indexed[1]?.chunkId).toContain('syllabus.pdf#1');
   });
 
   it('matches Chinese paraphrase queries through CJK bigram tokenization', () => {
@@ -46,9 +61,9 @@ describe('knowledgeSearchService', () => {
 
     expect(results[0]).toMatchObject({
       fileName: '員工手冊.pdf',
-      chunkId: '員工手冊.pdf#0',
       chunkIndex: 0,
     });
+    expect(results[0]?.chunkId).toMatch(/^員工手冊\.pdf#0:\d+:[0-9a-f]+$/);
     expect(results[0]?.content).toContain('特休假規定');
   });
 
@@ -61,8 +76,8 @@ describe('knowledgeSearchService', () => {
     expect(response.totalMatches).toBeGreaterThan(0);
     expect(response.results[0]).toMatchObject({
       fileName: 'leave-policy.md',
-      chunkId: 'leave-policy.md#0',
       chunkIndex: 0,
     });
+    expect(response.results[0]?.chunkId).toMatch(/^leave-policy\.md#0:\d+:[0-9a-f]+$/);
   });
 });

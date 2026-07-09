@@ -40,7 +40,7 @@ const parseSelectedChunkIds = (value: string): string[] => {
   }
 
   return match[1]
-    .split(/[\s,]+/)
+    .split(',')
     .map(item => item.trim())
     .filter(Boolean);
 };

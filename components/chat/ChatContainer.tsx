@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatContainerProps } from './types';
 import { AppContext } from '../core/useAppContext';
 import MessageBubble from './MessageBubble';
@@ -746,8 +746,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setInput('');
   };
 
-  const citationContentsById = Object.fromEntries(
-    buildIndexedKnowledgeChunks(ragChunks).map(chunk => [chunk.chunkId, chunk.content]),
+  const citationContentsById = useMemo(
+    () =>
+      Object.fromEntries(
+        buildIndexedKnowledgeChunks(ragChunks).map(chunk => [chunk.chunkId, chunk.content]),
+      ),
+    [ragChunks],
   );
 
   const isRunning = runState?.status === 'running';

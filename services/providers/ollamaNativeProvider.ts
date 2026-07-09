@@ -122,6 +122,7 @@ export class OllamaNativeProvider implements LLMProvider {
             num_predict: params.maxTokens || this.config.maxTokens || 4096,
           },
         }),
+        signal: params.signal,
       });
 
       if (!response.ok) {

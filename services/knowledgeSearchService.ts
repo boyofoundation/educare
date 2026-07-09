@@ -37,6 +37,15 @@ export interface IndexedKnowledgeChunk extends RagChunk {
   chunkIndex: number;
 }
 
+const buildChunkContentFingerprint = (content: string): string => {
+  let hash = 0;
+  for (let index = 0; index < content.length; index += 1) {
+    hash = (hash * 31 + content.charCodeAt(index)) >>> 0;
+  }
+
+  return `${content.length}:${hash.toString(16)}`;
+};
+
 export interface KnowledgeSearchMatch {
   fileName: string;
   content: string;
@@ -118,7 +127,7 @@ export const buildIndexedKnowledgeChunks = (
     return {
       ...chunk,
       chunkIndex: nextChunkIndex,
-      chunkId: `${chunk.fileName}#${nextChunkIndex}`,
+      chunkId: `${chunk.fileName}#${nextChunkIndex}:${buildChunkContentFingerprint(chunk.content)}`,
     };
   });
 };

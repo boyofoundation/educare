@@ -211,6 +211,7 @@ const buildCheckpoint = (overrides: Partial<AgentRunCheckpoint> = {}): AgentRunC
   todoSummary: overrides.todoSummary ?? baseProjectSummary.todoSummary,
   snapshotVersion: overrides.snapshotVersion ?? 7,
   firstTurnPackSet: overrides.firstTurnPackSet ?? ['inspect', 'todo_finalize'],
+  gatheredContext: overrides.gatheredContext,
   tokenTotals: overrides.tokenTotals ?? {
     promptTokenCount: 20,
     candidatesTokenCount: 8,
@@ -870,6 +871,105 @@ describe('AgentRunController', () => {
         fileName: '員工手冊.pdf',
         chunkIndex: 0,
         excerpt: '特休假規定',
+      },
+    ]);
+  });
+
+  it('continues the run when gatherKnowledge rejects and leaves ragContext undefined', async () => {
+    mockGatherKnowledge.mockRejectedValueOnce(new Error('gather failed'));
+    const invocations = installStreamChatTurns([buildStreamChatInvocation({ text: 'done' })]);
+    const controller = new AgentRunController(
+      buildOptions({
+        knowledgeChunks: [{ fileName: '員工手冊.pdf', content: '特休假規定' }],
+        activeProjectId: null,
+      }),
+    );
+
+    const result = await controller.run();
+
+    expect(mockGatherKnowledge).toHaveBeenCalledTimes(1);
+    expect(invocations[0]?.params.ragContext).toBeUndefined();
+    expect(result.state.status).toBe('complete');
+    expect(invocations).not.toHaveLength(0);
+    expect(result.citations).toBeUndefined();
+  });
+
+  it('resumeFrom with gatheredContext reuses checkpoint ragContext without rerunning gatherKnowledge', async () => {
+    const resumeFrom = buildCheckpoint({
+      gatheredContext: {
+        ragContext: '[1] (員工手冊.pdf · 段落 1)\n既有背景知識',
+        citations: [
+          {
+            marker: 1,
+            chunkId: '員工手冊.pdf#0',
+            fileName: '員工手冊.pdf',
+            chunkIndex: 0,
+            excerpt: '既有背景知識',
+          },
+        ],
+      },
+      turnIndex: 0,
+    });
+    const invocations = installStreamChatTurns([buildStreamChatInvocation({ text: 'done' })]);
+    const controller = new AgentRunController(
+      buildOptions({
+        resumeFrom,
+        activeProjectId: null,
+        knowledgeChunks: [{ fileName: '員工手冊.pdf', content: '特休假規定' }],
+      }),
+    );
+
+    const result = await controller.run();
+
+    expect(mockGatherKnowledge).not.toHaveBeenCalled();
+    expect(invocations[0]?.params.ragContext).toBe('[1] (員工手冊.pdf · 段落 1)\n既有背景知識');
+    expect(result.citations).toEqual([
+      {
+        marker: 1,
+        chunkId: '員工手冊.pdf#0',
+        fileName: '員工手冊.pdf',
+        chunkIndex: 0,
+        excerpt: '既有背景知識',
+      },
+    ]);
+  });
+
+  it('resumeFrom without gatheredContext reruns gatherKnowledge when resuming the first turn', async () => {
+    mockGatherKnowledge.mockResolvedValueOnce({
+      ragContext: '[1] (員工手冊.pdf · 段落 1)\n補跑背景知識',
+      citations: [
+        {
+          marker: 1,
+          chunkId: '員工手冊.pdf#0:5:特休假規定',
+          fileName: '員工手冊.pdf',
+          chunkIndex: 0,
+          excerpt: '補跑背景知識',
+        },
+      ],
+    });
+    const resumeFrom = buildCheckpoint({
+      turnIndex: 0,
+    });
+    const invocations = installStreamChatTurns([buildStreamChatInvocation({ text: 'done' })]);
+    const controller = new AgentRunController(
+      buildOptions({
+        resumeFrom,
+        activeProjectId: null,
+        knowledgeChunks: [{ fileName: '員工手冊.pdf', content: '特休假規定' }],
+      }),
+    );
+
+    const result = await controller.run();
+
+    expect(mockGatherKnowledge).toHaveBeenCalledTimes(1);
+    expect(invocations[0]?.params.ragContext).toBe('[1] (員工手冊.pdf · 段落 1)\n補跑背景知識');
+    expect(result.citations).toEqual([
+      {
+        marker: 1,
+        chunkId: '員工手冊.pdf#0:5:特休假規定',
+        fileName: '員工手冊.pdf',
+        chunkIndex: 0,
+        excerpt: '補跑背景知識',
       },
     ]);
   });

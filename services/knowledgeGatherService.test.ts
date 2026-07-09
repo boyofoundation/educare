@@ -25,14 +25,22 @@ const createProvider = (options: {
   selectedText?: string;
   toolCall?: ToolCall;
   waitForAbort?: boolean;
+  onAbort?: (reason: unknown) => void;
 }) => ({
   isAvailable: () => true,
   streamChat: vi.fn(async function* (params: ChatParams) {
     if (options.waitForAbort) {
       await new Promise((_, reject) => {
-        params.signal?.addEventListener('abort', () => reject(new Error('aborted')), {
-          once: true,
-        });
+        params.signal?.addEventListener(
+          'abort',
+          () => {
+            options.onAbort?.(params.signal?.reason);
+            reject(new Error('aborted'));
+          },
+          {
+            once: true,
+          },
+        );
       });
       return;
     }
@@ -82,14 +90,26 @@ describe('gatherKnowledge', () => {
       citations: [
         {
           marker: 1,
-          chunkId: '員工手冊.pdf#0',
           fileName: '員工手冊.pdf',
           chunkIndex: 0,
         },
       ],
     });
+    expect(result?.citations[0]?.chunkId).toMatch(/^員工手冊\.pdf#0:\d+:[0-9a-f]+$/);
     expect(result?.ragContext).toContain('[1] (員工手冊.pdf · 段落 1)');
     expect(result?.ragContext).toContain('特休假規定');
+  });
+
+  it('returns null without initializing providers when no knowledge chunks exist', async () => {
+    const result = await gatherKnowledge({
+      message: '沒有知識庫時會怎樣？',
+      recentHistory: [],
+      knowledgeChunks: [],
+    });
+
+    expect(result).toBeNull();
+    expect(mockInitializeProviders).not.toHaveBeenCalled();
+    expect(mockGetActiveProvider).not.toHaveBeenCalled();
   });
 
   it('falls back to captured top-scored chunks when selected block is missing', async () => {
@@ -128,4 +148,28 @@ describe('gatherKnowledge', () => {
 
     expect(result).toBeNull();
   }, 10000);
+
+  it('returns null and relays abort to the provider stream when the caller aborts', async () => {
+    const abortController = new AbortController();
+    const onAbort = vi.fn();
+    const provider = createProvider({
+      waitForAbort: true,
+      onAbort,
+    });
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const resultPromise = gatherKnowledge({
+      message: '中止測試',
+      recentHistory: [],
+      knowledgeChunks,
+      signal: abortController.signal,
+    });
+
+    await Promise.resolve();
+    abortController.abort('caller-abort');
+    const result = await resultPromise;
+
+    expect(result).toBeNull();
+    expect(onAbort).toHaveBeenCalledWith('caller-abort');
+  });
 });

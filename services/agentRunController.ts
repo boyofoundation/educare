@@ -401,18 +401,22 @@ export class AgentRunController {
         }
 
         if (
-          !resumeFrom &&
           state.turnIndex === 0 &&
           !gatheredContext &&
-          (options.knowledgeChunks?.length ?? 0) > 0
+          (options.knowledgeChunks?.length ?? 0) > 0 &&
+          (!resumeFrom || resumeFrom.turnIndex === 0)
         ) {
-          const nextGatheredContext = await gatherKnowledge({
-            message: originalMessage,
-            recentHistory: options.history.slice(-4),
-            knowledgeChunks: options.knowledgeChunks ?? [],
-            signal: this.internalAbort.signal,
-          });
-          gatheredContext = nextGatheredContext ?? undefined;
+          try {
+            const nextGatheredContext = await gatherKnowledge({
+              message: originalMessage,
+              recentHistory: options.history.slice(-4),
+              knowledgeChunks: options.knowledgeChunks ?? [],
+              signal: this.internalAbort.signal,
+            });
+            gatheredContext = nextGatheredContext ?? undefined;
+          } catch {
+            gatheredContext = undefined;
+          }
 
           if (this.internalAbort.signal.aborted) {
             this.handleAbortTermination();

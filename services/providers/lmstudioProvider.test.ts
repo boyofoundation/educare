@@ -45,4 +45,36 @@ describe('LMStudioProvider', () => {
       },
     });
   });
+
+  it('forwards abort signals to the chat fetch request', async () => {
+    const provider = new LMStudioProvider();
+    await provider.initialize({
+      baseUrl: 'http://localhost:1234/v1',
+      apiKey: 'lmstudio-secret',
+      model: 'local-model',
+    });
+
+    const abortController = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      expect(init?.signal).toBe(abortController.signal);
+      return new globalThis.Response(
+        JSON.stringify({ choices: [{ message: { content: 'done' }, finish_reason: 'stop' }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+
+    const responses: unknown[] = [];
+    for await (const response of provider.streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'hello',
+      signal: abortController.signal,
+    })) {
+      responses.push(response);
+      break;
+    }
+
+    expect(responses.length).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalled();
+  });
 });

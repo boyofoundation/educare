@@ -237,6 +237,75 @@ describe('MessageBubble', () => {
 
       expect(screen.getByText('lint-path-not-found')).toBeInTheDocument();
     });
+
+    it('renders citations and expands stored source content', () => {
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: '請參考下列資料。',
+        citations: [
+          {
+            marker: 1,
+            chunkId: 'handbook#0',
+            fileName: '員工手冊.pdf',
+            chunkIndex: 0,
+            excerpt: '摘錄內容',
+          },
+        ],
+      });
+
+      render(
+        <MessageBubble
+          message={assistantMessage}
+          index={0}
+          citationContentsById={{ 'handbook#0': '完整段落內容' }}
+        />,
+      );
+
+      expect(screen.getByText('📚 參考資料')).toBeInTheDocument();
+      expect(screen.getByText('[1]')).toBeInTheDocument();
+      expect(screen.getByText('員工手冊.pdf · 段落 1')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('員工手冊.pdf · 段落 1'));
+
+      expect(screen.getByText('完整段落內容')).toBeInTheDocument();
+      expect(
+        screen.queryByText('來源檔案已更新或移除，以下顯示儲存時的摘錄。'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('falls back to excerpt and shows stale-source notice when citation content is missing', () => {
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: '請參考舊資料。',
+        citations: [
+          {
+            marker: 1,
+            chunkId: 'missing#0',
+            fileName: '舊版資料.md',
+            chunkIndex: 2,
+            excerpt: '保留摘錄內容',
+          },
+        ],
+      });
+
+      render(<MessageBubble message={assistantMessage} index={0} citationContentsById={{}} />);
+
+      fireEvent.click(screen.getByText('舊版資料.md · 段落 3'));
+
+      expect(screen.getByText('來源檔案已更新或移除，以下顯示儲存時的摘錄。')).toBeInTheDocument();
+      expect(screen.getByText('保留摘錄內容')).toBeInTheDocument();
+    });
+
+    it('does not render the citations section when a message has no citations', () => {
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: '沒有引註的回覆。',
+      });
+
+      render(<MessageBubble message={assistantMessage} index={0} />);
+
+      expect(screen.queryByText('📚 參考資料')).not.toBeInTheDocument();
+    });
   });
 
   describe('Markdown Content Processing', () => {
