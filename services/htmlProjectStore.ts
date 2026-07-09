@@ -455,7 +455,7 @@ class HtmlProjectStore {
     const db = await getDb();
     const timestamp = now();
     const project: HtmlProject = {
-      id: `project-${timestamp}`,
+      id: `project-${timestamp}-${Math.random().toString(36).slice(2, 9)}`,
       assistantId: input.assistantId,
       sessionId: input.sessionId ?? null,
       name: input.name,
