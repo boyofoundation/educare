@@ -197,14 +197,19 @@ const buildInterruptedCheckpoint = (
   tokenTotals: overrides.tokenTotals ?? interruptedCheckpoint.tokenTotals,
 });
 
-const buildRunResult = (fullText: string): AgentRunResult => ({
+const buildRunResult = (
+  fullText: string,
+  overrides: Partial<AgentRunResult> = {},
+): AgentRunResult => ({
   state: completeState,
   fullText,
   finalHistory: [],
   historyDelta: [],
+  citations: overrides.citations,
   tokenInfo: {
     promptTokenCount: 10,
     candidatesTokenCount: 15,
+    ...overrides.tokenInfo,
   },
   telemetry: {
     sessionId: 'test-session-1',
@@ -450,6 +455,48 @@ describe('ChatContainer', () => {
       expect(defaultProps.onNewMessage).toHaveBeenCalledWith(
         expect.objectContaining({ id: defaultProps.session.id }),
         'Finish without chunk',
+        'Final response text',
+        expect.objectContaining({ promptTokenCount: 10, candidatesTokenCount: 15 }),
+      );
+    });
+  });
+
+  it('persists returned citations onto the final assistant message', async () => {
+    mockControllerRun.mockResolvedValueOnce(
+      buildRunResult('Final response text', {
+        citations: [
+          {
+            marker: 1,
+            chunkId: '員工手冊.pdf#0',
+            fileName: '員工手冊.pdf',
+            chunkIndex: 0,
+            excerpt: '特休假規定',
+          },
+        ],
+      }),
+    );
+
+    render(<ChatContainer {...defaultProps} />);
+
+    await sendMessage('Finish with citations');
+
+    await waitFor(() => {
+      expect(defaultProps.onNewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'model',
+              content: 'Final response text',
+              citations: [
+                expect.objectContaining({
+                  chunkId: '員工手冊.pdf#0',
+                  marker: 1,
+                }),
+              ],
+            }),
+          ]),
+        }),
+        'Finish with citations',
         'Final response text',
         expect.objectContaining({ promptTokenCount: 10, candidatesTokenCount: 15 }),
       );

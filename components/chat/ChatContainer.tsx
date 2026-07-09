@@ -8,6 +8,7 @@ import ThinkingIndicator from './ThinkingIndicator';
 import StreamingResponse from './StreamingResponse';
 import { Virtuoso } from 'react-virtuoso';
 import { AgentRunController } from '../../services/agentRunController';
+import { buildIndexedKnowledgeChunks } from '../../services/knowledgeSearchService';
 import {
   claimCheckpoint,
   deleteCheckpoint,
@@ -540,7 +541,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           return;
         }
 
-        const newAiMessage = buildAssistantMessage(fullModelResponse);
+        const newAiMessage = buildAssistantMessage(fullModelResponse, {
+          citations: result.citations,
+        });
         const finalSession = applyTokenUsageToSession(
           {
             ...baseSession,
@@ -743,6 +746,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setInput('');
   };
 
+  const citationContentsById = Object.fromEntries(
+    buildIndexedKnowledgeChunks(ragChunks).map(chunk => [chunk.chunkId, chunk.content]),
+  );
+
   const isRunning = runState?.status === 'running';
   const hasLiveActivity =
     toolCallRecords.length > 0 || Object.values(subagentBatches).some(runs => runs.length > 0);
@@ -899,7 +906,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                 }
                 return (
                   <div className='mb-6'>
-                    <MessageBubble message={msg} index={index} assistantName={assistantName} />
+                    <MessageBubble
+                      message={msg}
+                      index={index}
+                      assistantName={assistantName}
+                      citationContentsById={citationContentsById}
+                    />
                   </div>
                 );
               }}

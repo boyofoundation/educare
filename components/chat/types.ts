@@ -14,6 +14,7 @@ export interface MessageBubbleProps {
   message: ChatMessage;
   index: number;
   assistantName?: string;
+  citationContentsById?: Record<string, string>;
 }
 
 export interface ChatInputProps {
@@ -27,11 +28,6 @@ export interface ChatInputProps {
   isRunning?: boolean;
   /** G5: 使用者按下「停止」鈕的回呼 (會 abort 進行中的 controller)。 */
   onStop?: () => void;
-}
-
-export interface SessionManagerProps {
-  session: ChatSession;
-  onSessionUpdate: (session: ChatSession) => void;
 }
 
 export interface ChatContainerProps {

@@ -3,10 +3,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeHighlightCodeLines from 'rehype-highlight-code-lines';
+import type { MessageCitation } from '../../types';
 import 'highlight.js/styles/github-dark.css';
 
 interface MarkdownContentProps {
   content: string;
+  citations?: MessageCitation[];
+  messageKey?: string;
 }
 
 const getPlainText = (children: React.ReactNode): string => {
@@ -23,9 +26,62 @@ const getPlainText = (children: React.ReactNode): string => {
   return '';
 };
 
-const MarkdownContent: React.FC<MarkdownContentProps> = ({ content }) => {
+const buildCitationHref = (messageKey: string, marker: number): string =>
+  `#cite-${messageKey}-${marker}`;
+
+const rewriteCitationMarkers = (
+  value: string,
+  messageKey: string,
+  markers: Set<number>,
+): string => {
+  return value.replace(/\[(\d+)\]/g, (fullMatch, rawMarker: string) => {
+    const marker = Number(rawMarker);
+    if (!markers.has(marker)) {
+      return fullMatch;
+    }
+
+    return `[${marker}](${buildCitationHref(messageKey, marker)})`;
+  });
+};
+
+const annotateCitationLinks = (
+  content: string,
+  citations?: MessageCitation[],
+  messageKey?: string,
+): string => {
+  if (!citations?.length || !messageKey) {
+    return content;
+  }
+
+  const markers = new Set(citations.map(citation => citation.marker));
+  const fencePattern = /(```[\s\S]*?```)/g;
+  const inlineCodePattern = /(`[^`\n]+`)/g;
+
+  return content
+    .split(fencePattern)
+    .map(segment => {
+      if (segment.startsWith('```')) {
+        return segment;
+      }
+
+      return segment
+        .split(inlineCodePattern)
+        .map(part => {
+          if (part.startsWith('`') && part.endsWith('`')) {
+            return part;
+          }
+
+          return rewriteCitationMarkers(part, messageKey, markers);
+        })
+        .join('');
+    })
+    .join('');
+};
+
+const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, citations, messageKey }) => {
   const [copyFeedback, setCopyFeedback] = useState<{ target: string; label: string } | null>(null);
   const copyFeedbackTimerRef = useRef<number | null>(null);
+  const renderedContent = annotateCitationLinks(content, citations, messageKey);
 
   useEffect(() => {
     return () => {
@@ -127,16 +183,29 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content }) => {
             {children}
           </blockquote>
         ),
-        a: ({ children, href }) => (
-          <a
-            href={href}
-            target='_blank'
-            rel='noopener noreferrer'
-            className='text-cyan-400 underline hover:text-cyan-300'
-          >
-            {children}
-          </a>
-        ),
+        a: ({ children, href }) => {
+          if (href?.startsWith('#cite-')) {
+            return (
+              <a
+                href={href}
+                className='align-super text-xs font-semibold text-cyan-300 no-underline hover:text-cyan-200'
+              >
+                {children}
+              </a>
+            );
+          }
+
+          return (
+            <a
+              href={href}
+              target='_blank'
+              rel='noopener noreferrer'
+              className='text-cyan-400 underline hover:text-cyan-300'
+            >
+              {children}
+            </a>
+          );
+        },
         strong: ({ children }) => <strong className='font-semibold text-white'>{children}</strong>,
         em: ({ children }) => <em className='italic'>{children}</em>,
         table: ({ children }) => (
@@ -152,7 +221,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content }) => {
         td: ({ children }) => <td className='border border-gray-600 px-4 py-2'>{children}</td>,
       }}
     >
-      {content}
+      {renderedContent}
     </ReactMarkdown>
   );
 };

@@ -33,10 +33,15 @@ const formatTimestamp = (timestamp?: number): string | null => {
   });
 };
 
-const MessageBubbleBase: React.FC<MessageBubbleProps> = ({ message, index: _index }) => {
+const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
+  message,
+  index,
+  citationContentsById,
+}) => {
   const [syntheticExpanded, setSyntheticExpanded] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const copyFeedbackTimerRef = useRef<number | null>(null);
+  const messageKey = `msg-${index}`;
 
   useEffect(() => {
     return () => {
@@ -114,6 +119,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({ message, index: _inde
   const timestampLabel = formatTimestamp(message.timestamp);
   const isUser = message.role === 'user';
   const copyLabel = copyFeedback ?? (isUser ? '複製訊息' : '複製回應');
+  const citations = message.citations ?? [];
 
   const actionRow = (
     <div
@@ -198,9 +204,50 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({ message, index: _inde
               </div>
             )}
             <div className='text-sm leading-relaxed'>
-              <MarkdownContent content={displayContent} />
+              <MarkdownContent
+                content={displayContent}
+                citations={citations}
+                messageKey={messageKey}
+              />
             </div>
           </div>
+          {citations.length > 0 && (
+            <div className='w-full max-w-[85%] rounded-2xl border border-cyan-500/20 bg-gray-900/60 px-4 py-3 text-sm text-gray-200 md:max-w-[65ch]'>
+              <div className='mb-3 text-sm font-medium text-cyan-200'>📚 參考資料</div>
+              <div className='space-y-2'>
+                {citations.map(citation => {
+                  const sourceContent = citationContentsById?.[citation.chunkId];
+                  const resolvedContent = sourceContent ?? citation.excerpt;
+                  const sourceMissing = !sourceContent;
+
+                  return (
+                    <details
+                      key={citation.chunkId}
+                      id={`cite-${messageKey}-${citation.marker}`}
+                      className='rounded-xl border border-gray-700/70 bg-gray-800/80 px-3 py-2'
+                    >
+                      <summary className='cursor-pointer list-none text-sm font-medium text-cyan-100'>
+                        <span className='mr-2'>[{citation.marker}]</span>
+                        <span>
+                          {citation.fileName} · 段落 {citation.chunkIndex + 1}
+                        </span>
+                      </summary>
+                      <div className='mt-3 space-y-2'>
+                        {sourceMissing && (
+                          <p className='text-xs text-amber-200'>
+                            來源檔案已更新或移除，以下顯示儲存時的摘錄。
+                          </p>
+                        )}
+                        <pre className='whitespace-pre-wrap rounded-lg bg-gray-950/70 p-3 text-xs text-gray-100'>
+                          {resolvedContent}
+                        </pre>
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {actionRow}
         </div>
       </div>
