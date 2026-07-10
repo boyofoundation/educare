@@ -93,6 +93,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
     assistant.description,
     assistant.id,
     assistant.name,
+    assistant.routableAssistantIds,
+    assistant.starterPrompts,
+    assistant.subagentDelegationEnabled,
     assistant.systemPrompt,
     useShortUrl,
   ]);
