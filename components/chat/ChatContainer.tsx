@@ -485,6 +485,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
         routableTargets: resumeCheckpoint?.routableTargets ?? routableTargets,
         htmlProjectEnabled: resumeCheckpoint?.htmlProjectEnabled ?? projectEditingActive,
+        // 未開啟專案時,提供 createProject bootstrap 工具讓模型自行建立專案;
+        // 已綁定專案或 shared 模式(無 canvas workspace)時停用,以現有專案為準。
+        projectBootstrapEnabled:
+          resumeCheckpoint?.projectBootstrapEnabled ?? (!projectEditingActive && !sharedMode),
         sharedMode: resumeCheckpoint?.sharedMode ?? sharedMode,
         resumeFrom: resumeCheckpoint,
         callbacks: {

@@ -303,6 +303,20 @@ export const classifyHtmlProjectIntent = (
   };
 };
 
+/**
+ * 專案 bootstrap 提示:HTML 專案模式未開啟且沒有 active project 時,
+ * 與唯一暴露的 createProject 工具一起注入。由模型自行判斷是否需要
+ * 建立專案(不走關鍵字意圖分類),建立後由 harness 於下一回合升級為
+ * 完整專案模式。
+ */
+export const PROJECT_BOOTSTRAP_SYSTEM_PROMPT = [
+  '[PROJECT BOOTSTRAP]',
+  'You have a `createProject` tool that creates a browser-only HTML project workspace, shown in a canvas beside this chat where the user can preview it live.',
+  'Call `createProject` only when the user asks you to build something best delivered as an interactive web artifact — a webpage, prototype, widget, dashboard, mini game, or similar. Never call it for ordinary conversation, explanations, or Q&A.',
+  'After `createProject` succeeds, tell the user the project was created and briefly outline what you will build. The full project editing toolset becomes available on your next turn — do not attempt to call any other project tools in this turn.',
+  'Create at most one project; if a project already exists for this conversation, keep working with it instead of creating another.',
+].join('\n');
+
 export const shouldEnableHtmlProjectTools = (
   message: string,
   activeProjectId?: string | null,

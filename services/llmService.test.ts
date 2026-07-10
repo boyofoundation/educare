@@ -1319,4 +1319,163 @@ describe('streamChat', () => {
       expect(onComplete).toHaveBeenCalledWith(expect.anything(), 'routing turn done');
     });
   });
+
+  describe('project bootstrap (createProject without an active project)', () => {
+    const buildProvider = (body: (params: Record<string, unknown>) => Promise<void> | void) => ({
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        await body(params as Record<string, unknown>);
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 3,
+            candidatesTokenCount: 1,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 1,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    });
+
+    it('exposes only createProject with no forced choice in bootstrap mode without an active project', async () => {
+      const observedChatParams: Array<Record<string, unknown>> = [];
+      mockGetActiveProvider.mockReturnValue({
+        name: 'gemini',
+        displayName: 'Gemini',
+        supportedModels: ['gemini-2.5-flash'],
+        isAvailable: () => true,
+        streamChat: vi.fn(async function* (params) {
+          observedChatParams.push(params as Record<string, unknown>);
+          yield {
+            text: 'ok',
+            isComplete: true,
+            metadata: {
+              promptTokenCount: 3,
+              candidatesTokenCount: 1,
+              provider: 'gemini',
+              model: 'gemini-2.5-flash',
+              toolRoundCount: 0,
+              repeatedRecoverableErrors: [],
+            },
+          };
+        }),
+      });
+
+      const { streamChat } = await import('./llmService');
+
+      await streamChat({
+        // htmlProjectEnabled intentionally omitted → false; projectBootstrapEnabled opt-in.
+        projectBootstrapEnabled: true,
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'explain quantum mechanics',
+        assistantId: 'assistant-1',
+        knowledgeChunks: [],
+        onChunk: vi.fn(),
+        onComplete: vi.fn(),
+        onProjectToolActivity: vi.fn(),
+      });
+
+      expect(mockExecuteHtmlProjectToolCall).not.toHaveBeenCalled();
+      const tools = observedChatParams[0]?.tools as Array<{ name: string }>;
+      expect(tools).toHaveLength(1);
+      expect(tools[0]).toMatchObject({ name: 'createProject' });
+      expect(observedChatParams[0]?.toolChoice).toBeUndefined();
+      expect(String(observedChatParams[0]?.systemPrompt)).toContain('[PROJECT BOOTSTRAP]');
+    });
+
+    it('executes createProject in bootstrap mode and reports the new activeProjectId via onComplete', async () => {
+      mockGetActiveProvider.mockReturnValue(
+        buildProvider(async params => {
+          const executeTool = params.executeTool as (call: {
+            name: string;
+            args: Record<string, unknown>;
+          }) => Promise<unknown>;
+          const result = await executeTool({
+            name: 'createProject',
+            args: { name: 'Demo' },
+          });
+          expect(result).toMatchObject({
+            projectId: 'project-123',
+            summary: 'updated project',
+          });
+        }),
+      );
+
+      const { streamChat } = await import('./llmService');
+      const onProjectToolActivity = vi.fn();
+      const onComplete = vi.fn();
+
+      await streamChat({
+        projectBootstrapEnabled: true,
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'build me a landing page',
+        assistantId: 'assistant-1',
+        knowledgeChunks: [],
+        onChunk: vi.fn(),
+        onComplete,
+        onProjectToolActivity,
+      });
+
+      expect(mockExecuteHtmlProjectToolCall).toHaveBeenCalledWith(
+        { name: 'createProject', args: { name: 'Demo' } },
+        {
+          assistantId: 'assistant-1',
+          sessionId: undefined,
+          activeProjectId: null,
+        },
+      );
+      expect(onProjectToolActivity).toHaveBeenCalledTimes(1);
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ activeProjectId: 'project-123' }),
+        expect.anything(),
+      );
+      expect(mockRecordHtmlProjectTelemetryEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns a recoverable error when createProject is called again after a project already exists', async () => {
+      mockGetActiveProvider.mockReturnValue(
+        buildProvider(async params => {
+          const executeTool = params.executeTool as (call: {
+            name: string;
+            args: Record<string, unknown>;
+          }) => Promise<unknown>;
+          await executeTool({ name: 'createProject', args: { name: 'Demo' } });
+          const second = await executeTool({
+            name: 'createProject',
+            args: { name: 'Other' },
+          });
+          expect(second).toMatchObject({
+            ok: false,
+            recoverable: true,
+            code: 'project-already-active',
+          });
+        }),
+      );
+
+      const { streamChat } = await import('./llmService');
+
+      await streamChat({
+        projectBootstrapEnabled: true,
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'build me a landing page',
+        assistantId: 'assistant-1',
+        knowledgeChunks: [],
+        onChunk: vi.fn(),
+        onComplete: vi.fn(),
+        onProjectToolActivity: vi.fn(),
+      });
+
+      // Second createProject is blocked by the guard — store is only hit once.
+      expect(mockExecuteHtmlProjectToolCall).toHaveBeenCalledTimes(1);
+    });
+  });
 });

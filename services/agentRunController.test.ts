@@ -1077,6 +1077,97 @@ describe('AgentRunController', () => {
     });
   });
 
+  it('project bootstrap: createProject on turn 0 upgrades to full project mode on the next turn', async () => {
+    const seenParams: Array<Record<string, unknown>> = [];
+    let call = 0;
+    mockStreamChat.mockImplementation(async (params: Record<string, unknown>) => {
+      seenParams.push(params);
+      call += 1;
+      const onComplete = params.onComplete as (meta: unknown, fullText: string) => void;
+      if (call === 1) {
+        // Bootstrap turn: the model created a project (no project id existed before).
+        onComplete(
+          {
+            promptTokenCount: 5,
+            candidatesTokenCount: 2,
+            finishReason: 'complete',
+            toolSequence: ['createProject'],
+            projectSummary: null,
+            selectedPackSet: [],
+            activeProjectId: 'proj-new',
+          },
+          'created project',
+        );
+      } else {
+        // Upgraded turn: full project mode with an active project, reported complete.
+        onComplete(
+          {
+            promptTokenCount: 3,
+            candidatesTokenCount: 1,
+            finishReason: 'complete',
+            toolSequence: ['reportTurnOutcome'],
+            projectSummary: completeProjectSummary,
+            selectedPackSet: ['inspect'],
+          },
+          'done',
+        );
+      }
+    });
+
+    const controller = new AgentRunController(
+      buildOptions({
+        activeProjectId: null,
+        agentHarnessEnabled: false,
+        projectBootstrapEnabled: true,
+      }),
+    );
+    const result = await controller.run();
+
+    // Upgraded → ran a second turn under full project mode.
+    expect(mockStreamChat).toHaveBeenCalledTimes(2);
+    expect(seenParams[0]?.activeProjectId).toBeNull();
+    expect(seenParams[0]?.projectBootstrapEnabled).toBe(true);
+    expect(seenParams[0]?.htmlProjectEnabled).toBe(false);
+    expect(seenParams[1]?.activeProjectId).toBe('proj-new');
+    expect(seenParams[1]?.htmlProjectEnabled).toBe(true);
+    expect(seenParams[1]?.projectBootstrapEnabled).toBe(false);
+    expect(result.state.maxTurns).toBe(5);
+    expect(result.state.projectId).toBe('proj-new');
+    expect(result.state.status).toBe('complete');
+  });
+
+  it('project bootstrap: disabled in shared mode even when the flag is on', async () => {
+    const seenParams: Array<Record<string, unknown>> = [];
+    mockStreamChat.mockImplementation(async (params: Record<string, unknown>) => {
+      seenParams.push(params);
+      (params.onComplete as (meta: unknown, fullText: string) => void)(
+        {
+          promptTokenCount: 3,
+          candidatesTokenCount: 1,
+          finishReason: 'complete',
+          toolSequence: [],
+          projectSummary: null,
+          selectedPackSet: [],
+        },
+        'done',
+      );
+    });
+
+    const controller = new AgentRunController(
+      buildOptions({
+        sharedMode: true,
+        activeProjectId: null,
+        agentHarnessEnabled: false,
+        projectBootstrapEnabled: true,
+      }),
+    );
+    const result = await controller.run();
+
+    expect(seenParams[0]?.projectBootstrapEnabled).toBe(false);
+    expect(mockStreamChat).toHaveBeenCalledTimes(1);
+    expect(result.state.maxTurns).toBe(1);
+  });
+
   describe('assistant routing passthrough', () => {
     const routableTargets = [
       { id: 'assistant-math', name: 'Math Tutor', description: 'Solves advanced math problems' },

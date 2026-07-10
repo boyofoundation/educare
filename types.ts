@@ -668,6 +668,8 @@ export interface AgentRunCheckpoint {
   routableTargets?: Array<{ id: string; name: string; description: string }>;
   /** HTML 專案模式開關快照,確保 resume 時維持與原回合一致的工具暴露。 */
   htmlProjectEnabled?: boolean;
+  /** 專案 bootstrap 快照:無 active project 時是否暴露 createProject 工具讓模型自行建立專案。 */
+  projectBootstrapEnabled?: boolean;
   sharedMode: boolean;
   createdAt: number;
   updatedAt: number;

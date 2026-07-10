@@ -31,7 +31,11 @@ import {
   getAllHtmlProjectToolDefinitions,
   getHtmlProjectToolNamesForPacks,
 } from './htmlProjectToolService';
-import { buildHtmlProjectSystemPrompt, classifyHtmlProjectIntent } from './htmlProjectPrompting';
+import {
+  buildHtmlProjectSystemPrompt,
+  classifyHtmlProjectIntent,
+  PROJECT_BOOTSTRAP_SYSTEM_PROMPT,
+} from './htmlProjectPrompting';
 import { recordHtmlProjectTelemetryEvent } from './htmlProjectAgentTelemetry';
 import {
   buildSubagentDelegationToolDefinition,
@@ -66,6 +70,13 @@ export interface StreamChatParams {
    */
   htmlProjectEnabled?: boolean;
   /**
+   * 專案 bootstrap 開關。預設 false。僅在 `htmlProjectEnabled === false` 且
+   * 沒有 activeProjectId 時生效:只暴露 `createProject` 一個工具(不走關鍵字
+   * 意圖分類、不強制呼叫),由模型自行判斷使用者是否需要建立 HTML 專案。
+   * 一旦已有 active project(使用者已開啟專案),此開關無效——以現有專案為準。
+   */
+  projectBootstrapEnabled?: boolean;
+  /**
    * AbortSignal (G4/G17). Threaded into the provider's chatParams; providers
    * check `signal.aborted` per round and yield finishReason='aborted' within
    * ~1 round. No half-turn writes.
@@ -98,6 +109,8 @@ export interface StreamChatParams {
       toolSequence?: string[];
       /** Effective selected pack set (mirrored from telemetry for controller use). */
       selectedPackSet?: HtmlProjectToolPackName[];
+      /** 回合結束時的 active project id(bootstrap createProject 後由 controller 接手升級)。 */
+      activeProjectId?: string | null;
       subagentRuns?: SubagentRunRecord[];
       subagentUsageTotals?: TokenUsageTotals;
     },
@@ -236,6 +249,7 @@ export const streamChat = async (params: StreamChatParams) => {
     subagentDelegationEnabled = false,
     routableTargets = [],
     htmlProjectEnabled = false,
+    projectBootstrapEnabled = false,
     onChunk,
     onProjectToolActivity,
     onSubagentActivity,
@@ -297,6 +311,13 @@ export const streamChat = async (params: StreamChatParams) => {
       : classifyHtmlProjectIntent(message, resolvedActiveProjectId);
   let selectedPackSet = [...initialIntentDecision.selectedPackSet];
   let htmlProjectToolEnabled = hasPackSetOverride || selectedPackSet.length > 0;
+
+  // 專案 bootstrap 模式:HTML 專案模式未開啟且沒有 active project 時,
+  // 只暴露 createProject 讓模型自行決定是否建立專案(不走關鍵字分類)。
+  // 使用者已開啟專案(activeProjectId 存在)時此模式不生效。
+  const projectBootstrapToolEnabled =
+    !htmlProjectEnabled && projectBootstrapEnabled && !resolvedActiveProjectId;
+  let bootstrapProjectCreated = false;
 
   const telemetryEvent: HtmlProjectAgentTelemetryEvent = {
     sessionId,
@@ -360,6 +381,9 @@ export const streamChat = async (params: StreamChatParams) => {
     const htmlProjectToolDefinitions = htmlProjectToolEnabled
       ? getAllHtmlProjectToolDefinitions()
       : [];
+    const bootstrapToolDefinitions = projectBootstrapToolEnabled
+      ? getAllHtmlProjectToolDefinitions().filter(tool => tool.name === 'createProject')
+      : [];
     const visibleHtmlProjectToolNames = new Set(htmlProjectToolDefinitions.map(tool => tool.name));
     const forcedHtmlProjectToolName = (() => {
       const packToolNames = getHtmlProjectToolNamesForPacks(selectedPackSet);
@@ -403,6 +427,7 @@ export const streamChat = async (params: StreamChatParams) => {
             gatingMode: 'soft',
           })
         : '',
+      projectBootstrapToolEnabled ? PROJECT_BOOTSTRAP_SYSTEM_PROMPT : '',
       subagentDelegationEnabled ? SUBAGENT_DELEGATION_SYSTEM_PROMPT : '',
       routableTargets.length > 0 ? buildRoutingSystemPrompt(routableTargets) : '',
     ]
@@ -528,6 +553,32 @@ export const streamChat = async (params: StreamChatParams) => {
             ...toolResult.result,
             summary: toolResult.summary,
           };
+        } else if (projectBootstrapToolEnabled && call.name === 'createProject') {
+          if (resolvedActiveProjectId) {
+            result = createRoutingRecoverableToolError(
+              'project-already-active',
+              'A project was already created for this turn.',
+              'Do not create another project. Tell the user the project is ready; the full project toolset arrives on the next turn.',
+            );
+          } else {
+            const toolResult = await executeHtmlProjectToolCall(call, {
+              assistantId,
+              sessionId,
+              activeProjectId: resolvedActiveProjectId,
+            });
+
+            resolvedActiveProjectId = toolResult.workspace.activeProjectId;
+            bootstrapProjectCreated = true;
+            telemetryEvent.projectId = resolvedActiveProjectId;
+            latestPreviewOutcome =
+              getPreviewOutcomeFromWorkspace(toolResult.workspace) ?? latestPreviewOutcome;
+            onProjectToolActivity?.(toolResult.workspace);
+
+            result = {
+              ...toolResult.result,
+              summary: toolResult.summary,
+            };
+          }
         } else {
           result = createRoutingRecoverableToolError(
             'tool-unsupported',
@@ -538,6 +589,7 @@ export const streamChat = async (params: StreamChatParams) => {
               visibleToolNames: [
                 ...(knowledgeToolEnabled ? [KNOWLEDGE_SEARCH_TOOL_NAME] : []),
                 ...htmlProjectToolDefinitions.map(tool => tool.name),
+                ...bootstrapToolDefinitions.map(tool => tool.name),
                 ...(subagentDelegationEnabled ? [SUBAGENT_DELEGATE_TOOL_NAME] : []),
                 ...(routableTargets.length > 0 ? [ROUTE_TOOL_NAME] : []),
               ],
@@ -589,6 +641,7 @@ export const streamChat = async (params: StreamChatParams) => {
           ]
         : []),
       ...htmlProjectToolDefinitions,
+      ...bootstrapToolDefinitions,
       ...(subagentDelegationEnabled ? [delegationToolDefinition] : []),
       ...(routableTargets.length > 0 ? [buildRouteToAssistantTool(routableTargets)] : []),
     ];
@@ -630,7 +683,7 @@ export const streamChat = async (params: StreamChatParams) => {
     telemetryEvent.durationMs = Date.now() - startedAt;
     telemetryEvent.finishReason = finishReason;
 
-    if (htmlProjectToolEnabled) {
+    if (htmlProjectToolEnabled || bootstrapProjectCreated) {
       recordHtmlProjectTelemetryEvent(telemetryEvent);
     }
 
@@ -645,6 +698,7 @@ export const streamChat = async (params: StreamChatParams) => {
         projectSummary,
         toolSequence: telemetryEvent.toolSequence,
         selectedPackSet: selectedPackSet,
+        activeProjectId: resolvedActiveProjectId,
         subagentRuns,
         subagentUsageTotals,
       },
@@ -656,7 +710,7 @@ export const streamChat = async (params: StreamChatParams) => {
       latestPreviewOutcome ?? projectSummary?.previewDiagnostics.outcome;
     telemetryEvent.durationMs = Date.now() - startedAt;
 
-    if (htmlProjectToolEnabled) {
+    if (htmlProjectToolEnabled || bootstrapProjectCreated) {
       recordHtmlProjectTelemetryEvent(telemetryEvent);
     }
 

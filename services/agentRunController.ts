@@ -131,6 +131,13 @@ export interface AgentRunControllerOptions {
   routableTargets?: RoutableTarget[];
   /** HTML 專案模式開關。預設 false: 未開啟時不暴露任何 HTML 專案工具。 */
   htmlProjectEnabled?: boolean;
+  /**
+   * 專案 bootstrap 開關。預設 false。無 active project 時暴露 createProject
+   * 工具讓模型自行建立專案;模型建立成功後,controller 於後續回合升級為
+   * 完整專案模式(htmlProjectEnabled=true、maxTurns 升到 harness 預設)。
+   * 已有 active project 或 sharedMode 時不生效。
+   */
+  projectBootstrapEnabled?: boolean;
   /** shared mode → default budget 1 (auto-continue effectively off). */
   sharedMode?: boolean;
   /** override run budget; default 5 (sharedMode default 1). */
@@ -239,8 +246,14 @@ export class AgentRunController {
     const effectiveDelegation =
       (resumeFrom?.subagentDelegationEnabled ?? options.subagentDelegationEnabled ?? false) &&
       !(options.sharedMode ?? false);
-    const effectiveHtmlProjectEnabled =
+    let effectiveHtmlProjectEnabled =
       resumeFrom?.htmlProjectEnabled ?? options.htmlProjectEnabled ?? false;
+    // Bootstrap 升級後這些值會在 run 中途改變;checkpoint 一律以 effective 值為準。
+    let effectiveProjectId = resumeFrom?.projectId ?? options.activeProjectId ?? null;
+    let effectiveAgentHarnessEnabled = options.agentHarnessEnabled;
+    const projectBootstrapEnabled =
+      (resumeFrom?.projectBootstrapEnabled ?? options.projectBootstrapEnabled ?? false) &&
+      !(options.sharedMode ?? false);
     const checkpointHistory = resumeFrom?.committedHistoryDelta
       ? [...resumeFrom.committedHistoryDelta]
       : [];
@@ -258,10 +271,10 @@ export class AgentRunController {
     // G11: best-effort run-start snapshot (only when project mode is active).
     // D4 去重:createRunStartSnapshot 在「工作樹乾淨且已有同 version snapshot」時
     // 重用既有 snapshot,不疊空 run-start commit。
-    if (!resumeFrom && effectiveHtmlProjectEnabled && options.activeProjectId) {
+    if (!resumeFrom && effectiveHtmlProjectEnabled && effectiveProjectId) {
       try {
         const snapshot = await htmlProjectStore.createRunStartSnapshot(
-          options.activeProjectId,
+          effectiveProjectId,
           RUN_START_SNAPSHOT_NOTE,
         );
         this.state.snapshotVersion = snapshot.version;
@@ -299,7 +312,7 @@ export class AgentRunController {
       runId: state.runId,
       sessionId: sessionId ?? '',
       assistantId: options.assistantId,
-      projectId: options.activeProjectId ?? null,
+      projectId: effectiveProjectId,
       status,
       turnIndex: state.turnIndex,
       maxTurns: state.maxTurns,
@@ -315,10 +328,11 @@ export class AgentRunController {
         promptTokenCount: totalPromptTokens,
         candidatesTokenCount: totalCandidatesTokens,
       },
-      agentHarnessEnabled: options.agentHarnessEnabled,
+      agentHarnessEnabled: effectiveAgentHarnessEnabled,
       subagentDelegationEnabled: effectiveDelegation,
       routableTargets: options.routableTargets,
       htmlProjectEnabled: effectiveHtmlProjectEnabled,
+      projectBootstrapEnabled,
       sharedMode: options.sharedMode ?? false,
       createdAt: resumeFrom?.createdAt ?? state.startedAt,
       updatedAt: Date.now(),
@@ -339,6 +353,10 @@ export class AgentRunController {
       await updateCheckpoint(state.runId, {
         status: 'running',
         turnIndex: state.turnIndex,
+        maxTurns: state.maxTurns,
+        projectId: effectiveProjectId,
+        htmlProjectEnabled: effectiveHtmlProjectEnabled,
+        agentHarnessEnabled: effectiveAgentHarnessEnabled,
         committedHistoryDelta: [...checkpointHistory],
         partialText: this.latestPartialText || undefined,
         toolTrace: [...state.toolTrace],
@@ -365,6 +383,10 @@ export class AgentRunController {
       await updateCheckpoint(state.runId, {
         status,
         turnIndex: state.turnIndex,
+        maxTurns: state.maxTurns,
+        projectId: effectiveProjectId,
+        htmlProjectEnabled: effectiveHtmlProjectEnabled,
+        agentHarnessEnabled: effectiveAgentHarnessEnabled,
         committedHistoryDelta: [...checkpointHistory],
         partialText: this.latestPartialText || undefined,
         toolTrace: [...state.toolTrace],
@@ -457,6 +479,7 @@ export class AgentRunController {
           toolSequence: string[];
           projectSummary: HtmlProjectSummary | null;
           selectedPackSet?: HtmlProjectToolPackName[];
+          activeProjectId?: string | null;
           subagentRuns?: SubagentRunRecord[];
           subagentUsageTotals?: TokenUsageTotals;
         } = {
@@ -476,13 +499,14 @@ export class AgentRunController {
             message: messageForTurn,
             assistantId: options.assistantId,
             sessionId: options.sessionId,
-            activeProjectId: options.activeProjectId,
+            activeProjectId: effectiveProjectId,
             knowledgeChunks: options.knowledgeChunks,
             signal: this.internalAbort.signal,
             packSetOverride: isContinuation ? firstTurnPackSet : undefined,
             subagentDelegationEnabled: effectiveDelegation,
             routableTargets: resumeFrom?.routableTargets ?? options.routableTargets,
             htmlProjectEnabled: effectiveHtmlProjectEnabled,
+            projectBootstrapEnabled: projectBootstrapEnabled && !effectiveProjectId,
             onChunk: text => {
               this.latestPartialText += text;
               callbacks.onChunk(text, state.turnIndex);
@@ -498,6 +522,7 @@ export class AgentRunController {
               turn.toolSequence = meta.toolSequence ?? [];
               turn.projectSummary = meta.projectSummary ?? null;
               turn.selectedPackSet = meta.selectedPackSet;
+              turn.activeProjectId = meta.activeProjectId;
               turn.subagentRuns = meta.subagentRuns;
               turn.subagentUsageTotals = meta.subagentUsageTotals;
               totalPromptTokens += meta.promptTokenCount;
@@ -569,10 +594,10 @@ export class AgentRunController {
 
         // G1/G4: wait briefly for runtime diagnostics if there is an active project.
         let turnPreviewDiagnosticState: HtmlProjectRuntimeDiagnosticStatus = 'not_executed';
-        if (options.activeProjectId && turn.projectSummary) {
+        if (effectiveProjectId && turn.projectSummary) {
           try {
             const diag = await previewRuntimeDiagnostics.waitForRuntimeDiagnostics(
-              options.activeProjectId,
+              effectiveProjectId,
               turn.projectSummary.previewVersion,
               G4_RUNTIME_DIAGNOSTICS_WAIT_MS,
             );
@@ -635,17 +660,16 @@ export class AgentRunController {
 
         // G4: continuation decision — controller-verify has top priority.
         const modelReportedComplete = turn.toolSequence.includes('reportTurnOutcome');
-        const finishIndicatesComplete =
-          turn.finishReason === 'complete' && !!options.activeProjectId;
+        const finishIndicatesComplete = turn.finishReason === 'complete' && !!effectiveProjectId;
         const todoAllComplete = turn.projectSummary?.todoSummary.allComplete === true;
 
         const needsG4Verify =
-          options.activeProjectId &&
+          effectiveProjectId &&
           (modelReportedComplete || finishIndicatesComplete || todoAllComplete);
 
         let terminalComplete = false;
-        if (needsG4Verify && options.activeProjectId) {
-          const verified = await this.verifyCompletionAuthoritative();
+        if (needsG4Verify && effectiveProjectId) {
+          const verified = await this.verifyCompletionAuthoritative(effectiveProjectId);
           if (verified.passes) {
             terminalComplete = true;
             if (verified.summary) {
@@ -655,6 +679,20 @@ export class AgentRunController {
             state.previewDiagnosticState = verified.diagnosticState;
           }
           // else: false-complete (AC#8) → fall through to continuation logic.
+        }
+
+        // Bootstrap 升級:模型本回合透過 createProject 建立了專案 →
+        // 後續回合以完整專案模式續跑(帶入 projectId、開啟專案工具、
+        // maxTurns 從單回合升到 harness 預算),讓同一次執行能繼續建置內容。
+        if (!effectiveProjectId && turn.activeProjectId) {
+          effectiveProjectId = turn.activeProjectId;
+          effectiveHtmlProjectEnabled = true;
+          state.projectId = effectiveProjectId;
+          if (!(options.sharedMode ?? false)) {
+            effectiveAgentHarnessEnabled = true;
+            state.maxTurns = Math.max(state.maxTurns, options.maxTurns ?? 5);
+          }
+          this.emitStateChange();
         }
 
         // Commit this turn to history (G6) — model message with agentTurnLog.
@@ -800,12 +838,12 @@ export class AgentRunController {
    * G4 authoritative completion verify — calls getProjectSummary directly
    * (NOT via the model) and waits briefly for runtime diagnostics.
    */
-  private async verifyCompletionAuthoritative(): Promise<{
+  private async verifyCompletionAuthoritative(projectId?: string | null): Promise<{
     passes: boolean;
     summary: HtmlProjectSummary | null;
     diagnosticState: HtmlProjectRuntimeDiagnosticStatus;
   }> {
-    const projectId = this.options.activeProjectId;
+    projectId = projectId ?? this.options.activeProjectId;
     if (!projectId) {
       return { passes: false, summary: null, diagnosticState: 'not_executed' };
     }
