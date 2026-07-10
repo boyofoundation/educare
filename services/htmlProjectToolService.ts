@@ -1318,6 +1318,22 @@ const handleCreateProject = async (
   args: CreateProjectArgs,
   context: HtmlProjectToolContext,
 ): Promise<HtmlProjectToolExecutionResult> => {
+  // 冪等守門:本對話已有 active project 時禁止再次建立。
+  // bootstrap 首次建立的 context.activeProjectId 必為 null/undefined,故不影響正常建立;
+  // 專案模式升級後 createProject 仍對模型可見(soft gating),此守門直接擋下第二次建立,
+  // 並在 guidance 中提供正確的後續操作知識(改用 edit 工具續作),避免專案被建立兩次。
+  if (context.activeProjectId) {
+    throw new HtmlProjectToolRecoverableError({
+      ok: false,
+      recoverable: true,
+      code: 'project-already-active',
+      message: `An HTML project is already active (id: ${context.activeProjectId}). Do not create another project.`,
+      guidance:
+        'Continue building on the active project instead of creating a new one. Plan with setProjectTodos, then add content with writeFiles (small new files) or modifyLinesInFile/replaceInFile (after readFile) on the active project. Only ask the user about a brand-new project if they explicitly request one separate from the current work.',
+      details: { activeProjectId: context.activeProjectId },
+    });
+  }
+
   const project = await htmlProjectStore.createProject({
     assistantId: context.assistantId,
     sessionId: context.sessionId,
@@ -1339,6 +1355,8 @@ const handleCreateProject = async (
       created: true,
       files: templateFiles.map(file => file.path),
       previewVersion: preview.previewVersion,
+      nextStepGuidance:
+        'Project created successfully. Do NOT call createProject again — the full editing toolset becomes available on the next turn. Next, call setProjectTodos to lay out a short plan (at least 3 concrete todos), then build the content with writeFiles for new files (or modifyLinesInFile/replaceInFile after readFile for edits). Run lintProject / getPreviewRuntimeErrors to verify, then reportTurnOutcome(outcome:"complete") when finished.',
     },
     workspace: createWorkspaceUpdate(project.id, summary, preview),
   };

@@ -4,6 +4,7 @@ import type { ToolCall } from './llmAdapter';
 const {
   mockAssertProjectOwnership,
   mockCopyFile,
+  mockCreateProject,
   mockDeleteFile,
   mockDeleteTodo,
   mockGetTodoSummary,
@@ -16,6 +17,7 @@ const {
   mockReplaceTodos,
   mockResolveProjectForPreview,
   mockBuildPreviewArtifact,
+  mockGetTemplateFiles,
   mockSearchFiles,
   mockSetEntrypoint,
   mockUpdateTodo,
@@ -27,6 +29,7 @@ const {
 } = vi.hoisted(() => ({
   mockAssertProjectOwnership: vi.fn(),
   mockCopyFile: vi.fn(),
+  mockCreateProject: vi.fn(),
   mockDeleteFile: vi.fn(),
   mockDeleteTodo: vi.fn(),
   mockGetTodoSummary: vi.fn(),
@@ -39,6 +42,7 @@ const {
   mockReplaceTodos: vi.fn(),
   mockResolveProjectForPreview: vi.fn(),
   mockBuildPreviewArtifact: vi.fn(),
+  mockGetTemplateFiles: vi.fn(),
   mockSearchFiles: vi.fn(),
   mockSetEntrypoint: vi.fn(),
   mockUpdateTodo: vi.fn(),
@@ -57,6 +61,7 @@ vi.mock('./htmlProjectStore', async importOriginal => {
     htmlProjectStore: {
       assertProjectOwnership: mockAssertProjectOwnership,
       copyFile: mockCopyFile,
+      createProject: mockCreateProject,
       deleteFile: mockDeleteFile,
       deleteTodo: mockDeleteTodo,
       getTodoSummary: mockGetTodoSummary,
@@ -89,6 +94,10 @@ vi.mock('./previewRuntimeDiagnostics', () => ({
     waitForRuntimeDiagnostics: mockWaitForRuntimeDiagnostics,
     clear: mockClearRuntimeDiagnostics,
   },
+}));
+
+vi.mock('./htmlProjectTemplates', () => ({
+  getTemplateFiles: mockGetTemplateFiles,
 }));
 
 describe('executeHtmlProjectToolCall', () => {
@@ -141,6 +150,25 @@ describe('executeHtmlProjectToolCall', () => {
     });
     mockListTodos.mockResolvedValue([]);
     mockListProjectFiles.mockResolvedValue([]);
+    mockCreateProject.mockResolvedValue({
+      id: 'project-new',
+      assistantId: 'assistant-1',
+      sessionId: 'session-1',
+      name: 'New Project',
+      description: undefined,
+      entryFile: '/index.html',
+      status: 'draft',
+      previewVersion: 0,
+      assetPaths: [],
+      createdAt: 1700000000000,
+      updatedAt: 1700000000000,
+      lastPrompt: undefined,
+      lastBuildError: null,
+      tags: undefined,
+    });
+    mockGetTemplateFiles.mockReturnValue([
+      { path: '/index.html', kind: 'html', content: '<html></html>' },
+    ]);
     mockDeleteFile.mockResolvedValue({
       deleted: true,
       previewVersion: 4,
@@ -182,6 +210,53 @@ describe('executeHtmlProjectToolCall', () => {
       runtimeDiagnosticsCleared: true,
       filesRestored: 3,
     });
+  });
+
+  it('createProject refuses a second project when an active project already exists', async () => {
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+
+    const result = await executeHtmlProjectToolCall(
+      { name: 'createProject', args: { name: 'Duplicate' } },
+      { assistantId: 'assistant-1', activeProjectId: 'project-existing' },
+    );
+
+    // 不應建立第二個專案
+    expect(mockCreateProject).not.toHaveBeenCalled();
+    expect(result.toolName).toBe('createProject');
+    expect(result.result).toMatchObject({
+      ok: false,
+      recoverable: true,
+      code: 'project-already-active',
+    });
+    // guidance 必須給出正確後續操作知識 (改用 edit 工具)
+    expect((result.result as { guidance?: string }).guidance).toEqual(
+      expect.stringContaining('writeFiles'),
+    );
+  });
+
+  it('createProject succeeds with nextStepGuidance when no active project exists', async () => {
+    const { executeHtmlProjectToolCall } = await import('./htmlProjectToolService');
+
+    const result = await executeHtmlProjectToolCall(
+      { name: 'createProject', args: { name: 'New Project' } },
+      { assistantId: 'assistant-1', activeProjectId: null },
+    );
+
+    expect(mockCreateProject).toHaveBeenCalledWith(
+      expect.objectContaining({ assistantId: 'assistant-1', name: 'New Project' }),
+    );
+    expect(result.toolName).toBe('createProject');
+    expect(result.result).toMatchObject({
+      projectId: 'project-new',
+      created: true,
+      entryFile: '/index.html',
+    });
+    // 成功結果須帶出 nextStepGuidance,給模型正確的後續操作知識
+    expect((result.result as { nextStepGuidance?: string }).nextStepGuidance).toEqual(
+      expect.stringContaining('Do NOT call createProject again'),
+    );
+    // workspace 帶出新專案 id,讓 UI 即時連動
+    expect(result.workspace.activeProjectId).toBe('project-new');
   });
 
   it('accepts a single file object, infers kind from path, and forwards normalized files', async () => {
