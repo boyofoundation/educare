@@ -310,7 +310,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   }, []);
 
   const handleProjectToolActivity = (update: HtmlProjectWorkspaceUpdate) => {
-    const nextProjectId = update.activeProjectId ?? sessionRef.current.activeProjectId ?? null;
+    const currentProjectId = sessionRef.current.activeProjectId;
+    const nextProjectId = update.activeProjectId ?? currentProjectId ?? null;
 
     setCurrentSession(prev => {
       const nextSession = {
@@ -322,7 +323,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     });
 
     actions?.setActiveProject?.(nextProjectId);
-    actions?.setProjectWorkspaceOpen?.(Boolean(nextProjectId));
+
+    // A render update for the current project must not override a user's choice to hide
+    // the Canvas. Only opening a different (including first) project may reveal it.
+    if (nextProjectId !== currentProjectId) {
+      actions?.setProjectWorkspaceOpen?.(Boolean(nextProjectId));
+    }
 
     if (update.preview) {
       actions?.setProjectPreview?.(update.preview);
@@ -792,9 +798,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   return (
     <div className='relative flex h-full flex-col bg-gray-900'>
       {!hideHeader && (
-        <div className='flex-shrink-0 border-b border-gray-700 bg-gray-800 p-2 md:p-4'>
+        <div className='flex-shrink-0 border-b border-gray-700 bg-gray-800 px-4 py-3 md:px-6 md:py-4'>
           <div className='flex items-center justify-between'>
-            <h2 className='mr-2 truncate text-base font-medium text-white md:text-xl md:font-semibold'>
+            <h2 className='mr-2 truncate text-lg font-semibold text-white md:text-xl'>
               {assistantName}
             </h2>
             <div className='flex items-center space-x-3'>
@@ -824,7 +830,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                     setResumeUnavailableReason(null);
                     setResumeError(null);
                   }}
-                  className='flex items-center space-x-1 rounded-md bg-purple-700 px-2 py-1.5 text-xs font-medium text-purple-100 transition-colors hover:bg-purple-600 hover:text-white md:space-x-2 md:px-3 md:text-sm'
+                  className='flex min-h-11 items-center space-x-1 rounded-lg bg-purple-700 px-3 py-2 text-sm font-medium text-purple-100 transition-colors hover:bg-purple-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300 md:space-x-2 md:px-4'
                   title='開啟新對話'
                 >
                   <svg
@@ -855,7 +861,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         role='main'
         aria-label='聊天對話'
       >
-        <div className='mx-auto max-w-3xl px-3 py-4 md:px-4 md:py-6'>
+        <div className='mx-auto max-w-4xl px-4 py-5 md:px-6 md:py-8'>
           {interruptedCheckpoint && (
             <div
               className='mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100'
@@ -971,7 +977,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             {pendingEmptyResponseNotice && (
               <div className='flex justify-start'>
                 <div className='w-full max-w-3xl'>
-                  <div className='ml-13 rounded-lg border border-dashed border-gray-700/60 bg-gray-900/40 px-4 py-3 text-sm text-gray-300'>
+                  <div className='ml-13 rounded-lg border border-dashed border-gray-700/60 bg-gray-900/40 px-4 py-3 text-base leading-7 text-gray-300'>
                     {pendingEmptyResponseNotice}
                   </div>
                 </div>
@@ -985,7 +991,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         <button
           type='button'
           onClick={() => scrollToBottom('smooth')}
-          className='absolute bottom-28 right-4 z-10 rounded-full border border-cyan-500/40 bg-gray-900/90 px-4 py-2 text-sm font-medium text-cyan-100 shadow-lg backdrop-blur transition hover:border-cyan-400 hover:bg-gray-800 md:bottom-32 md:right-8'
+          className='absolute bottom-28 right-4 z-10 min-h-11 rounded-full border border-cyan-500/40 bg-gray-900/90 px-4 py-2 text-base font-medium text-cyan-100 shadow-lg backdrop-blur transition hover:border-cyan-400 hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 md:bottom-32 md:right-8'
           aria-label='捲動至最新訊息'
         >
           ⬇ 跳至最新

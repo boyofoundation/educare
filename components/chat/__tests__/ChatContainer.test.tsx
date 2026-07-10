@@ -534,6 +534,39 @@ describe('ChatContainer', () => {
     });
   });
 
+  it('does not reopen a user-collapsed Canvas when the active project renders again', async () => {
+    mockControllerRun.mockImplementationOnce(async () => {
+      const options = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+        callbacks?: {
+          onProjectToolActivity?: (update: {
+            activeProjectId: string;
+            preview: { url: string };
+          }) => void;
+        };
+      };
+      options?.callbacks?.onProjectToolActivity?.({
+        activeProjectId: 'project-99',
+        preview: { url: 'blob:preview-100' },
+      });
+      return buildRunResult('Rendered without reopening Canvas');
+    });
+
+    render(
+      <ChatContainer
+        {...defaultProps}
+        session={{ ...defaultProps.session, activeProjectId: 'project-99' }}
+      />,
+    );
+
+    await sendMessage('Render the current project again');
+
+    await waitFor(() => {
+      expect(mockSetActiveProject).toHaveBeenCalledWith('project-99');
+      expect(mockSetProjectPreview).toHaveBeenCalledWith({ url: 'blob:preview-100' });
+    });
+    expect(mockSetProjectWorkspaceOpen).not.toHaveBeenCalled();
+  });
+
   it('forwards onStateChange to AppContext.setAgentRunState', async () => {
     mockControllerRun.mockImplementationOnce(async () => {
       const options = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {

@@ -117,7 +117,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
           <button
             type='button'
             onClick={() => setSyntheticExpanded(open => !open)}
-            className='inline-flex items-center gap-2 rounded-full border border-gray-700/60 bg-gray-800/40 px-3 py-1 text-xs text-gray-400 transition hover:border-gray-600 hover:text-gray-200'
+            className='inline-flex min-h-10 items-center gap-2 rounded-full border border-gray-700/60 bg-gray-800/40 px-3 py-2 text-sm text-gray-300 transition hover:border-gray-600 hover:text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70'
             aria-expanded={syntheticExpanded}
             aria-label={syntheticExpanded ? '摺疊續跑訊息' : '展開續跑訊息'}
             title={syntheticExpanded ? '摺疊續跑訊息' : '展開續跑訊息'}
@@ -143,7 +143,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
             </svg>
           </button>
           {syntheticExpanded && (
-            <div className='mt-2 rounded-xl border border-dashed border-gray-700/50 bg-gray-900/40 px-4 py-2 text-xs text-gray-400'>
+            <div className='mt-2 rounded-xl border border-dashed border-gray-700/50 bg-gray-900/40 px-4 py-3 text-sm leading-6 text-gray-300'>
               {message.content}
               {message.agentTurnLog && (
                 <div className='mt-2 border-t border-gray-800 pt-2 text-[10px] text-gray-500'>
@@ -195,8 +195,8 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
             </div>
           </div>
           <div className='group flex min-w-0 flex-col items-end'>
-            <div className='w-full max-w-[85%] rounded-2xl rounded-br-md bg-gradient-to-br from-cyan-500 to-blue-600 px-5 py-3 text-white shadow-lg md:max-w-[65ch]'>
-              <div className='text-sm leading-relaxed'>
+            <div className='w-full max-w-[90%] rounded-2xl rounded-br-md bg-gradient-to-br from-cyan-500 to-blue-600 px-5 py-4 text-white shadow-lg md:max-w-[70ch] md:px-6'>
+              <div className='text-base leading-7'>
                 <MarkdownContent content={displayContent} />
               </div>
             </div>
@@ -221,7 +221,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
             subagentRuns={message.subagentRuns}
           />
           <div
-            className={`w-full max-w-[85%] rounded-2xl rounded-bl-md px-5 py-3 shadow-lg md:max-w-[65ch] ${
+            className={`w-full max-w-[90%] rounded-2xl rounded-bl-md px-5 py-4 shadow-lg md:max-w-[70ch] md:px-6 ${
               message.isError
                 ? 'border border-rose-500/40 bg-rose-500/10 text-rose-50'
                 : 'border border-gray-700/50 bg-gray-800/80 text-gray-100 backdrop-blur-sm'
@@ -245,7 +245,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
                 <span>系統錯誤</span>
               </div>
             )}
-            <div className='text-sm leading-relaxed'>
+            <div className='text-base leading-7'>
               <MarkdownContent
                 content={displayContent}
                 citations={citations}
