@@ -31,7 +31,22 @@ interface CapturedKnowledgeChunk {
 
 const KNOWLEDGE_GATHER_SYSTEM_PROMPT = `${KNOWLEDGE_SEARCH_SYSTEM_PROMPT}
 
-You are a hidden background knowledge gatherer. Search the knowledge base before the main answer is generated. You may rewrite the query, call the tool multiple times, and compare results. After you are done, output only a <selected>...</selected> block listing the chunkId values that should be injected into the main answer context, separated by commas. Do not answer the user directly.`;
+You are a hidden background knowledge gatherer. You will receive a conversation transcript between a user and an assistant. You are NOT the assistant in that transcript: do not answer, continue, or react to the conversation. Your only job is to search the knowledge base for material relevant to the ongoing conversation — especially the user's latest message — before the main answer is generated. You may rewrite the query, call the tool multiple times, and compare results. After you are done, output only a <selected>...</selected> block listing the chunkId values that should be injected into the main answer context, separated by commas.`;
+
+const formatTranscript = (recentHistory: ChatMessage[], message: string): string => {
+  const lines = recentHistory
+    .filter(entry => !entry.isError && entry.content.trim())
+    .map(entry => `${entry.role === 'user' ? 'User' : 'Assistant'}: ${entry.content}`);
+  lines.push(`User (latest message): ${message}`);
+  return lines.join('\n\n');
+};
+
+const buildGatherInstruction = (recentHistory: ChatMessage[], message: string): string =>
+  `<conversation_transcript>
+${formatTranscript(recentHistory, message)}
+</conversation_transcript>
+
+The transcript above is reference material only — do not reply to it. Identify what knowledge the conversation depends on, call ${KNOWLEDGE_SEARCH_TOOL_NAME} with suitable queries, then output only the <selected>...</selected> block.`;
 
 const parseSelectedChunkIds = (value: string): string[] => {
   const match = value.match(/<selected>([\s\S]*?)<\/selected>/i);
@@ -146,8 +161,10 @@ export const gatherKnowledge = async (params: {
   try {
     for await (const response of activeProvider.streamChat({
       systemPrompt: KNOWLEDGE_GATHER_SYSTEM_PROMPT,
-      history: recentHistory,
-      message,
+      // 對話以 transcript 形式包進單一 user 訊息;若照原始多輪格式送出,
+      // gatherer LLM 會把最後一則 user 訊息當成要回答的問題而非檢索依據。
+      history: [],
+      message: buildGatherInstruction(recentHistory, message),
       tools: [
         {
           name: KNOWLEDGE_SEARCH_TOOL_NAME,

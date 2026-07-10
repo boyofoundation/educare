@@ -100,6 +100,36 @@ describe('gatherKnowledge', () => {
     expect(result?.ragContext).toContain('特休假規定');
   });
 
+  it('sends the conversation as a transcript in a single user message instead of multi-turn history', async () => {
+    const provider = createProvider({
+      toolCall: {
+        name: 'searchKnowledgeBase',
+        args: { query: '特休', maxResults: 3 },
+      },
+      selectedText: '<selected>員工手冊.pdf#0</selected>',
+    });
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    await gatherKnowledge({
+      message: '15 + 200 = 215',
+      recentHistory: [
+        { role: 'user', content: '繼續練習好嗎' },
+        { role: 'model', content: '好，我們來練 300 - 85' },
+        { role: 'model', content: '這是錯誤訊息', isError: true },
+      ],
+      knowledgeChunks,
+    });
+
+    const params = provider.streamChat.mock.calls[0][0] as ChatParams;
+    expect(params.history).toEqual([]);
+    expect(params.message).toContain('<conversation_transcript>');
+    expect(params.message).toContain('User: 繼續練習好嗎');
+    expect(params.message).toContain('Assistant: 好，我們來練 300 - 85');
+    expect(params.message).toContain('User (latest message): 15 + 200 = 215');
+    expect(params.message).not.toContain('這是錯誤訊息');
+    expect(params.systemPrompt).toContain('do not answer, continue, or react');
+  });
+
   it('returns null without initializing providers when no knowledge chunks exist', async () => {
     const result = await gatherKnowledge({
       message: '沒有知識庫時會怎樣？',
