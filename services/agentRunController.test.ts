@@ -661,6 +661,49 @@ describe('AgentRunController', () => {
     expect(mockBuildSyntheticMessage).not.toHaveBeenCalled();
   });
 
+  it('live tool-trace: emits state.toolTrace mid-turn when a tool starts running (before onComplete)', async () => {
+    const opts = buildOptions({ maxTurns: 1 });
+    const onStateChange = vi.fn();
+    opts.callbacks.onStateChange = onStateChange;
+
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      const onToolCallActivity = params.onToolCallActivity as
+        | ((record: { id: string; name: string; status: string }) => void)
+        | undefined;
+      const onComplete = params.onComplete as (meta: unknown, fullText: string) => void;
+
+      // 模擬 function-call loop:工具首次 'running' 時 controller 應即時 emit
+      // 含該工具的 toolTrace,而不必等到 onComplete (loop 期間 UI 即時連動)。
+      onToolCallActivity?.({ id: 'writeFiles-1-1', name: 'writeFiles', status: 'running' });
+      onToolCallActivity?.({ id: 'writeFiles-1-1', name: 'writeFiles', status: 'ok' });
+
+      expect(onStateChange).toHaveBeenCalledWith(
+        expect.objectContaining({ toolTrace: expect.arrayContaining(['writeFiles']) }),
+      );
+
+      onComplete(
+        {
+          promptTokenCount: 10,
+          candidatesTokenCount: 5,
+          provider: 'gemini',
+          model: 'gemini-2.5-flash',
+          finishReason: 'tool-budget-exhausted',
+          projectSummary: baseProjectSummary,
+          toolSequence: ['writeFiles'],
+          selectedPackSet: ['edit'],
+        },
+        'done',
+      );
+    });
+
+    const controller = new AgentRunController(opts);
+    await controller.run();
+
+    // 回合結束後 toolTrace 仍應保留 writeFiles (回合邊界權威校正不會丟失即時累積)
+    expect(controller.getState().toolTrace).toEqual(expect.arrayContaining(['writeFiles']));
+    expect(mockStreamChat).toHaveBeenCalledTimes(1);
+  });
+
   it('checkpoint: marks failed status when streamChat throws', async () => {
     mockStreamChat.mockRejectedValueOnce(new Error('stream failed'));
 

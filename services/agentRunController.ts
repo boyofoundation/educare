@@ -301,6 +301,10 @@ export class AgentRunController {
 
     // Aggregated tool trace across turns (for state.toolTrace).
     const aggregatedToolTrace: string[] = resumeFrom?.toolTrace ? [...resumeFrom.toolTrace] : [];
+    // 本回合 function-call loop 內即時觀察到的工具軌跡 (僅供 loop 期間 UI 即時顯示;
+    // 回合結束時由 aggregatedToolTrace + turn.toolSequence 權威校正,故不重複累積)。
+    let liveToolTraceThisTurn: string[] = [];
+    const liveToolCallIds = new Set<string>();
 
     let lastPartialFlushAt = 0;
 
@@ -458,6 +462,10 @@ export class AgentRunController {
 
         callbacks.onTurnStart?.(state.turnIndex, state.maxTurns);
 
+        // 重置本回合的即時工具軌跡 (回合邊界時 aggregatedToolTrace 已權威校正)。
+        liveToolTraceThisTurn = [];
+        liveToolCallIds.clear();
+
         const isContinuation = state.turnIndex > 0;
         const messageForTurn = isContinuation ? CONTINUATION_PROMPT : options.message;
         const synthetic = isContinuation
@@ -514,7 +522,19 @@ export class AgentRunController {
             },
             onProjectToolActivity: callbacks.onProjectToolActivity,
             onSubagentActivity: callbacks.onSubagentActivity,
-            onToolCallActivity: callbacks.onToolCallActivity,
+            onToolCallActivity: record => {
+              // Live tool-trace:回合中的 function-call loop 內,每個工具首次 'running'
+              // 時立即累積並 emit state,讓 canvas AgentRunPanel 即時看到工具軌跡與活動
+              // (否則 state.toolTrace 只在回合邊界更新,loop 期間 UI 凍結、看不到進度)。
+              if (record.status === 'running' && !liveToolCallIds.has(record.id)) {
+                liveToolCallIds.add(record.id);
+                liveToolTraceThisTurn.push(record.name);
+                state.toolTrace = [...aggregatedToolTrace, ...liveToolTraceThisTurn].slice(-32);
+                this.emitStateChange();
+                void flushCheckpointProgress();
+              }
+              callbacks.onToolCallActivity?.(record);
+            },
             onRouteProposal: callbacks.onRouteProposal,
             onComplete: (meta, text) => {
               turn.text = text;
