@@ -71,3 +71,7 @@ test-results*/
 !.codex/prompts/
 !.codex/prompts/**
 /.codex
+
+# Personal Claude Code harness (per-machine, migrated from ~/.claude)
+.claude/CLAUDE.md
+.claude/RTK.md
