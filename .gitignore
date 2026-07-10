@@ -61,3 +61,13 @@ test-results*/
 # Other agent/CLI state
 /.antigravitycli
 /.omg/state
+.omx/
+.codex/*
+!.codex/agents/
+!.codex/agents/**
+!.codex/skills/
+!.codex/skills/**
+.codex/skills/.system/**
+!.codex/prompts/
+!.codex/prompts/**
+/.codex
