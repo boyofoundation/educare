@@ -5,6 +5,7 @@ import { ProjectPicker } from '../canvas';
 import { ChatIcon, TrashIcon, SettingsIcon, PlusIcon } from '../ui/Icons';
 import { ChatSession, SessionTokenUsage } from '../../types';
 import { useTursoAssistantStatus } from '../../hooks/useTursoAssistantStatus';
+import { downloadAssistantPackage } from '../../services/assistantPackageService';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -422,6 +423,21 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           onCreateNew={() => {
             actions.setViewMode('new_assistant');
             closeDrawerIfMobile();
+          }}
+          onExport={assistant => {
+            try {
+              downloadAssistantPackage(assistant);
+            } catch (error) {
+              window.alert(`匯出助理設定檔失敗：${(error as Error).message}`);
+            }
+          }}
+          onImport={async file => {
+            try {
+              await actions.importAssistantPackage(file);
+              closeDrawerIfMobile();
+            } catch (error) {
+              window.alert(`匯入助理設定檔失敗：${(error as Error).message}`);
+            }
           }}
           canShare={canShare}
           collapsed={collapsed}

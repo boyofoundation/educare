@@ -94,6 +94,7 @@ export interface AppContextValue {
     loadData: () => Promise<void>;
     selectAssistant: (assistantId: string, changeView?: boolean) => Promise<void>;
     saveAssistant: (assistant: Assistant) => Promise<void>;
+    importAssistantPackage: (file: File) => Promise<Assistant>;
     deleteAssistant: (assistantId: string) => Promise<void>;
     createNewSession: (
       assistantId: string,

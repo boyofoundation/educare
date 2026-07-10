@@ -8,6 +8,8 @@ export interface AssistantListProps {
   onDelete: (assistantId: string) => void;
   onShare: (assistant: Assistant) => void;
   onCreateNew: () => void;
+  onExport?: (assistant: Assistant) => void;
+  onImport?: (file: File) => void;
   canShare?: boolean;
   collapsed?: boolean;
 }

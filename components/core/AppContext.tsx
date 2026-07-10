@@ -15,6 +15,7 @@ import {
 } from '../../services/agentRunCheckpointService';
 import { htmlProjectStore } from '../../services/htmlProjectStore';
 import { htmlProjectImportService } from '../../services/htmlProjectImportService';
+import { importAssistantPackageFile } from '../../services/assistantPackageService';
 import { getTemplateFiles } from '../../services/htmlProjectTemplates';
 import { AppContext } from './useAppContext';
 import type { ViewMode, AppState, AppAction, AppContextValue } from './AppContext.types';
@@ -367,6 +368,24 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       }
     },
     [selectAssistant, state.viewMode],
+  );
+
+  // Import assistant from an exported package zip (offline sharing without Turso)
+  const importAssistantPackage = useCallback(
+    async (file: File) => {
+      const existingIds = state.assistants.map(assistant => assistant.id);
+      const imported = await importAssistantPackageFile(file, existingIds);
+
+      await db.saveAssistant(imported);
+      const storedAssistants = await db.getAllAssistants();
+      dispatch({
+        type: 'SET_ASSISTANTS',
+        payload: storedAssistants.sort((a, b) => b.createdAt - a.createdAt),
+      });
+      await selectAssistant(imported.id, true);
+      return imported;
+    },
+    [selectAssistant, state.assistants],
   );
 
   // Delete assistant
@@ -933,6 +952,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       loadData,
       selectAssistant,
       saveAssistant,
+      importAssistantPackage,
       deleteAssistant,
       createNewSession,
       deleteSession,

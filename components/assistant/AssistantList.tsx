@@ -1,7 +1,29 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { AssistantListProps } from './types';
 import { CustomSelect } from '../ui/CustomSelect';
 import { PlusIcon, EditIcon, TrashIcon } from '../ui/Icons';
+
+const ExportGlyph: React.FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+    <path
+      strokeLinecap='round'
+      strokeLinejoin='round'
+      strokeWidth={2}
+      d='M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0 0l-4-4m4 4l4-4'
+    />
+  </svg>
+);
+
+const ImportGlyph: React.FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+    <path
+      strokeLinecap='round'
+      strokeLinejoin='round'
+      strokeWidth={2}
+      d='M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 16V4m0 0L8 8m4-4l4 4'
+    />
+  </svg>
+);
 
 const ShareGlyph: React.FC<{ className?: string }> = ({ className }) => (
   <svg className={className} fill='none' stroke='currentColor' viewBox='0 0 24 24'>
@@ -22,9 +44,33 @@ export const AssistantList: React.FC<AssistantListProps> = ({
   onDelete,
   onShare,
   onCreateNew,
+  onExport,
+  onImport,
   canShare = true, // 預設為可分享
   collapsed = false,
 }) => {
+  const importInputRef = useRef<globalThis.HTMLInputElement | null>(null);
+
+  const handleImportFileChange = (event: React.ChangeEvent<globalThis.HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file && onImport) {
+      onImport(file);
+    }
+    event.target.value = '';
+  };
+
+  const importFileInput = onImport ? (
+    <input
+      ref={importInputRef}
+      type='file'
+      accept='.zip,application/zip'
+      className='hidden'
+      onChange={handleImportFileChange}
+      aria-hidden='true'
+      tabIndex={-1}
+    />
+  ) : null;
+
   // --- Collapsed: compact icon rail ---
   if (collapsed) {
     return (
@@ -41,6 +87,20 @@ export const AssistantList: React.FC<AssistantListProps> = ({
         >
           <PlusIcon className='w-5 h-5' />
         </button>
+
+        {onImport && (
+          <>
+            {importFileInput}
+            <button
+              onClick={() => importInputRef.current?.click()}
+              className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-emerald-400 hover:bg-emerald-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+              title='匯入助理設定檔'
+              aria-label='匯入助理設定檔'
+            >
+              <ImportGlyph className='w-4 h-4' />
+            </button>
+          </>
+        )}
 
         <div className='w-full border-t border-gray-700/40' />
 
@@ -99,6 +159,16 @@ export const AssistantList: React.FC<AssistantListProps> = ({
               >
                 <ShareGlyph className='w-4 h-4' />
               </button>
+              {onExport && (
+                <button
+                  onClick={() => onExport(selectedAssistant)}
+                  className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-emerald-400 hover:bg-emerald-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                  title='匯出助理設定檔'
+                  aria-label='匯出助理設定檔'
+                >
+                  <ExportGlyph className='w-4 h-4' />
+                </button>
+              )}
               <button
                 onClick={() => onEdit(selectedAssistant)}
                 className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-cyan-400 hover:bg-cyan-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
@@ -145,6 +215,19 @@ export const AssistantList: React.FC<AssistantListProps> = ({
         >
           <PlusIcon className='w-4 h-4' />
         </button>
+        {onImport && (
+          <>
+            {importFileInput}
+            <button
+              onClick={() => importInputRef.current?.click()}
+              className='p-1.5 text-gray-400 hover:text-emerald-400 rounded-md hover:bg-emerald-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+              title='匯入助理設定檔'
+              aria-label='匯入助理設定檔'
+            >
+              <ImportGlyph className='w-4 h-4' />
+            </button>
+          </>
+        )}
         {selectedAssistant && (
           <>
             <button
@@ -164,6 +247,16 @@ export const AssistantList: React.FC<AssistantListProps> = ({
             >
               <ShareGlyph className='w-4 h-4' />
             </button>
+            {onExport && (
+              <button
+                onClick={() => onExport(selectedAssistant)}
+                className='p-1.5 text-gray-400 hover:text-emerald-400 rounded-md hover:bg-emerald-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                title='匯出助理設定檔'
+                aria-label='匯出助理設定檔'
+              >
+                <ExportGlyph className='w-4 h-4' />
+              </button>
+            )}
             <button
               onClick={() => onEdit(selectedAssistant)}
               className='p-1.5 text-gray-400 hover:text-cyan-400 rounded-md hover:bg-cyan-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
