@@ -1046,4 +1046,277 @@ describe('streamChat', () => {
       '',
     );
   });
+
+  describe('assistant routing (routeToAssistant)', () => {
+    const routableTargets = [
+      { id: 'assistant-math', name: 'Math Tutor', description: 'Solves advanced math problems' },
+      { id: 'assistant-eng', name: 'English Coach', description: 'Improves English writing' },
+    ];
+
+    const buildRoutingProvider = (
+      observedChatParams: Array<Record<string, unknown>>,
+      onExecuteTool?: (
+        executeTool: (call: { name: string; args: Record<string, unknown> }) => Promise<unknown>,
+      ) => Promise<void>,
+    ) => ({
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params: Record<string, unknown>) {
+        observedChatParams.push(params);
+        if (onExecuteTool) {
+          const executeTool = params.executeTool as (call: {
+            name: string;
+            args: Record<string, unknown>;
+          }) => Promise<unknown>;
+          await onExecuteTool(executeTool);
+        }
+        yield {
+          text: 'routing turn done',
+          isComplete: false,
+        };
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 3,
+            candidatesTokenCount: 1,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: onExecuteTool ? 1 : 0,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    });
+
+    it('hides the routeToAssistant tool and routing prompt when routableTargets is empty or omitted', async () => {
+      const observedChatParams: Array<Record<string, unknown>> = [];
+      const provider = buildRoutingProvider(observedChatParams);
+      mockGetActiveProvider.mockReturnValue(provider);
+
+      const { streamChat } = await import('./llmService');
+
+      // Arrange/Act 1 — routableTargets omitted entirely.
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'hello',
+        assistantId: 'assistant-1',
+        knowledgeChunks: [],
+        onChunk: vi.fn(),
+        onComplete: vi.fn(),
+      });
+
+      // Act 2 — routableTargets explicitly empty.
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'hello again',
+        assistantId: 'assistant-1',
+        routableTargets: [],
+        knowledgeChunks: [],
+        onChunk: vi.fn(),
+        onComplete: vi.fn(),
+      });
+
+      // Assert — no tools at all (routing was the only candidate tool) and
+      // the system prompt carries no routing guidance.
+      expect(observedChatParams).toHaveLength(2);
+      for (const params of observedChatParams) {
+        expect(params.tools).toBeUndefined();
+        expect(params.systemPrompt).toBe('You are helpful.');
+        expect(params.systemPrompt as string).not.toContain('routeToAssistant');
+      }
+    });
+
+    it('exposes routeToAssistant with a whitelist-only enum and emits a pending proposal on a valid call', async () => {
+      const observedChatParams: Array<Record<string, unknown>> = [];
+      const provider = buildRoutingProvider(observedChatParams, async executeTool => {
+        const result = await executeTool({
+          name: 'routeToAssistant',
+          args: {
+            targetAssistantId: 'assistant-math',
+            reason: 'Question needs calculus expertise',
+            handoffSummary: 'User asked to integrate x^2 sin(x); no attempts yet.',
+          },
+        });
+
+        // Tool result is ok and instructs the model to wrap up without switching.
+        expect(result).toMatchObject({
+          ok: true,
+          summary:
+            'Routing proposal shown to the user. Finish your response without switching assistants.',
+        });
+      });
+      mockGetActiveProvider.mockReturnValue(provider);
+
+      const { streamChat } = await import('./llmService');
+      const onRouteProposal = vi.fn();
+      const onComplete = vi.fn();
+
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'Can you integrate x^2 sin(x)?',
+        assistantId: 'assistant-1',
+        sessionId: 'session-1',
+        routableTargets,
+        knowledgeChunks: [],
+        onRouteProposal,
+        onChunk: vi.fn(),
+        onComplete,
+      });
+
+      // Tool list contains routeToAssistant whose enum is exactly the whitelist ids.
+      const tools = observedChatParams[0]?.tools as Array<{
+        name: string;
+        parameters: { properties: { targetAssistantId: { enum: string[] } } };
+      }>;
+      const routeTool = tools.find(tool => tool.name === 'routeToAssistant');
+      expect(routeTool).toBeDefined();
+      expect(routeTool?.parameters.properties.targetAssistantId.enum).toEqual([
+        'assistant-math',
+        'assistant-eng',
+      ]);
+
+      // Routing guidance is appended to the system prompt (targets non-empty).
+      const systemPrompt = observedChatParams[0]?.systemPrompt as string;
+      expect(systemPrompt).toContain('You are helpful.');
+      expect(systemPrompt).toContain('routeToAssistant');
+      expect(systemPrompt).toContain('Math Tutor (Solves advanced math problems)');
+      expect(systemPrompt).toContain('English Coach (Improves English writing)');
+
+      // onRouteProposal received a single pending proposal with full metadata.
+      expect(onRouteProposal).toHaveBeenCalledTimes(1);
+      expect(onRouteProposal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetAssistantId: 'assistant-math',
+          targetAssistantName: 'Math Tutor',
+          reason: 'Question needs calculus expertise',
+          handoffSummary: 'User asked to integrate x^2 sin(x); no attempts yet.',
+          sourceAssistantId: 'assistant-1',
+          sourceSessionId: 'session-1',
+          status: 'pending',
+          createdAt: expect.any(Number),
+        }),
+      );
+
+      // The stream still completes normally after the proposal.
+      expect(onComplete).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns a recoverable route-already-proposed error on a second routing call in the same run', async () => {
+      const observedChatParams: Array<Record<string, unknown>> = [];
+      const provider = buildRoutingProvider(observedChatParams, async executeTool => {
+        const firstResult = await executeTool({
+          name: 'routeToAssistant',
+          args: {
+            targetAssistantId: 'assistant-math',
+            reason: 'Math expertise required',
+            handoffSummary: 'User wants a calculus walkthrough.',
+          },
+        });
+        expect(firstResult).toMatchObject({ ok: true });
+
+        const secondResult = await executeTool({
+          name: 'routeToAssistant',
+          args: {
+            targetAssistantId: 'assistant-eng',
+            reason: 'Also needs writing help',
+            handoffSummary: 'User wants essay feedback too.',
+          },
+        });
+        expect(secondResult).toMatchObject({
+          ok: false,
+          recoverable: true,
+          code: 'route-already-proposed',
+          guidance: 'Finish the response without proposing another route.',
+        });
+      });
+      mockGetActiveProvider.mockReturnValue(provider);
+
+      const { streamChat } = await import('./llmService');
+      const onRouteProposal = vi.fn();
+      const onComplete = vi.fn();
+      const onToolCallActivity = vi.fn();
+
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'Route me twice please',
+        assistantId: 'assistant-1',
+        sessionId: 'session-1',
+        routableTargets,
+        knowledgeChunks: [],
+        onRouteProposal,
+        onToolCallActivity,
+        onChunk: vi.fn(),
+        onComplete,
+      });
+
+      // Only the FIRST call produced a proposal.
+      expect(onRouteProposal).toHaveBeenCalledTimes(1);
+      expect(onRouteProposal).toHaveBeenCalledWith(
+        expect.objectContaining({ targetAssistantId: 'assistant-math', status: 'pending' }),
+      );
+
+      // The second call surfaced as a recoverable tool error, not a crash.
+      expect(onToolCallActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'routeToAssistant',
+          status: 'recoverable_error',
+          code: 'route-already-proposed',
+        }),
+      );
+
+      // Stream completes normally.
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      expect(onComplete).toHaveBeenCalledWith(expect.anything(), 'routing turn done');
+    });
+
+    it('rejects a non-whitelisted target with a recoverable error and never emits a proposal', async () => {
+      const observedChatParams: Array<Record<string, unknown>> = [];
+      const provider = buildRoutingProvider(observedChatParams, async executeTool => {
+        const result = await executeTool({
+          name: 'routeToAssistant',
+          args: {
+            targetAssistantId: 'assistant-not-in-whitelist',
+            reason: 'Trying to escape the whitelist',
+            handoffSummary: 'Should be rejected.',
+          },
+        });
+
+        expect(result).toMatchObject({
+          ok: false,
+          recoverable: true,
+          code: 'route-target-not-allowed',
+        });
+      });
+      mockGetActiveProvider.mockReturnValue(provider);
+
+      const { streamChat } = await import('./llmService');
+      const onRouteProposal = vi.fn();
+      const onComplete = vi.fn();
+
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'Route me somewhere weird',
+        assistantId: 'assistant-1',
+        sessionId: 'session-1',
+        routableTargets,
+        knowledgeChunks: [],
+        onRouteProposal,
+        onChunk: vi.fn(),
+        onComplete,
+      });
+
+      // No proposal callback and the stream still finished cleanly.
+      expect(onRouteProposal).not.toHaveBeenCalled();
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      expect(onComplete).toHaveBeenCalledWith(expect.anything(), 'routing turn done');
+    });
+  });
 });

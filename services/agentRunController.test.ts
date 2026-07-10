@@ -1076,4 +1076,116 @@ describe('AgentRunController', () => {
       totalTokens: 5,
     });
   });
+
+  describe('assistant routing passthrough', () => {
+    const routableTargets = [
+      { id: 'assistant-math', name: 'Math Tutor', description: 'Solves advanced math problems' },
+      { id: 'assistant-eng', name: 'English Coach', description: 'Improves English writing' },
+    ];
+
+    it('passes options.routableTargets and callbacks.onRouteProposal through to streamChat', async () => {
+      const invocations = installStreamChatTurns([
+        buildStreamChatInvocation({
+          finishReason: 'complete',
+          toolSequence: ['reportTurnOutcome'],
+          projectSummary: completeProjectSummary,
+        }),
+      ]);
+      const onRouteProposal = vi.fn();
+      const baseOpts = buildOptions({ routableTargets });
+      const opts = {
+        ...baseOpts,
+        callbacks: { ...baseOpts.callbacks, onRouteProposal },
+      };
+
+      const controller = new AgentRunController(opts);
+      await controller.run();
+
+      expect(mockStreamChat).toHaveBeenCalledTimes(1);
+      expect(invocations[0]?.params.routableTargets).toBe(routableTargets);
+      expect(invocations[0]?.params.onRouteProposal).toBe(onRouteProposal);
+    });
+
+    it('persists routableTargets in saveCheckpoint and updateCheckpoint payloads during the run', async () => {
+      installStreamChatTurns([
+        buildStreamChatInvocation({
+          finishReason: 'tool-budget-exhausted',
+          toolSequence: ['readFile'],
+          projectSummary: baseProjectSummary,
+        }),
+        buildStreamChatInvocation({
+          finishReason: 'complete',
+          toolSequence: ['reportTurnOutcome'],
+          projectSummary: completeProjectSummary,
+        }),
+      ]);
+
+      const opts = buildOptions({ routableTargets, maxTurns: 2 });
+      const controller = new AgentRunController(opts);
+      const runId = controller.getState().runId;
+
+      await controller.run();
+
+      // Initial running checkpoint carries the routable targets.
+      expect(mockSaveCheckpoint).toHaveBeenCalledWith(expect.objectContaining({ routableTargets }));
+      // Every progress/terminal update also carries them.
+      expect(mockUpdateCheckpoint).toHaveBeenCalled();
+      for (const [calledRunId, payload] of mockUpdateCheckpoint.mock.calls) {
+        expect(calledRunId).toBe(runId);
+        expect(payload).toEqual(expect.objectContaining({ routableTargets }));
+      }
+    });
+
+    it('resumeFrom.routableTargets takes precedence over options.routableTargets for streamChat', async () => {
+      const checkpointTargets = [
+        { id: 'assistant-from-checkpoint', name: 'Resume Bot', description: 'From checkpoint' },
+      ];
+      const optionTargets = [
+        { id: 'assistant-from-options', name: 'Options Bot', description: 'From options' },
+      ];
+      const resumeFrom: AgentRunCheckpoint = {
+        ...buildCheckpoint(),
+        routableTargets: checkpointTargets,
+      };
+      const invocations = installStreamChatTurns([
+        buildStreamChatInvocation({
+          finishReason: 'complete',
+          toolSequence: ['reportTurnOutcome'],
+          projectSummary: completeProjectSummary,
+        }),
+      ]);
+
+      const controller = new AgentRunController(
+        buildOptions({ resumeFrom, routableTargets: optionTargets }),
+      );
+      await controller.run();
+
+      expect(mockStreamChat).toHaveBeenCalledTimes(1);
+      expect(invocations[0]?.params.routableTargets).toBe(checkpointTargets);
+      expect(invocations[0]?.params.routableTargets).not.toBe(optionTargets);
+    });
+
+    it('sharedMode forces delegation off but leaves routableTargets enabled', async () => {
+      const invocations = installStreamChatTurns([buildStreamChatInvocation()]);
+      const controller = new AgentRunController(
+        buildOptions({
+          sharedMode: true,
+          subagentDelegationEnabled: true,
+          routableTargets,
+        }),
+      );
+
+      await controller.run();
+
+      expect(invocations[0]?.params.subagentDelegationEnabled).toBe(false);
+      expect(invocations[0]?.params.routableTargets).toBe(routableTargets);
+      expect(mockSaveCheckpoint).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sharedMode: true,
+          subagentDelegationEnabled: false,
+          routableTargets,
+        }),
+      );
+    });
+  });
 });

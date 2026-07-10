@@ -1,11 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildRouteToAssistantTool,
   buildRoutingSystemPrompt,
+  clearSharedRoutingTargetCache,
+  getCachedSharedRoutableTargets,
   resolveRoutableTargets,
+  resolveSharedRoutableTargets,
   validateRouteCall,
 } from './assistantRoutingService';
+import { getAssistantMetaFromTurso } from './tursoService';
 import type { Assistant } from '../types';
+
+vi.mock('./tursoService', () => ({
+  getAssistantMetaFromTurso: vi.fn(),
+}));
+
+const metaMock = vi.mocked(getAssistantMetaFromTurso);
 
 const source: Assistant = {
   id: 'a',
@@ -52,5 +62,96 @@ describe('assistant routing', () => {
       expect(result.proposal.reason).toHaveLength(200);
       expect(result.proposal.handoffSummary).toHaveLength(2000);
     }
+  });
+});
+
+const makeAssistant = (id: string, routableAssistantIds?: string[]): Assistant => ({
+  id,
+  name: `Name-${id}`,
+  description: `Desc-${id}`,
+  systemPrompt: '',
+  createdAt: 1,
+  routableAssistantIds,
+});
+
+const makeMeta = (id: string) => ({
+  id,
+  name: `Name-${id}`,
+  description: `Desc-${id}`,
+  routableAssistantIds: undefined,
+});
+
+describe('shared routable targets', () => {
+  beforeEach(() => {
+    // Module-level caches are global; reset them and mock call counts per test.
+    clearSharedRoutingTargetCache();
+    vi.clearAllMocks();
+  });
+
+  it('resolves multiple targets and silently drops failed lookups', async () => {
+    metaMock.mockImplementation(async id => (id === 'c' ? null : makeMeta(id)));
+    const assistant = makeAssistant('a', ['b', 'c', 'd']);
+
+    const targets = await resolveSharedRoutableTargets(assistant);
+
+    expect(targets).toEqual([
+      { id: 'b', name: 'Name-b', description: 'Desc-b', routableAssistantIds: undefined },
+      { id: 'd', name: 'Name-d', description: 'Desc-d', routableAssistantIds: undefined },
+    ]);
+    expect(metaMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('caches resolution per assistant and refetches after cache clear', async () => {
+    metaMock.mockImplementation(async id => makeMeta(id));
+    const assistant = makeAssistant('a', ['b', 'c']);
+
+    const first = await resolveSharedRoutableTargets(assistant);
+    const second = await resolveSharedRoutableTargets(assistant);
+
+    // Assert: repeated call for the same id + routableAssistantIds hits the cache
+    expect(first).toEqual(second);
+    expect(metaMock).toHaveBeenCalledTimes(2);
+
+    // Act: clearing the cache forces a fresh lookup
+    clearSharedRoutingTargetCache();
+    await resolveSharedRoutableTargets(assistant);
+
+    expect(metaMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('returns [] before resolution completes and the targets afterwards', async () => {
+    metaMock.mockImplementation(async id => makeMeta(id));
+    const assistant = makeAssistant('a', ['b']);
+
+    // Act: nothing resolved yet, but this kicks off the background lookup
+    const before = getCachedSharedRoutableTargets(assistant);
+
+    expect(before).toEqual([]);
+    expect(metaMock).toHaveBeenCalledWith('b');
+
+    // Act: wait for the shared resolution to finish
+    await resolveSharedRoutableTargets(assistant);
+    const after = getCachedSharedRoutableTargets(assistant);
+
+    expect(after).toEqual([makeMeta('b')]);
+    expect(metaMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('excludes the assistant itself and deduplicates ids', async () => {
+    metaMock.mockImplementation(async id => makeMeta(id));
+    const assistant = makeAssistant('a', ['a', 'b', 'b']);
+
+    const targets = await resolveSharedRoutableTargets(assistant);
+
+    expect(metaMock).toHaveBeenCalledTimes(1);
+    expect(metaMock).toHaveBeenCalledWith('b');
+    expect(targets.map(t => t.id)).toEqual(['b']);
+  });
+
+  it('resolves to [] without lookups when no other ids are routable', async () => {
+    const targets = await resolveSharedRoutableTargets(makeAssistant('a', ['a']));
+
+    expect(targets).toEqual([]);
+    expect(metaMock).not.toHaveBeenCalled();
   });
 });
