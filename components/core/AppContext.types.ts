@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   AgentRunState,
+  RouteProposal,
   Assistant,
   ChatSession,
   EmbeddingConfig,
@@ -50,6 +51,8 @@ export interface AppState {
    * 由 ChatContainer 在 AgentRunController callbacks 中透過 setAgentRunState 更新。
    */
   agentRunState: AgentRunState | null;
+  /** Temporary shared-mode session consumed by SharedAssistant after a handoff. */
+  pendingHandoffSession?: ChatSession | null;
 }
 
 export type AppAction =
@@ -81,7 +84,8 @@ export type AppAction =
   | { type: 'APPEND_PROJECT_ACTIVITY'; payload: string }
   | { type: 'CLEAR_PROJECT_ACTIVITY' }
   | { type: 'RESET_PROJECT_WORKSPACE' }
-  | { type: 'SET_AGENT_RUN_STATE'; payload: AgentRunState | null };
+  | { type: 'SET_AGENT_RUN_STATE'; payload: AgentRunState | null }
+  | { type: 'SET_PENDING_HANDOFF_SESSION'; payload: ChatSession | null };
 
 export interface AppContextValue {
   state: AppState;
@@ -91,7 +95,10 @@ export interface AppContextValue {
     selectAssistant: (assistantId: string, changeView?: boolean) => Promise<void>;
     saveAssistant: (assistant: Assistant) => Promise<void>;
     deleteAssistant: (assistantId: string) => Promise<void>;
-    createNewSession: (assistantId: string) => Promise<void>;
+    createNewSession: (
+      assistantId: string,
+      handoffContext?: ChatSession['handoffContext'],
+    ) => Promise<ChatSession>;
     deleteSession: (sessionId: string) => Promise<void>;
     updateSession: (session: ChatSession) => Promise<void>;
     setViewMode: (mode: ViewMode) => void;
@@ -108,6 +115,8 @@ export interface AppContextValue {
     setProjectPreview: (preview: HtmlProjectPreviewArtifact | null) => void;
     appendProjectActivity: (message: string) => void;
     setAgentRunState: (state: AgentRunState | null) => void;
+    acceptRouteProposal: (proposal: RouteProposal) => Promise<void>;
+    declineRouteProposal: (proposal: RouteProposal) => Promise<void>;
     createProjectForCurrentSession: () => Promise<void>;
     openProjectForCurrentSession: (projectId: string) => Promise<void>;
     renameProjectForCurrentSession: (projectId: string, name: string) => Promise<void>;

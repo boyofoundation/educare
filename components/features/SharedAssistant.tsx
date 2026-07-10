@@ -10,7 +10,8 @@ interface SharedAssistantProps {
 }
 
 const SharedAssistant: React.FC<SharedAssistantProps> = ({ assistantId }) => {
-  const { dispatch } = React.useContext(AppContext) as AppContextValue;
+  const { state, dispatch } = React.useContext(AppContext) as AppContextValue;
+  const assistantIdRef = useRef<string | null>(null);
   const loadingRef = useRef(false);
   const loadedRef = useRef(false);
 
@@ -22,7 +23,12 @@ const SharedAssistant: React.FC<SharedAssistantProps> = ({ assistantId }) => {
   }, []);
 
   const loadSharedAssistant = useCallback(async () => {
-    // 防止重複請求
+    // A route changes assistantId without remounting this view; reset guards before checking them.
+    if (assistantIdRef.current !== assistantId) {
+      assistantIdRef.current = assistantId;
+      loadingRef.current = false;
+      loadedRef.current = false;
+    }
     if (loadingRef.current || loadedRef.current) {
       console.log('⚠️ [SHARED ASSISTANT] Skipping duplicate load request');
       return;
@@ -54,20 +60,24 @@ const SharedAssistant: React.FC<SharedAssistantProps> = ({ assistantId }) => {
       dispatch({ type: 'SET_CURRENT_ASSISTANT', payload: assistant });
       console.log('📋 [SHARED ASSISTANT] Assistant set:', assistant);
 
-      const newSession = {
-        id: `shared_${Date.now()}`,
-        assistantId: tursoAssistant.id,
-        title: `與 ${tursoAssistant.name} 聊天`,
-        messages: [],
-        createdAt: Date.now(),
-        tokenCount: 0,
-        tokenUsage: undefined,
-      };
+      const pendingSession = state.pendingHandoffSession;
+      const newSession =
+        pendingSession?.assistantId === tursoAssistant.id
+          ? pendingSession
+          : {
+              id: `shared_${Date.now()}`,
+              assistantId: tursoAssistant.id,
+              title: `與 ${tursoAssistant.name} 聊天`,
+              messages: [],
+              createdAt: Date.now(),
+              tokenCount: 0,
+              tokenUsage: undefined,
+            };
 
-      dispatch({
-        type: 'SET_CURRENT_SESSION',
-        payload: newSession,
-      });
+      dispatch({ type: 'SET_CURRENT_SESSION', payload: newSession });
+      if (pendingSession?.assistantId === tursoAssistant.id) {
+        dispatch({ type: 'SET_PENDING_HANDOFF_SESSION', payload: null });
+      }
       console.log('💬 [SHARED ASSISTANT] Session set:', newSession);
 
       const hasValidKeys = await checkApiKey();
@@ -90,7 +100,7 @@ const SharedAssistant: React.FC<SharedAssistantProps> = ({ assistantId }) => {
       dispatch({ type: 'SET_LOADING', payload: false });
       console.log('🔄 [SHARED ASSISTANT] Loading state cleared');
     }
-  }, [assistantId, checkApiKey, dispatch]);
+  }, [assistantId, checkApiKey, dispatch, state.pendingHandoffSession]);
 
   useEffect(() => {
     if (assistantId) {

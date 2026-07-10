@@ -70,6 +70,18 @@ export interface TursoRagChunk {
   createdAt: number;
 }
 
+const parseAssistantConfig = (value: unknown): Partial<TursoAssistant> => {
+  if (typeof value !== 'string') {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? (parsed as Partial<TursoAssistant>) : {};
+  } catch {
+    return {};
+  }
+};
+
 export interface SimilarChunk {
   fileName: string;
   content: string;
@@ -300,10 +312,7 @@ export const getAssistantFromTurso = async (id: string): Promise<TursoAssistant 
       content: chunkRow.content as string,
     }));
 
-    const config =
-      typeof row.config_json === 'string'
-        ? (JSON.parse(row.config_json) as Partial<TursoAssistant>)
-        : {};
+    const config = parseAssistantConfig(row.config_json);
     return {
       id: row.id as string,
       name: row.name as string,
@@ -334,10 +343,7 @@ export const getAssistantMetaFromTurso = async (
     if (!row) {
       return null;
     }
-    const config =
-      typeof row.config_json === 'string'
-        ? (JSON.parse(row.config_json) as Partial<TursoAssistant>)
-        : {};
+    const config = parseAssistantConfig(row.config_json);
     return {
       id: row.id as string,
       name: row.name as string,

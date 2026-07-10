@@ -430,3 +430,41 @@ describe('MessageBubble', () => {
     });
   });
 });
+
+describe('RouteProposalCard', () => {
+  const routeProposal = {
+    targetAssistantId: 'target',
+    targetAssistantName: '數學助理',
+    reason: '這是數學問題',
+    handoffSummary: '使用者需要解方程式。',
+    sourceAssistantId: 'source',
+    sourceSessionId: 'session-1',
+    createdAt: 1,
+  } as const;
+
+  it.each([
+    ['pending', '建議轉接', true],
+    ['accepted', '已轉接', false],
+    ['declined', '已婉拒', false],
+    ['failed', '轉接失敗', false],
+  ] as const)('renders %s proposal status', (status, label, hasActions) => {
+    render(
+      <MessageBubble
+        message={createMockChatMessage({
+          role: 'model',
+          content: '請參考建議',
+          routeProposal: { ...routeProposal, status },
+        })}
+        index={0}
+      />,
+    );
+    expect(screen.getByLabelText('助理轉接建議')).toHaveTextContent(label);
+    expect(screen.getByLabelText('助理轉接建議')).toHaveTextContent('數學助理');
+    const routeButton = screen.queryByRole('button', { name: /轉接至/ });
+    if (hasActions) {
+      expect(routeButton).toBeInTheDocument();
+    } else {
+      expect(routeButton).not.toBeInTheDocument();
+    }
+  });
+});

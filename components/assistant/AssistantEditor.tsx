@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Assistant, RagChunk } from '../../types';
 import { RAGFileUpload } from './RAGFileUpload';
 import { useTursoAssistantStatus } from '../../hooks/useTursoAssistantStatus';
 import { TemplateSelector, AssistantTemplate } from './TemplateSelector';
+import { AppContext } from '../core/useAppContext';
 
 interface AssistantEditorProps {
   assistant: Assistant | null;
@@ -27,6 +28,8 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   const [starterPrompts, setStarterPrompts] = useState<string[]>([]);
   const [newStarterPrompt, setNewStarterPrompt] = useState('');
   const [subagentDelegationEnabled, setSubagentDelegationEnabled] = useState(false);
+  const [routableAssistantIds, setRoutableAssistantIds] = useState<string[]>([]);
+  const appContext = useContext(AppContext);
   const [isSaving, setIsSaving] = useState(false);
   const [highlightFields, setHighlightFields] = useState(false);
 
@@ -42,6 +45,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setStarterPrompts(assistant.starterPrompts || []);
       setNewStarterPrompt('');
       setSubagentDelegationEnabled(assistant.subagentDelegationEnabled ?? false);
+      setRoutableAssistantIds(assistant.routableAssistantIds ?? []);
     } else {
       setName('');
       setDescription('');
@@ -50,6 +54,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setStarterPrompts([]);
       setNewStarterPrompt('');
       setSubagentDelegationEnabled(false);
+      setRoutableAssistantIds([]);
     }
   }, [assistant]);
 
@@ -75,6 +80,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         starterPrompts,
         createdAt: assistant?.createdAt || Date.now(),
         subagentDelegationEnabled,
+        routableAssistantIds,
       };
 
       console.log('Assistant saved locally. Use migration settings to sync to Turso if needed.');
@@ -257,6 +263,39 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             </span>
           </span>
         </label>
+      </div>
+
+      <div className='mb-6'>
+        <fieldset>
+          <legend className='text-sm font-semibold text-gray-300'>可轉接助理</legend>
+          <p className='mt-1 text-xs text-gray-500'>
+            僅勾選可由此助理建議轉接的目標；分享模式下目標也必須已分享。
+          </p>
+          <div className='mt-3 space-y-2'>
+            {(appContext?.state.assistants ?? [])
+              .filter(item => item.id !== assistant?.id)
+              .map(item => (
+                <label
+                  key={item.id}
+                  className='flex cursor-pointer items-center gap-2 text-sm text-gray-200'
+                >
+                  <input
+                    type='checkbox'
+                    checked={routableAssistantIds.includes(item.id)}
+                    disabled={isSaving}
+                    onChange={event =>
+                      setRoutableAssistantIds(current =>
+                        event.target.checked
+                          ? [...new Set([...current, item.id])]
+                          : current.filter(id => id !== item.id),
+                      )
+                    }
+                  />
+                  {item.name}
+                </label>
+              ))}
+          </div>
+        </fieldset>
       </div>
 
       <RAGFileUpload

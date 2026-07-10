@@ -1,4 +1,5 @@
 import type { Assistant, RouteProposal } from '../types';
+import { getAssistantMetaFromTurso } from './tursoService';
 
 export const ROUTE_TOOL_NAME = 'routeToAssistant';
 export type RoutableTarget = Pick<Assistant, 'id' | 'name' | 'description'>;
@@ -75,4 +76,49 @@ export const resolveRoutableTargets = (
   return assistants
     .filter(item => item.id !== assistant.id && ids.has(item.id))
     .map(({ id, name, description }) => ({ id, name, description }));
+};
+
+const sharedTargetCache = new Map<string, Promise<RoutableTarget[]>>();
+const resolvedSharedTargets = new Map<string, RoutableTarget[]>();
+
+const getSharedTargetCacheKey = (assistant: Assistant): string =>
+  `${assistant.id}:${[...new Set(assistant.routableAssistantIds ?? [])]
+    .filter(id => id !== assistant.id)
+    .sort()
+    .join(',')}`;
+
+/** Resolve shared-mode destinations without loading target RAG chunks. Failed lookups are intentionally hidden. */
+export const resolveSharedRoutableTargets = (assistant: Assistant): Promise<RoutableTarget[]> => {
+  const ids = [...new Set(assistant.routableAssistantIds ?? [])].filter(id => id !== assistant.id);
+  if (ids.length === 0) {
+    return Promise.resolve([]);
+  }
+  const cacheKey = getSharedTargetCacheKey(assistant);
+  const cached = sharedTargetCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const pending = Promise.all(ids.map(id => getAssistantMetaFromTurso(id)))
+    .then(results => results.filter((target): target is RoutableTarget => target !== null))
+    .catch(() => [])
+    .then(targets => {
+      resolvedSharedTargets.set(cacheKey, targets);
+      return targets;
+    });
+  sharedTargetCache.set(cacheKey, pending);
+  return pending;
+};
+
+/** Starts background lookup and returns only destinations already resolved for this shared session. */
+export const getCachedSharedRoutableTargets = (assistant: Assistant): RoutableTarget[] => {
+  const cacheKey = getSharedTargetCacheKey(assistant);
+  if (!resolvedSharedTargets.has(cacheKey)) {
+    void resolveSharedRoutableTargets(assistant);
+  }
+  return resolvedSharedTargets.get(cacheKey) ?? [];
+};
+
+export const clearSharedRoutingTargetCache = (): void => {
+  sharedTargetCache.clear();
+  resolvedSharedTargets.clear();
 };

@@ -37,6 +37,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
         description: assistant.description || '',
         systemPrompt: assistant.systemPrompt,
         createdAt: assistant.createdAt || Date.now(),
+        routableAssistantIds: assistant.routableAssistantIds,
+        starterPrompts: assistant.starterPrompts,
+        subagentDelegationEnabled: assistant.subagentDelegationEnabled,
       });
 
       const baseUrl = window.location.pathname.replace(/\/[^/]*$/, '') || '/';
@@ -169,6 +172,12 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
             <p className='mt-3 text-sm text-gray-400'>掃描 QR Code 或複製下方連結</p>
           </div>
         )}
+
+        {assistant.routableAssistantIds?.length ? (
+          <p className='mb-4 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100'>
+            此助理設定了轉接目標。訪客端僅會看到同樣已分享的目標助理。
+          </p>
+        ) : null}
 
         <div className='mb-6'>
           <label className='mb-2 block text-sm font-medium text-gray-300'>分享連結</label>

@@ -28,7 +28,10 @@ import type {
   RouteProposal,
 } from '../../types';
 import { HtmlProjectWorkspaceUpdate } from '../../types';
-import { resolveRoutableTargets } from '../../services/assistantRoutingService';
+import {
+  getCachedSharedRoutableTargets,
+  resolveRoutableTargets,
+} from '../../services/assistantRoutingService';
 
 const INTERRUPTION_NOTICE = '⚠️ 上次工作已中斷';
 const EMPTY_RESPONSE_NOTICE = '（本次回覆沒有內容）';
@@ -425,6 +428,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setStreamingResponse('');
     setPendingEmptyResponseNotice(null);
     latestErrorMessageRef.current = null;
+    routeProposalRef.current = undefined;
     setRunState(null);
     setSubagentBatches({});
     setToolCallRecords([]);
@@ -461,6 +465,13 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         resumeCheckpoint?.projectId ?? displaySession.activeProjectId ?? null;
       const projectEditingActive = Boolean(effectiveProjectId);
 
+      const currentAssistant = appContext?.state?.currentAssistant;
+      const routableTargets = currentAssistant
+        ? sharedMode
+          ? getCachedSharedRoutableTargets(currentAssistant)
+          : resolveRoutableTargets(currentAssistant, appContext.state.assistants)
+        : [];
+
       const controller = new AgentRunController({
         assistantId,
         sessionId: displaySession.id,
@@ -472,9 +483,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         agentHarnessEnabled: resumeCheckpoint?.agentHarnessEnabled ?? projectEditingActive,
         subagentDelegationEnabled:
           resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
-        routableTargets: appContext?.state?.currentAssistant
-          ? resolveRoutableTargets(appContext.state.currentAssistant, appContext.state.assistants)
-          : [],
+        routableTargets: resumeCheckpoint?.routableTargets ?? routableTargets,
         htmlProjectEnabled: resumeCheckpoint?.htmlProjectEnabled ?? projectEditingActive,
         sharedMode: resumeCheckpoint?.sharedMode ?? sharedMode,
         resumeFrom: resumeCheckpoint,
@@ -893,6 +902,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                 </div>
               </div>
             </div>
+          )}
+
+          {currentSession.handoffContext && (
+            <details className='mb-4 rounded-xl border border-cyan-500/25 bg-cyan-950/20 px-4 py-3 text-sm text-cyan-100'>
+              <summary className='cursor-pointer font-medium'>
+                由 {currentSession.handoffContext.fromAssistantName} 轉接而來
+              </summary>
+              <p className='mt-2 text-gray-300'>{currentSession.handoffContext.reason}</p>
+            </details>
           )}
 
           {currentSession.messages.length === 0 &&

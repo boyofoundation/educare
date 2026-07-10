@@ -1,8 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { MessageBubbleProps } from './types';
 import { UserIcon, GeminiIcon } from '../ui/Icons';
 import AgentActivityTimeline from './AgentActivityTimeline';
 import MarkdownContent from './MarkdownContent';
+import { AppContext } from '../core/useAppContext';
+import type { RouteProposal } from '../../types';
 
 const EMPTY_MESSAGE_FALLBACK = '（本次回覆沒有內容）';
 
@@ -31,6 +33,46 @@ const formatTimestamp = (timestamp?: number): string | null => {
     hour: '2-digit',
     minute: '2-digit',
   });
+};
+
+const RouteProposalCard: React.FC<{ proposal: RouteProposal }> = ({ proposal }) => {
+  const context = useContext(AppContext);
+  const pending = proposal.status === 'pending';
+  const statusLabel: Record<RouteProposal['status'], string> = {
+    pending: '建議轉接',
+    accepted: '已轉接',
+    declined: '已婉拒',
+    failed: '轉接失敗',
+  };
+  return (
+    <section
+      className='w-full max-w-[85%] rounded-2xl border border-cyan-500/30 bg-cyan-950/30 px-4 py-3 text-sm text-cyan-50 md:max-w-[65ch]'
+      aria-label='助理轉接建議'
+    >
+      <div className='font-semibold text-cyan-200'>
+        {statusLabel[proposal.status]}：{proposal.targetAssistantName}
+      </div>
+      <p className='mt-1 text-gray-200'>{proposal.reason}</p>
+      {pending && (
+        <div className='mt-3 flex gap-2'>
+          <button
+            type='button'
+            onClick={() => void context?.actions.acceptRouteProposal(proposal)}
+            className='rounded-lg bg-cyan-600 px-3 py-1.5 font-medium text-white hover:bg-cyan-500'
+          >
+            轉接至 {proposal.targetAssistantName}
+          </button>
+          <button
+            type='button'
+            onClick={() => void context?.actions.declineRouteProposal(proposal)}
+            className='rounded-lg border border-gray-600 px-3 py-1.5 text-gray-200 hover:bg-gray-700'
+          >
+            留在原助理
+          </button>
+        </div>
+      )}
+    </section>
+  );
 };
 
 const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
@@ -211,6 +253,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
               />
             </div>
           </div>
+          {message.routeProposal && <RouteProposalCard proposal={message.routeProposal} />}
           {citations.length > 0 && (
             <div className='w-full max-w-[85%] rounded-2xl border border-cyan-500/20 bg-gray-900/60 px-4 py-3 text-sm text-gray-200 md:max-w-[65ch]'>
               <div className='mb-3 text-sm font-medium text-cyan-200'>📚 參考資料</div>

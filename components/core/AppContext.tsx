@@ -1,5 +1,5 @@
 import React, { useReducer, useCallback, useEffect } from 'react';
-import { AgentRunState, Assistant, ChatSession, EmbeddingConfig } from '../../types';
+import { AgentRunState, Assistant, ChatSession, EmbeddingConfig, RouteProposal } from '../../types';
 import * as db from '../../services/db';
 import { initializeProviders } from '../../services/providerRegistry';
 import {
@@ -73,6 +73,7 @@ const initialState: AppState = {
   projectPreview: null,
   projectToolActivity: [],
   agentRunState: null,
+  pendingHandoffSession: null,
 };
 
 function appReducer(state: AppState, action: AppAction): AppState {
@@ -202,6 +203,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         agentRunState: action.payload,
       };
+    case 'SET_PENDING_HANDOFF_SESSION':
+      return { ...state, pendingHandoffSession: action.payload };
     default:
       return state;
   }
@@ -215,21 +218,26 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   const [state, dispatch] = useReducer(appReducer, initialState);
 
   // Create new session
-  const createNewSession = useCallback(async (assistantId: string) => {
-    const newSession: ChatSession = {
-      id: `session-${Date.now()}`,
-      assistantId,
-      title: 'New Chat',
-      messages: [],
-      createdAt: Date.now(),
-      tokenCount: 0,
-      tokenUsage: undefined,
-    };
-    await db.saveSession(newSession);
-    dispatch({ type: 'ADD_SESSION', payload: newSession });
-    // 自動設置為當前會話
-    dispatch({ type: 'SET_CURRENT_SESSION', payload: newSession });
-  }, []);
+  const createNewSession = useCallback(
+    async (assistantId: string, handoffContext?: ChatSession['handoffContext']) => {
+      const newSession: ChatSession = {
+        id: `session-${Date.now()}`,
+        assistantId,
+        title: 'New Chat',
+        messages: [],
+        createdAt: Date.now(),
+        tokenCount: 0,
+        tokenUsage: undefined,
+        handoffContext,
+      };
+      await db.saveSession(newSession);
+      dispatch({ type: 'ADD_SESSION', payload: newSession });
+      // 自動設置為當前會話
+      dispatch({ type: 'SET_CURRENT_SESSION', payload: newSession });
+      return newSession;
+    },
+    [],
+  );
 
   // Select an assistant
   const selectAssistant = useCallback(
@@ -589,6 +597,87 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
     dispatch({ type: 'SET_AGENT_RUN_STATE', payload: nextState });
   }, []);
 
+  const updateRouteProposalStatus = useCallback(
+    async (proposal: RouteProposal, status: RouteProposal['status']) => {
+      const session = state.currentSession;
+      if (!session || session.id !== proposal.sourceSessionId) {
+        return;
+      }
+      const nextSession: ChatSession = {
+        ...session,
+        messages: session.messages.map(message =>
+          message.routeProposal?.createdAt === proposal.createdAt &&
+          message.routeProposal.sourceSessionId === proposal.sourceSessionId
+            ? { ...message, routeProposal: { ...message.routeProposal, status } }
+            : message,
+        ),
+        updatedAt: Date.now(),
+      };
+      await db.saveSession(nextSession);
+      dispatch({ type: 'UPDATE_SESSION', payload: nextSession });
+    },
+    [state.currentSession],
+  );
+
+  const declineRouteProposal = useCallback(
+    async (proposal: RouteProposal) => updateRouteProposalStatus(proposal, 'declined'),
+    [updateRouteProposalStatus],
+  );
+
+  const acceptRouteProposal = useCallback(
+    async (proposal: RouteProposal) => {
+      const handoffContext: NonNullable<ChatSession['handoffContext']> = {
+        fromAssistantId: proposal.sourceAssistantId,
+        fromAssistantName: state.currentAssistant?.name ?? '原助理',
+        reason: proposal.reason,
+        summary: proposal.handoffSummary,
+        sourceSessionId: proposal.sourceSessionId,
+        createdAt: Date.now(),
+      };
+      if (state.isShared) {
+        const pendingSession: ChatSession = {
+          id: `shared_${Date.now()}`,
+          assistantId: proposal.targetAssistantId,
+          title: `與 ${proposal.targetAssistantName} 聊天`,
+          messages: [],
+          createdAt: Date.now(),
+          tokenCount: 0,
+          tokenUsage: undefined,
+          handoffContext,
+        };
+        await updateRouteProposalStatus(proposal, 'accepted');
+        dispatch({ type: 'SET_PENDING_HANDOFF_SESSION', payload: pendingSession });
+        const url = new URL(window.location.href);
+        url.searchParams.set('share', proposal.targetAssistantId);
+        window.history.replaceState({}, '', url.toString());
+        dispatch({
+          type: 'SET_SHARED_MODE',
+          payload: { isShared: true, assistantId: proposal.targetAssistantId },
+        });
+        return;
+      }
+      const target = state.assistants.find(
+        assistant => assistant.id === proposal.targetAssistantId,
+      );
+      if (!target) {
+        await updateRouteProposalStatus(proposal, 'failed');
+        dispatch({ type: 'SET_ERROR', payload: '轉接目標已不存在，無法完成轉接。' });
+        return;
+      }
+      await updateRouteProposalStatus(proposal, 'accepted');
+      await selectAssistant(target.id);
+      await createNewSession(target.id, handoffContext);
+    },
+    [
+      createNewSession,
+      selectAssistant,
+      state.assistants,
+      state.currentAssistant?.name,
+      state.isShared,
+      updateRouteProposalStatus,
+    ],
+  );
+
   const clearProjectWorkspace = useCallback(() => {
     if (state.activeProjectId) {
       htmlPreviewService.revokePreviewUrl(state.activeProjectId);
@@ -862,6 +951,8 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       setProjectPreview,
       appendProjectActivity,
       setAgentRunState,
+      acceptRouteProposal,
+      declineRouteProposal,
       createProjectForCurrentSession,
       openProjectForCurrentSession,
       renameProjectForCurrentSession,
