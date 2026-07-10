@@ -57,6 +57,9 @@ export interface TursoAssistant {
   systemPrompt: string; // 給 AI 的內部指令
   createdAt: number;
   ragChunks?: RagChunk[];
+  routableAssistantIds?: string[];
+  starterPrompts?: string[];
+  subagentDelegationEnabled?: boolean;
 }
 
 export interface TursoRagChunk {
@@ -88,6 +91,10 @@ export const initializeDatabase = async (): Promise<void> => {
         created_at INTEGER NOT NULL
       )
     `);
+    const columns = await client.execute('PRAGMA table_info(assistants)');
+    if (!columns.rows.some(row => row.name === 'config_json')) {
+      await client.execute('ALTER TABLE assistants ADD COLUMN config_json TEXT');
+    }
 
     // 建立 RAG chunks 資料表，包含向量欄位
     await client.execute(`
@@ -145,6 +152,11 @@ export const saveAssistantToTurso = async (assistant: TursoAssistant): Promise<v
   const client = getWriteClient(); // 需要寫入權限
 
   try {
+    const configJson = JSON.stringify({
+      routableAssistantIds: assistant.routableAssistantIds,
+      starterPrompts: assistant.starterPrompts,
+      subagentDelegationEnabled: assistant.subagentDelegationEnabled,
+    });
     // 首先檢查助手是否已存在
     const existingResult = await client.execute({
       sql: 'SELECT id FROM assistants WHERE id = ?',
@@ -155,21 +167,28 @@ export const saveAssistantToTurso = async (assistant: TursoAssistant): Promise<v
       // 如果已存在，只更新名稱、描述和系統提示，保持 created_at 不變
       await client.execute({
         sql: `UPDATE assistants 
-              SET name = ?, description = ?, system_prompt = ?
+              SET name = ?, description = ?, system_prompt = ?, config_json = ?
               WHERE id = ?`,
-        args: [assistant.name, assistant.description, assistant.systemPrompt, assistant.id],
+        args: [
+          assistant.name,
+          assistant.description,
+          assistant.systemPrompt,
+          configJson,
+          assistant.id,
+        ],
       });
     } else {
       // 如果不存在，插入新記錄
       await client.execute({
-        sql: `INSERT INTO assistants (id, name, description, system_prompt, created_at) 
-              VALUES (?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO assistants (id, name, description, system_prompt, created_at, config_json)
+              VALUES (?, ?, ?, ?, ?, ?)`,
         args: [
           assistant.id,
           assistant.name,
           assistant.description,
           assistant.systemPrompt,
           assistant.createdAt,
+          configJson,
         ],
       });
     }
@@ -281,6 +300,10 @@ export const getAssistantFromTurso = async (id: string): Promise<TursoAssistant 
       content: chunkRow.content as string,
     }));
 
+    const config =
+      typeof row.config_json === 'string'
+        ? (JSON.parse(row.config_json) as Partial<TursoAssistant>)
+        : {};
     return {
       id: row.id as string,
       name: row.name as string,
@@ -288,9 +311,40 @@ export const getAssistantFromTurso = async (id: string): Promise<TursoAssistant 
       systemPrompt: row.system_prompt as string,
       createdAt: row.created_at as number,
       ragChunks,
+      routableAssistantIds: config.routableAssistantIds,
+      starterPrompts: config.starterPrompts,
+      subagentDelegationEnabled: config.subagentDelegationEnabled,
     };
   } catch (error) {
     console.error('Failed to get assistant from Turso:', error);
+    return null;
+  }
+};
+
+/** Lightweight metadata lookup for shared-mode routing; deliberately avoids RAG chunks. */
+export const getAssistantMetaFromTurso = async (
+  id: string,
+): Promise<Pick<TursoAssistant, 'id' | 'name' | 'description' | 'routableAssistantIds'> | null> => {
+  try {
+    const result = await getReadClient().execute({
+      sql: 'SELECT id, name, description, config_json FROM assistants WHERE id = ?',
+      args: [id],
+    });
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    const config =
+      typeof row.config_json === 'string'
+        ? (JSON.parse(row.config_json) as Partial<TursoAssistant>)
+        : {};
+    return {
+      id: row.id as string,
+      name: row.name as string,
+      description: (row.description as string) || '',
+      routableAssistantIds: config.routableAssistantIds,
+    };
+  } catch {
     return null;
   }
 };

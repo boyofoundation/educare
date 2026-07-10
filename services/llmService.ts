@@ -13,6 +13,7 @@ import {
   type ToolCallRecord,
   type SubagentTaskSpec,
   type TokenUsageTotals,
+  type RouteProposal,
 } from '../types';
 import { ToolCall, type ProviderUsageMetadata } from './llmAdapter';
 import { providerManager, initializeProviders } from './providerRegistry';
@@ -38,6 +39,13 @@ import {
   SUBAGENT_DELEGATE_TOOL_NAME,
   SUBAGENT_DELEGATION_SYSTEM_PROMPT,
 } from './subagentService';
+import {
+  buildRouteToAssistantTool,
+  buildRoutingSystemPrompt,
+  ROUTE_TOOL_NAME,
+  validateRouteCall,
+  type RoutableTarget,
+} from './assistantRoutingService';
 
 export interface StreamChatParams {
   systemPrompt: string;
@@ -49,6 +57,8 @@ export interface StreamChatParams {
   activeProjectId?: string | null;
   knowledgeChunks?: RagChunk[];
   subagentDelegationEnabled?: boolean;
+  routableTargets?: RoutableTarget[];
+  onRouteProposal?: (proposal: RouteProposal) => void;
   /**
    * HTML 專案模式開關。預設 false（opt-in）。為 false 時完全略過意圖分類、
    * 不進行 summary preflight、不暴露任何 HTML 專案工具、不注入專案系統提示,
@@ -224,11 +234,13 @@ export const streamChat = async (params: StreamChatParams) => {
     signal,
     packSetOverride,
     subagentDelegationEnabled = false,
+    routableTargets = [],
     htmlProjectEnabled = false,
     onChunk,
     onProjectToolActivity,
     onSubagentActivity,
     onToolCallActivity,
+    onRouteProposal,
     onComplete,
   } = params;
 
@@ -392,6 +404,7 @@ export const streamChat = async (params: StreamChatParams) => {
           })
         : '',
       subagentDelegationEnabled ? SUBAGENT_DELEGATION_SYSTEM_PROMPT : '',
+      routableTargets.length > 0 ? buildRoutingSystemPrompt(routableTargets) : '',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -403,6 +416,7 @@ export const streamChat = async (params: StreamChatParams) => {
       return value.length <= 200 ? value : `${value.slice(0, 197)}...`;
     };
 
+    let routeProposalCreated = false;
     const executeTool = async (call: ToolCall) => {
       telemetryEvent.toolSequence.push(call.name);
       const toolStartedAt = Date.now();
@@ -436,6 +450,32 @@ export const streamChat = async (params: StreamChatParams) => {
             knowledgeChunks,
             call.args as unknown as KnowledgeSearchArgs,
           );
+        } else if (routableTargets.length > 0 && call.name === ROUTE_TOOL_NAME) {
+          if (routeProposalCreated) {
+            result = createRoutingRecoverableToolError(
+              'route-already-proposed',
+              'A routing proposal was already created for this run.',
+              'Finish the response without proposing another route.',
+            );
+          } else {
+            const validation = validateRouteCall(
+              call.args,
+              routableTargets,
+              assistantId,
+              sessionId,
+            );
+            if (validation.ok) {
+              routeProposalCreated = true;
+              onRouteProposal?.(validation.proposal);
+              result = {
+                ok: true,
+                summary:
+                  'Routing proposal shown to the user. Finish your response without switching assistants.',
+              };
+            } else {
+              result = validation;
+            }
+          }
         } else if (subagentDelegationEnabled && call.name === SUBAGENT_DELEGATE_TOOL_NAME) {
           result = await runSubagentBatch(
             ((call.args as { tasks?: SubagentTaskSpec[] }).tasks ?? []) as SubagentTaskSpec[],
@@ -499,6 +539,7 @@ export const streamChat = async (params: StreamChatParams) => {
                 ...(knowledgeToolEnabled ? [KNOWLEDGE_SEARCH_TOOL_NAME] : []),
                 ...htmlProjectToolDefinitions.map(tool => tool.name),
                 ...(subagentDelegationEnabled ? [SUBAGENT_DELEGATE_TOOL_NAME] : []),
+                ...(routableTargets.length > 0 ? [ROUTE_TOOL_NAME] : []),
               ],
               selectedPackSet: [...selectedPackSet],
               intent: effectiveIntentDecision.intent,
@@ -549,6 +590,7 @@ export const streamChat = async (params: StreamChatParams) => {
         : []),
       ...htmlProjectToolDefinitions,
       ...(subagentDelegationEnabled ? [delegationToolDefinition] : []),
+      ...(routableTargets.length > 0 ? [buildRouteToAssistantTool(routableTargets)] : []),
     ];
 
     const chatParams = {

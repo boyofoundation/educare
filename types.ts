@@ -41,6 +41,19 @@ export interface Assistant {
    * 改由「聊天回合是否有開啟 HTML 專案 (session.activeProjectId)」於執行期自動推導。
    */
   subagentDelegationEnabled?: boolean;
+  /** Assistant ids this assistant may propose as a user-confirmed handoff. */
+  routableAssistantIds?: string[];
+}
+
+export interface RouteProposal {
+  targetAssistantId: string;
+  targetAssistantName: string;
+  reason: string;
+  handoffSummary: string;
+  sourceAssistantId: string;
+  sourceSessionId: string;
+  status: 'pending' | 'accepted' | 'declined' | 'failed';
+  createdAt: number;
 }
 
 export type SubagentRunStatus = 'running' | 'complete' | 'failed' | 'aborted';
@@ -119,6 +132,7 @@ export interface ChatMessage {
    * 回答引用的知識片段。舊資料可能沒有此欄位，UI 需優雅退化。
    */
   citations?: MessageCitation[];
+  routeProposal?: RouteProposal;
 }
 
 /**
@@ -176,6 +190,14 @@ export interface ChatSession {
   // 壓縮相關欄位
   compactContext?: CompactContext; // 壓縮的對話上下文
   lastCompactionAt?: string; // 最後壓縮時間 (ISO string)
+  handoffContext?: {
+    fromAssistantId: string;
+    fromAssistantName: string;
+    reason: string;
+    summary: string;
+    sourceSessionId: string;
+    createdAt: number;
+  };
 }
 
 export type HtmlProjectStatus = 'draft' | 'ready' | 'error';
@@ -643,6 +665,7 @@ export interface AgentRunCheckpoint {
   };
   agentHarnessEnabled: boolean;
   subagentDelegationEnabled?: boolean;
+  routableTargets?: Array<{ id: string; name: string; description: string }>;
   /** HTML 專案模式開關快照,確保 resume 時維持與原回合一致的工具暴露。 */
   htmlProjectEnabled?: boolean;
   sharedMode: boolean;

@@ -16,7 +16,9 @@ import {
   type SubagentRunRecord,
   type TokenUsageTotals,
   type ToolCallRecord,
+  type RouteProposal,
 } from '../types';
+import type { RoutableTarget } from './assistantRoutingService';
 import type { ProviderUsageMetadata } from './llmAdapter';
 import { buildSyntheticMessage, serializeAgentTurnLog } from './conversationUtils';
 import { saveCheckpoint, updateCheckpoint } from './agentRunCheckpointService';
@@ -107,6 +109,7 @@ export interface AgentRunControllerCallbacks {
   onProjectToolActivity?: (update: HtmlProjectWorkspaceUpdate) => void;
   onSubagentActivity?: (update: SubagentActivityUpdate) => void;
   onToolCallActivity?: (record: ToolCallRecord) => void;
+  onRouteProposal?: (proposal: RouteProposal) => void;
   onTurnStart?: (turnIndex: number, maxTurns: number) => void;
   onTurnComplete?: (turnIndex: number, summary: AgentRunTurnSummary) => void;
   onStateChange?: (state: AgentRunState) => void;
@@ -125,6 +128,7 @@ export interface AgentRunControllerOptions {
   /** G9 feature flag — when false, run EXACTLY ONE turn (legacy single-turn behavior). */
   agentHarnessEnabled: boolean;
   subagentDelegationEnabled?: boolean;
+  routableTargets?: RoutableTarget[];
   /** HTML 專案模式開關。預設 false: 未開啟時不暴露任何 HTML 專案工具。 */
   htmlProjectEnabled?: boolean;
   /** shared mode → default budget 1 (auto-continue effectively off). */
@@ -313,6 +317,7 @@ export class AgentRunController {
       },
       agentHarnessEnabled: options.agentHarnessEnabled,
       subagentDelegationEnabled: effectiveDelegation,
+      routableTargets: options.routableTargets,
       htmlProjectEnabled: effectiveHtmlProjectEnabled,
       sharedMode: options.sharedMode ?? false,
       createdAt: resumeFrom?.createdAt ?? state.startedAt,
@@ -346,6 +351,7 @@ export class AgentRunController {
           candidatesTokenCount: totalCandidatesTokens,
         },
         subagentDelegationEnabled: effectiveDelegation,
+        routableTargets: options.routableTargets,
         heartbeatAt: now,
         updatedAt: now,
       });
@@ -371,6 +377,7 @@ export class AgentRunController {
           candidatesTokenCount: totalCandidatesTokens,
         },
         subagentDelegationEnabled: effectiveDelegation,
+        routableTargets: options.routableTargets,
         heartbeatAt: Date.now(),
         updatedAt: Date.now(),
       });
@@ -474,6 +481,7 @@ export class AgentRunController {
             signal: this.internalAbort.signal,
             packSetOverride: isContinuation ? firstTurnPackSet : undefined,
             subagentDelegationEnabled: effectiveDelegation,
+            routableTargets: resumeFrom?.routableTargets ?? options.routableTargets,
             htmlProjectEnabled: effectiveHtmlProjectEnabled,
             onChunk: text => {
               this.latestPartialText += text;
@@ -483,6 +491,7 @@ export class AgentRunController {
             onProjectToolActivity: callbacks.onProjectToolActivity,
             onSubagentActivity: callbacks.onSubagentActivity,
             onToolCallActivity: callbacks.onToolCallActivity,
+            onRouteProposal: callbacks.onRouteProposal,
             onComplete: (meta, text) => {
               turn.text = text;
               turn.finishReason = meta.finishReason ?? 'complete';

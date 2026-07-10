@@ -25,8 +25,10 @@ import type {
   ChatMessage,
   SubagentRunRecord,
   ToolCallRecord,
+  RouteProposal,
 } from '../../types';
 import { HtmlProjectWorkspaceUpdate } from '../../types';
+import { resolveRoutableTargets } from '../../services/assistantRoutingService';
 
 const INTERRUPTION_NOTICE = '⚠️ 上次工作已中斷';
 const EMPTY_RESPONSE_NOTICE = '（本次回覆沒有內容）';
@@ -96,7 +98,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   headerActions,
   subagentDelegationEnabled = false,
 }) => {
-  const actions = useContext(AppContext)?.actions ?? null;
+  const appContext = useContext(AppContext);
+  const actions = appContext?.actions ?? null;
   const [input, setInput] = useState('');
   const [streamingResponse, setStreamingResponse] = useState('');
   const [pendingEmptyResponseNotice, setPendingEmptyResponseNotice] = useState<string | null>(null);
@@ -120,6 +123,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const latestErrorMessageRef = useRef<string | null>(null);
   const streamingBufferRef = useRef('');
   const streamingFlushFrameRef = useRef<number | null>(null);
+  const routeProposalRef = useRef<RouteProposal | undefined>(undefined);
   const { containerRef, isAtBottom, handleScroll, scrollToBottom, updatePinnedState } =
     useStickToBottom(STICKY_SCROLL_THRESHOLD_PX);
 
@@ -439,6 +443,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       const chatHistory: ChatMessage[] = sanitizedHistoryMessages;
       let enhancedSystemPrompt = systemPrompt;
 
+      if (displaySession.handoffContext) {
+        const handoff = displaySession.handoffContext;
+        enhancedSystemPrompt += `\n\n[HANDOFF FROM ${handoff.fromAssistantName}]\nReason: ${handoff.reason}\nSummary: ${handoff.summary}`;
+      }
+
       if (displaySession.compactContext) {
         const compactedContextPrompt = `\n\n[PREVIOUS CONVERSATION SUMMARY]\n${displaySession.compactContext.content}\n\nThe above is a summary of our previous conversation. Please refer to this context when responding to continue our conversation naturally.\n\n[CURRENT CONVERSATION]`;
 
@@ -463,6 +472,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         agentHarnessEnabled: resumeCheckpoint?.agentHarnessEnabled ?? projectEditingActive,
         subagentDelegationEnabled:
           resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
+        routableTargets: appContext?.state?.currentAssistant
+          ? resolveRoutableTargets(appContext.state.currentAssistant, appContext.state.assistants)
+          : [],
         htmlProjectEnabled: resumeCheckpoint?.htmlProjectEnabled ?? projectEditingActive,
         sharedMode: resumeCheckpoint?.sharedMode ?? sharedMode,
         resumeFrom: resumeCheckpoint,
@@ -477,6 +489,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           onProjectToolActivity: handleProjectToolActivity,
           onSubagentActivity: handleSubagentActivity,
           onToolCallActivity: handleToolCallActivity,
+          onRouteProposal: proposal => {
+            routeProposalRef.current = proposal;
+          },
           onStateChange: nextState => {
             setRunState(nextState);
             actions?.setAgentRunState?.(nextState);
@@ -543,6 +558,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
         const newAiMessage = buildAssistantMessage(fullModelResponse, {
           citations: result.citations,
+          routeProposal: routeProposalRef.current,
         });
         const finalSession = applyTokenUsageToSession(
           {
