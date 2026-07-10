@@ -164,21 +164,29 @@ export const saveAssistantToTurso = async (assistant: TursoAssistant): Promise<v
   const client = getWriteClient(); // 需要寫入權限
 
   try {
-    const configJson = JSON.stringify({
-      routableAssistantIds: assistant.routableAssistantIds,
-      starterPrompts: assistant.starterPrompts,
-      subagentDelegationEnabled: assistant.subagentDelegationEnabled,
-    });
+    // undefined 欄位不寫入，更新時保留雲端既有設定；空陣列/false 視為明確清除
+    const incomingConfig: Partial<TursoAssistant> = {};
+    if (assistant.routableAssistantIds !== undefined) {
+      incomingConfig.routableAssistantIds = assistant.routableAssistantIds;
+    }
+    if (assistant.starterPrompts !== undefined) {
+      incomingConfig.starterPrompts = assistant.starterPrompts;
+    }
+    if (assistant.subagentDelegationEnabled !== undefined) {
+      incomingConfig.subagentDelegationEnabled = assistant.subagentDelegationEnabled;
+    }
     // 首先檢查助手是否已存在
     const existingResult = await client.execute({
-      sql: 'SELECT id FROM assistants WHERE id = ?',
+      sql: 'SELECT id, config_json FROM assistants WHERE id = ?',
       args: [assistant.id],
     });
 
     if (existingResult.rows.length > 0) {
       // 如果已存在，只更新名稱、描述和系統提示，保持 created_at 不變
+      const existingConfig = parseAssistantConfig(existingResult.rows[0].config_json);
+      const configJson = JSON.stringify({ ...existingConfig, ...incomingConfig });
       await client.execute({
-        sql: `UPDATE assistants 
+        sql: `UPDATE assistants
               SET name = ?, description = ?, system_prompt = ?, config_json = ?
               WHERE id = ?`,
         args: [
@@ -200,7 +208,7 @@ export const saveAssistantToTurso = async (assistant: TursoAssistant): Promise<v
           assistant.description,
           assistant.systemPrompt,
           assistant.createdAt,
-          configJson,
+          JSON.stringify(incomingConfig),
         ],
       });
     }
@@ -380,13 +388,19 @@ export const getAllAssistantsFromTurso = async (): Promise<TursoAssistant[]> => 
 
     const result = await client.execute('SELECT * FROM assistants ORDER BY created_at DESC');
 
-    return result.rows.map(row => ({
-      id: row.id as string,
-      name: row.name as string,
-      description: (row.description as string) || '', // 提供預設值以防舊資料
-      systemPrompt: row.system_prompt as string,
-      createdAt: row.created_at as number,
-    }));
+    return result.rows.map(row => {
+      const config = parseAssistantConfig(row.config_json);
+      return {
+        id: row.id as string,
+        name: row.name as string,
+        description: (row.description as string) || '', // 提供預設值以防舊資料
+        systemPrompt: row.system_prompt as string,
+        createdAt: row.created_at as number,
+        routableAssistantIds: config.routableAssistantIds,
+        starterPrompts: config.starterPrompts,
+        subagentDelegationEnabled: config.subagentDelegationEnabled,
+      };
+    });
   } catch (error) {
     console.error('Failed to get all assistants from Turso:', error);
     return [];

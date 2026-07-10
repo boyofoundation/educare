@@ -55,7 +55,7 @@ describe('saveAssistantToTurso', () => {
     await saveAssistantToTurso(sampleAssistant);
 
     expect(executeMock).toHaveBeenCalledTimes(2);
-    expect(sqlOf(executeMock.mock.calls[0])).toContain('SELECT id FROM assistants');
+    expect(sqlOf(executeMock.mock.calls[0])).toContain('SELECT id, config_json FROM assistants');
     const updateSql = sqlOf(executeMock.mock.calls[1]);
     expect(updateSql).toContain('UPDATE assistants');
     expect(updateSql).toContain('config_json');
@@ -65,6 +65,50 @@ describe('saveAssistantToTurso', () => {
     expect(config.routableAssistantIds).toEqual(['b1', 'c1']);
     expect(config.starterPrompts).toEqual(['hello there']);
     expect(config.subagentDelegationEnabled).toBe(true);
+  });
+
+  it('preserves existing config fields when the incoming assistant omits them', async () => {
+    // Arrange: existing row already carries config; incoming save omits all config fields
+    executeMock
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'a1',
+            config_json: JSON.stringify({
+              routableAssistantIds: ['b1'],
+              starterPrompts: ['existing prompt'],
+              subagentDelegationEnabled: true,
+            }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await saveAssistantToTurso({
+      id: 'a1',
+      name: 'Router',
+      description: 'routes things',
+      systemPrompt: 'be helpful',
+      createdAt: 1234,
+    });
+
+    const config = JSON.parse(argsOf(executeMock.mock.calls[1])[3] as string);
+    expect(config.starterPrompts).toEqual(['existing prompt']);
+    expect(config.routableAssistantIds).toEqual(['b1']);
+    expect(config.subagentDelegationEnabled).toBe(true);
+  });
+
+  it('clears config fields when the incoming assistant sets them explicitly empty', async () => {
+    executeMock
+      .mockResolvedValueOnce({
+        rows: [{ id: 'a1', config_json: JSON.stringify({ starterPrompts: ['old'] }) }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await saveAssistantToTurso({ ...sampleAssistant, starterPrompts: [] });
+
+    const config = JSON.parse(argsOf(executeMock.mock.calls[1])[3] as string);
+    expect(config.starterPrompts).toEqual([]);
   });
 
   it('inserts a new assistant with config_json carrying routing config', async () => {

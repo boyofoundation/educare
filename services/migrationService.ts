@@ -90,6 +90,9 @@ export const migrateIndexedDBToTurso = async (
               description: assistant.description || '', // 提供預設值
               systemPrompt: assistant.systemPrompt,
               createdAt: assistant.createdAt,
+              routableAssistantIds: assistant.routableAssistantIds,
+              starterPrompts: assistant.starterPrompts,
+              subagentDelegationEnabled: assistant.subagentDelegationEnabled,
             });
             migratedAssistants++;
           } catch (error) {

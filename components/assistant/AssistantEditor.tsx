@@ -58,6 +58,26 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
     }
   }, [assistant]);
 
+  // 將輸入框中尚未按「新增」的建議提問一併納入；驗證失敗回傳 null（呼叫端應中止）。
+  const commitPendingStarterPrompt = (): string[] | null => {
+    const pendingPrompt = newStarterPrompt.trim();
+    if (!pendingPrompt) {
+      return starterPrompts;
+    }
+    if (starterPrompts.length >= MAX_STARTER_PROMPTS) {
+      alert('建議提問最多只能設定 4 條。');
+      return null;
+    }
+    if (pendingPrompt.length > MAX_STARTER_PROMPT_LENGTH) {
+      alert(`建議提問請控制在 ${MAX_STARTER_PROMPT_LENGTH} 字以內。`);
+      return null;
+    }
+    const nextPrompts = [...starterPrompts, pendingPrompt];
+    setStarterPrompts(nextPrompts);
+    setNewStarterPrompt('');
+    return nextPrompts;
+  };
+
   const handleSave = async () => {
     if (isSaving) {
       return;
@@ -65,6 +85,11 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
 
     if (!name.trim()) {
       alert('助理名稱為必填。');
+      return;
+    }
+
+    const finalStarterPrompts = commitPendingStarterPrompt();
+    if (finalStarterPrompts === null) {
       return;
     }
 
@@ -77,7 +102,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         description: description.trim(),
         systemPrompt: systemPrompt.trim(),
         ragChunks,
-        starterPrompts,
+        starterPrompts: finalStarterPrompts,
         createdAt: assistant?.createdAt || Date.now(),
         subagentDelegationEnabled,
         routableAssistantIds,
@@ -98,20 +123,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   };
 
   const handleAddStarterPrompt = () => {
-    const nextPrompt = newStarterPrompt.trim();
-    if (!nextPrompt) {
-      return;
-    }
-    if (starterPrompts.length >= MAX_STARTER_PROMPTS) {
-      alert('建議提問最多只能設定 4 條。');
-      return;
-    }
-    if (nextPrompt.length > MAX_STARTER_PROMPT_LENGTH) {
-      alert(`建議提問請控制在 ${MAX_STARTER_PROMPT_LENGTH} 字以內。`);
-      return;
-    }
-    setStarterPrompts(current => [...current, nextPrompt]);
-    setNewStarterPrompt('');
+    commitPendingStarterPrompt();
   };
 
   const handleRemoveStarterPrompt = (index: number) => {
@@ -205,6 +217,12 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
               type='text'
               value={newStarterPrompt}
               onChange={e => setNewStarterPrompt(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  handleAddStarterPrompt();
+                }
+              }}
               className='flex-1 rounded-xl border border-gray-600/50 bg-gray-700/80 px-4 py-3 text-white placeholder-gray-400 shadow-inner transition-all duration-300 focus:border-cyan-500/50 focus:bg-gray-700 focus:ring-2 focus:ring-cyan-500/50'
               placeholder='例如：幫我整理這份教材的重點'
             />

@@ -199,6 +199,63 @@ describe('AssistantEditor', () => {
     );
   });
 
+  it('saves starter prompts added via the 新增 button', () => {
+    render(<AssistantEditor {...props} />);
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: 'Test' } });
+    fireEvent.change(screen.getByPlaceholderText('例如：幫我整理這份教材的重點'), {
+      target: { value: '第一個建議提問' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '新增' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存助理' }));
+
+    expect(props.onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ starterPrompts: ['第一個建議提問'] }),
+    );
+  });
+
+  it('includes a pending starter prompt typed but not yet added when saving', () => {
+    render(<AssistantEditor {...props} />);
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: 'Test' } });
+    fireEvent.change(screen.getByPlaceholderText('例如：幫我整理這份教材的重點'), {
+      target: { value: '還沒按新增的提問' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存助理' }));
+
+    expect(props.onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ starterPrompts: ['還沒按新增的提問'] }),
+    );
+    expect(testEnvironment.alertSpy).not.toHaveBeenCalled();
+  });
+
+  it('adds a starter prompt when Enter is pressed in the input', () => {
+    render(<AssistantEditor {...props} />);
+
+    const input = screen.getByPlaceholderText('例如：幫我整理這份教材的重點');
+    fireEvent.change(input, { target: { value: '按 Enter 新增' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(screen.getByText('按 Enter 新增')).toBeInTheDocument();
+    expect(input).toHaveValue('');
+  });
+
+  it('hydrates existing starter prompts when editing', () => {
+    render(
+      <AssistantEditor
+        {...props}
+        assistant={{ ...TEST_ASSISTANTS.basic, starterPrompts: ['既有提問'] }}
+      />,
+    );
+
+    expect(screen.getByText('既有提問')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '保存助理' }));
+    expect(props.onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ starterPrompts: ['既有提問'] }),
+    );
+  });
+
   it('shows delegation guidance about token cost and shared mode', () => {
     render(<AssistantEditor {...props} />);
 
