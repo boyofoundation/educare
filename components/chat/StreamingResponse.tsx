@@ -28,8 +28,8 @@ const StreamingResponse: React.FC<StreamingResponseProps> = ({
             <AgentActivityTimeline toolCalls={toolCallLog} subagentRuns={subagentRuns} live />
           )}
           {content !== '' && (
-            <div className='relative w-full max-w-[85%] rounded-2xl rounded-bl-md border border-gray-700/50 bg-gray-800/80 px-5 py-3 text-gray-100 shadow-lg backdrop-blur-sm md:max-w-[65ch]'>
-              <div className='text-sm leading-relaxed'>
+            <div className='relative w-full max-w-[90%] rounded-2xl rounded-bl-md border border-gray-700/50 bg-gray-800/80 px-5 py-4 text-gray-100 shadow-lg backdrop-blur-sm md:max-w-[70ch] md:px-6'>
+              <div className='text-base leading-7'>
                 <MarkdownContent content={content} />
                 <span className='ml-1 inline-block h-4 w-0.5 animate-pulse bg-cyan-400' />
               </div>

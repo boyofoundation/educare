@@ -199,7 +199,7 @@ describe('StreamingResponse', () => {
         'backdrop-blur-sm',
         'text-gray-100',
         'px-5',
-        'py-3',
+        'py-4',
         'rounded-2xl',
         'rounded-bl-md',
         'shadow-lg',
@@ -221,9 +221,7 @@ describe('StreamingResponse', () => {
       render(<StreamingResponse content='Test content' />);
 
       // Assert
-      const textContainer = screen
-        .getByTestId('markdown-content')
-        .closest('.text-sm.leading-relaxed');
+      const textContainer = screen.getByTestId('markdown-content').closest('.text-base.leading-7');
       expect(textContainer).toBeInTheDocument();
     });
   });

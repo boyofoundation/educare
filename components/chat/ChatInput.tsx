@@ -53,9 +53,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   return (
-    <div className='border-t border-gray-700/30 bg-gradient-to-r from-gray-800/90 to-gray-850/90 p-3 backdrop-blur-sm md:p-6'>
-      <div className='mx-auto max-w-3xl'>
-        <div className='flex items-end gap-2 md:gap-4'>
+    <div className='border-t border-gray-700/30 bg-gradient-to-r from-gray-800/90 to-gray-850/90 px-4 py-4 backdrop-blur-sm md:px-6 md:py-5'>
+      <div className='mx-auto max-w-4xl'>
+        <div className='flex items-end gap-3 md:gap-4'>
           <div className='relative flex-1'>
             <textarea
               ref={textareaRef}
@@ -66,7 +66,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               onCompositionEnd={handleCompositionEnd}
               placeholder='輸入您的訊息...'
               rows={1}
-              className='w-full resize-none rounded-2xl border-2 border-gray-600/40 bg-gray-700/60 px-4 py-3 text-sm text-white shadow-lg transition-all duration-300 hover:border-gray-500/60 focus:border-cyan-500/60 focus:bg-gray-700/80 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-60 md:px-6 md:py-4 md:text-base'
+              className='w-full resize-none rounded-2xl border-2 border-gray-600/40 bg-gray-700/60 px-4 py-3 text-base leading-7 text-white shadow-lg transition-all duration-300 hover:border-gray-500/60 focus:border-cyan-500/60 focus:bg-gray-700/80 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-60 md:px-5 md:py-3.5'
               disabled={isLoading || disabled || isRunning}
               aria-label='輸入訊息'
               aria-describedby='input-help'
@@ -88,7 +88,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           <button
             onClick={onSend}
             disabled={isLoading || !value.trim() || disabled || isRunning}
-            className={`relative flex min-w-[80px] items-center justify-center rounded-2xl border px-4 py-3 text-sm font-medium text-white shadow-lg transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 focus:ring-offset-gray-800 md:min-w-[100px] md:px-8 md:py-4 md:text-base md:font-semibold ${
+            className={`relative flex min-h-12 min-w-12 items-center justify-center rounded-2xl border px-4 py-3 text-base font-semibold text-white shadow-lg transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 focus:ring-offset-gray-800 md:min-w-[108px] md:px-7 ${
               isLoading || !value.trim() || disabled || isRunning
                 ? 'cursor-not-allowed border-gray-600/30 bg-gray-600/50'
                 : 'border-cyan-500/40 bg-cyan-600 hover:bg-cyan-500'
@@ -108,14 +108,14 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 >
                   <path d='M3.4 20.4a1 1 0 0 1-.33-1.93l16.7-6.47L3.07 5.53a1 1 0 0 1 .2-1.93 1 1 0 0 1 .43.03l17.99 6.75a1.75 1.75 0 0 1 0 3.24L3.7 20.37a1 1 0 0 1-.3.05Z' />
                 </svg>
-                <span className='hidden sm:inline md:inline'>傳送</span>
+                <span className='hidden sm:inline'>傳送</span>
               </>
             )}
           </button>
           {isRunning && (
             <button
               onClick={() => onStop?.()}
-              className='flex min-w-[80px] items-center justify-center rounded-2xl border border-rose-400/40 bg-rose-600 px-4 py-3 text-sm font-medium text-white shadow-lg transition-all duration-300 hover:bg-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:ring-offset-2 focus:ring-offset-gray-800 md:min-w-[100px] md:px-8 md:py-4 md:text-base md:font-semibold'
+              className='flex min-h-12 min-w-12 items-center justify-center rounded-2xl border border-rose-400/40 bg-rose-600 px-4 py-3 text-base font-semibold text-white shadow-lg transition-all duration-300 hover:bg-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:ring-offset-2 focus:ring-offset-gray-800 md:min-w-[108px] md:px-7'
               aria-label='停止 Agent 執行'
               title='停止 Agent 執行'
               type='button'
@@ -128,7 +128,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               >
                 <rect x='6' y='6' width='12' height='12' rx='1.5' />
               </svg>
-              <span className='hidden sm:inline md:inline'>停止</span>
+              <span className='hidden sm:inline'>停止</span>
             </button>
           )}
         </div>
