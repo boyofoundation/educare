@@ -23,6 +23,7 @@ import type {
   AgentRunCheckpoint,
   AgentRunState,
   ChatMessage,
+  ChatSession,
   SubagentRunRecord,
   ToolCallRecord,
   RouteProposal,
@@ -127,6 +128,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const streamingBufferRef = useRef('');
   const streamingFlushFrameRef = useRef<number | null>(null);
   const routeProposalRef = useRef<RouteProposal | undefined>(undefined);
+  const handoffKickoffSessionIdRef = useRef<string | null>(null);
+  const activeRunSessionRef = useRef<ChatSession | null>(null);
   const { containerRef, isAtBottom, handleScroll, scrollToBottom, updatePinnedState } =
     useStickToBottom(STICKY_SCROLL_THRESHOLD_PX);
 
@@ -158,12 +161,33 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   }, [flushStreamingBuffer]);
 
   useEffect(() => {
+    const previousSessionId = sessionRef.current.id;
     setCurrentSession(session);
     sessionRef.current = session;
-  }, [session]);
+
+    if (session.id === previousSessionId || !controllerRef.current) {
+      return;
+    }
+    // Run 進行中切換 session(例如接受轉接):中斷舊 run 並清除它的即時 UI。
+    // 舊 run 會 commit 回自己的 session (activeRunSessionRef),不會寫進新 session;
+    // 未完成的部分由既有 checkpoint 機制保留,回到原 session 時可續跑。
+    controllerRef.current.stop('session-switch');
+    streamingBufferRef.current = '';
+    setStreamingResponse('');
+    setIsThinking(false);
+    setStatusText('');
+    setSubagentBatches({});
+    setToolCallRecords([]);
+    setPendingEmptyResponseNotice(null);
+    setRunState(null);
+    actions?.setAgentRunState?.(null);
+  }, [session, actions]);
 
   useEffect(() => {
     sessionRef.current = currentSession;
+    if (activeRunSessionRef.current?.id === currentSession.id) {
+      activeRunSessionRef.current = currentSession;
+    }
   }, [currentSession]);
 
   useEffect(() => {
@@ -443,6 +467,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
     sessionRef.current = displaySession;
     setCurrentSession(displaySession);
+    // Run 綁定它啟動時的 session:commit 與即時 callback 都以此判斷是否仍顯示中,
+    // 避免使用者中途切換 session 時把結果或串流寫進別的 session。
+    activeRunSessionRef.current = displaySession;
+    const isRunSessionDisplayed = () => sessionRef.current.id === displaySession.id;
 
     try {
       setStatusText(ragChunks.length > 0 ? '🔎 搜尋知識庫中...' : '🤖 生成回答...');
@@ -498,20 +526,43 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         sharedMode: resumeCheckpoint?.sharedMode ?? sharedMode,
         resumeFrom: resumeCheckpoint,
         callbacks: {
+          // 即時 callback 只在 run 的 session 仍顯示中時更新 UI;
+          // 切換 session 後這些串流/活動屬於背景 run,不得渲染進新 session 的畫面。
           onChunk: chunk => {
+            if (!isRunSessionDisplayed()) {
+              return;
+            }
             if (isThinkingRef.current) {
               setIsThinking(false);
             }
             streamingBufferRef.current += chunk;
             scheduleStreamingFlush();
           },
-          onProjectToolActivity: handleProjectToolActivity,
-          onSubagentActivity: handleSubagentActivity,
-          onToolCallActivity: handleToolCallActivity,
+          onProjectToolActivity: update => {
+            if (!isRunSessionDisplayed()) {
+              return;
+            }
+            handleProjectToolActivity(update);
+          },
+          onSubagentActivity: update => {
+            if (!isRunSessionDisplayed()) {
+              return;
+            }
+            handleSubagentActivity(update);
+          },
+          onToolCallActivity: record => {
+            if (!isRunSessionDisplayed()) {
+              return;
+            }
+            handleToolCallActivity(record);
+          },
           onRouteProposal: proposal => {
             routeProposalRef.current = proposal;
           },
           onStateChange: nextState => {
+            if (!isRunSessionDisplayed()) {
+              return;
+            }
             setRunState(nextState);
             actions?.setAgentRunState?.(nextState);
           },
@@ -528,14 +579,19 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         controllerRef.current = null;
         flushStreamingBuffer();
 
-        setRunState(result.state);
-        actions?.setAgentRunState?.(result.state);
+        // Run 期間使用者可能已切到別的 session:結果仍持久化回 run 自己的 session,
+        // 但顯示中 session 的 UI state 不得被舊 run 覆寫。
+        const runDisplayed = isRunSessionDisplayed();
+        const baseSession = activeRunSessionRef.current ?? sessionRef.current;
+
+        if (runDisplayed) {
+          setRunState(result.state);
+          actions?.setAgentRunState?.(result.state);
+        }
         setIsLoading(false);
         setIsThinking(false);
         setStatusText('');
         setStreamingResponse('');
-
-        const baseSession = sessionRef.current;
         const fullModelResponse = result.fullText.trim();
         const latestErrorMessage = latestErrorMessageRef.current;
         const shouldPersistError = Boolean(latestErrorMessage) || result.state.status === 'failed';
@@ -552,26 +608,34 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             },
             result.tokenInfo,
           );
-          sessionRef.current = finalSession;
-          setCurrentSession(finalSession);
+          if (runDisplayed) {
+            sessionRef.current = finalSession;
+            setCurrentSession(finalSession);
+          }
           setSubagentBatches({});
           setToolCallRecords([]);
           await onNewMessage(finalSession, message, errorMessage.content, result.tokenInfo);
-          await loadRetainedCheckpoint(result.state.runId);
+          if (runDisplayed) {
+            await loadRetainedCheckpoint(result.state.runId);
+          }
           return;
         }
 
         if (fullModelResponse === '') {
           const finalSession = applyTokenUsageToSession(baseSession, result.tokenInfo);
-          sessionRef.current = finalSession;
-          setCurrentSession(finalSession);
-          setPendingEmptyResponseNotice(EMPTY_RESPONSE_NOTICE);
+          if (runDisplayed) {
+            sessionRef.current = finalSession;
+            setCurrentSession(finalSession);
+            setPendingEmptyResponseNotice(EMPTY_RESPONSE_NOTICE);
+          }
           setSubagentBatches({});
           setToolCallRecords([]);
           await onNewMessage(finalSession, message, '', result.tokenInfo);
           await deleteCheckpoint(result.state.runId);
-          setInterruptedCheckpoint(null);
-          setResumeUnavailableReason(null);
+          if (runDisplayed) {
+            setInterruptedCheckpoint(null);
+            setResumeUnavailableReason(null);
+          }
           return;
         }
 
@@ -587,8 +651,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           result.tokenInfo,
         );
 
-        sessionRef.current = finalSession;
-        setCurrentSession(finalSession);
+        if (runDisplayed) {
+          sessionRef.current = finalSession;
+          setCurrentSession(finalSession);
+        }
         setSubagentBatches({});
         setToolCallRecords([]);
         try {
@@ -600,9 +666,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
         if (result.state.status === 'complete') {
           await deleteCheckpoint(result.state.runId);
-          setInterruptedCheckpoint(null);
-          setResumeUnavailableReason(null);
-        } else {
+          if (runDisplayed) {
+            setInterruptedCheckpoint(null);
+            setResumeUnavailableReason(null);
+          }
+        } else if (runDisplayed) {
+          // 未顯示中時不動 resume 橫幅;回到原 session 時由 loadInterruptedCheckpoint 效果載入。
           await loadRetainedCheckpoint(result.state.runId);
         }
       };
@@ -665,7 +734,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       setSubagentBatches({});
       setToolCallRecords([]);
 
-      const baseSession = sessionRef.current;
+      const runDisplayed = isRunSessionDisplayed();
+      const baseSession = activeRunSessionRef.current ?? sessionRef.current;
       const errorMessage = buildAssistantMessage(
         `${errorMessageText}\n\n請檢查您的 API 密鑰和控制檯以取得更多細節。`,
         { isError: true },
@@ -674,12 +744,16 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         ...baseSession,
         messages: [...baseSession.messages, errorMessage],
       };
-      sessionRef.current = finalSession;
-      setCurrentSession(finalSession);
+      if (runDisplayed) {
+        sessionRef.current = finalSession;
+        setCurrentSession(finalSession);
+      }
       await onNewMessage(finalSession, message, errorMessage.content, {
         promptTokenCount: 0,
         candidatesTokenCount: 0,
       });
+    } finally {
+      activeRunSessionRef.current = null;
     }
   };
 
@@ -755,6 +829,37 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const handleStop = () => {
     controllerRef.current?.stop('user-stop');
   };
+
+  const executeRunRef = useRef(executeRun);
+  useEffect(() => {
+    executeRunRef.current = executeRun;
+  });
+
+  // 轉接被接受後,自動以 handoff summary 送出第一則訊息:使用者不必重打問題,
+  // 且第一回合的知識檢索 (gatherKnowledge 以首則訊息為 query) 能取得原始需求背景。
+  useEffect(() => {
+    const handoff = currentSession.handoffContext;
+    if (
+      !handoff?.summary ||
+      currentSession.messages.length > 0 ||
+      isLoading ||
+      handoffKickoffSessionIdRef.current === currentSession.id
+    ) {
+      return;
+    }
+    handoffKickoffSessionIdRef.current = currentSession.id;
+
+    const kickoffMessage: ChatMessage = {
+      role: 'user',
+      content: handoff.summary,
+      timestamp: Date.now(),
+    };
+    void executeRunRef.current({
+      message: handoff.summary,
+      displaySession: { ...currentSession, messages: [kickoffMessage] },
+      historyMessages: [],
+    });
+  }, [currentSession, isLoading]);
 
   const handlePromptSelect = async (prompt: string) => {
     if (isLoading) {

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatContainer from '../ChatContainer';
 import { createMockChatSession, TEST_ASSISTANTS } from './test-utils';
 import { useAppContext } from '../../core/useAppContext';
-import type { AgentRunCheckpoint, AgentRunState } from '../../../types';
+import type { AgentRunCheckpoint, AgentRunState, ChatMessage } from '../../../types';
 import type { AgentRunController, AgentRunResult } from '../../../services/agentRunController';
 
 const {
@@ -1333,6 +1333,217 @@ describe('ChatContainer', () => {
         'Test reply',
         expect.anything(),
       );
+    });
+  });
+
+  describe('handoff auto-kickoff', () => {
+    const createHandoffSession = (overrides: Parameters<typeof createMockChatSession>[0] = {}) =>
+      createMockChatSession({
+        id: 'handoff-session-1',
+        handoffContext: {
+          fromAssistantId: 'source-assistant-1',
+          fromAssistantName: 'Source Assistant',
+          reason: 'Needs a specialist',
+          summary: 'User needs help filing quarterly taxes',
+          sourceSessionId: 'source-session-1',
+          createdAt: 1640995200000,
+        },
+        ...overrides,
+      });
+
+    it('auto-sends the handoff summary as the first message exactly once for an empty handoff session', async () => {
+      const session = createHandoffSession();
+
+      const { rerender } = render(<ChatContainer {...defaultProps} session={session} />);
+
+      await waitFor(() => {
+        expect(mockAgentRunControllerCtor).toHaveBeenCalled();
+      });
+
+      const options = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+        message: string;
+        history: ChatMessage[];
+        systemPrompt: string;
+        sessionId: string;
+      };
+      expect(options.message).toBe('User needs help filing quarterly taxes');
+      expect(options.history).toEqual([]);
+      expect(options.systemPrompt).toContain('[HANDOFF FROM Source Assistant]');
+      expect(options.sessionId).toBe('handoff-session-1');
+
+      // Wait for the auto-run to commit so state settles before re-rendering.
+      await waitFor(() => {
+        expect(defaultProps.onNewMessage).toHaveBeenCalled();
+      });
+
+      // Re-render with identical props: the session-id ref guard must prevent a second run.
+      rerender(<ChatContainer {...defaultProps} session={session} />);
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      });
+
+      expect(mockAgentRunControllerCtor).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not auto-send for an empty session without handoffContext', async () => {
+      render(<ChatContainer {...defaultProps} session={createMockChatSession()} />);
+
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      });
+
+      expect(mockAgentRunControllerCtor).not.toHaveBeenCalled();
+    });
+
+    it('does not auto-send when the handoff session already has messages', async () => {
+      const session = createHandoffSession({
+        messages: [
+          { role: 'user', content: 'User needs help filing quarterly taxes' },
+          { role: 'model', content: 'Sure, let me walk you through it.' },
+        ],
+      });
+
+      render(<ChatContainer {...defaultProps} session={session} />);
+
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      });
+
+      expect(mockAgentRunControllerCtor).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('run-session isolation', () => {
+    const createDeferredRun = () => {
+      let resolveRun: (value: AgentRunResult) => void = () => undefined;
+      mockControllerRun.mockImplementationOnce(
+        async () =>
+          new Promise<AgentRunResult>(resolve => {
+            resolveRun = resolve;
+          }),
+      );
+      return { resolve: (value: AgentRunResult) => resolveRun(value) };
+    };
+
+    const startRunInSessionA = async () => {
+      const sessionA = createMockChatSession({ id: 'session-a' });
+      const deferred = createDeferredRun();
+
+      const view = render(<ChatContainer {...defaultProps} session={sessionA} />);
+      await sendMessage('Question in session A');
+
+      await waitFor(() => {
+        expect(mockAgentRunControllerCtor).toHaveBeenCalledTimes(1);
+      });
+
+      return { ...view, deferred };
+    };
+
+    it('stops the in-flight run with session-switch when the session prop changes mid-run', async () => {
+      const { rerender, deferred } = await startRunInSessionA();
+
+      rerender(
+        <ChatContainer {...defaultProps} session={createMockChatSession({ id: 'session-b' })} />,
+      );
+
+      await waitFor(() => {
+        expect(mockControllerStop).toHaveBeenCalledWith('session-switch');
+      });
+
+      // Settle the pending run so the component finishes committing.
+      await act(async () => {
+        deferred.resolve(buildRunResult('Stopped late'));
+      });
+    });
+
+    it('persists a late run result into its own session without polluting the new session', async () => {
+      const { rerender, deferred } = await startRunInSessionA();
+
+      rerender(
+        <ChatContainer {...defaultProps} session={createMockChatSession({ id: 'session-b' })} />,
+      );
+
+      await act(async () => {
+        deferred.resolve(buildRunResult('Late reply'));
+      });
+
+      await waitFor(() => {
+        expect(defaultProps.onNewMessage).toHaveBeenCalled();
+      });
+
+      const finalSession = defaultProps.onNewMessage.mock.calls.at(-1)?.[0] as {
+        id: string;
+        messages: ChatMessage[];
+      };
+      expect(finalSession.id).toBe('session-a');
+      expect(finalSession.messages.at(-1)).toEqual(
+        expect.objectContaining({ role: 'model', content: 'Late reply' }),
+      );
+
+      // The displayed session B view must not render the old run's result.
+      expect(screen.queryByText(/Late reply/)).toBeNull();
+    });
+
+    it('ignores onChunk from the old run after switching sessions', async () => {
+      const { rerender, deferred } = await startRunInSessionA();
+
+      rerender(
+        <ChatContainer {...defaultProps} session={createMockChatSession({ id: 'session-b' })} />,
+      );
+
+      const oldRunOptions = mockAgentRunControllerCtor.mock.calls.at(0)?.[0] as {
+        callbacks: { onChunk: (text: string, turn: number) => void };
+      };
+
+      await act(async () => {
+        oldRunOptions.callbacks.onChunk('LEAKED', 0);
+      });
+
+      expect(screen.queryByText(/LEAKED/)).toBeNull();
+
+      // Settle the pending run so the component finishes committing.
+      await act(async () => {
+        deferred.resolve(buildRunResult('Late reply after leak attempt'));
+      });
+      await waitFor(() => {
+        expect(defaultProps.onNewMessage).toHaveBeenCalled();
+      });
+    });
+
+    it('auto-kicks off an empty handoff session after the old run finishes committing', async () => {
+      const { rerender, deferred } = await startRunInSessionA();
+
+      const handoffSession = createMockChatSession({
+        id: 'handoff-b',
+        messages: [],
+        handoffContext: {
+          fromAssistantId: 'source-assistant-1',
+          fromAssistantName: 'Source Assistant',
+          reason: 'Needs a specialist',
+          summary: 'Handoff kickoff question',
+          sourceSessionId: 'source-session-1',
+          createdAt: 1640995200000,
+        },
+      });
+      rerender(<ChatContainer {...defaultProps} session={handoffSession} />);
+
+      // While the old run is still pending (isLoading), the kickoff must wait.
+      expect(mockAgentRunControllerCtor).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        deferred.resolve(buildRunResult('Old answer'));
+      });
+
+      await waitFor(() => {
+        expect(mockAgentRunControllerCtor).toHaveBeenCalledTimes(2);
+      });
+
+      const kickoffOptions = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+        message: string;
+        sessionId: string;
+      };
+      expect(kickoffOptions.message).toBe('Handoff kickoff question');
+      expect(kickoffOptions.sessionId).toBe('handoff-b');
     });
   });
 });
