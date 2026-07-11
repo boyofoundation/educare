@@ -701,3 +701,311 @@ export interface EmbeddingResult {
   method: 'browser-webgpu' | 'browser-cpu' | 'simple';
   processingTime: number;
 }
+
+// Canonical teacher-domain contracts. Legacy Assistant/RagChunk/ChatSession remain supported.
+export type CanonicalId = string;
+export type IsoDateTime = string;
+
+export interface AssistantDraft extends Assistant {
+  updatedAt: IsoDateTime;
+  schemaVersion: 1;
+  publicPurpose?: string;
+  providerRequirements?: string[];
+  safetyMetadata?: Record<string, string>;
+}
+
+export interface AssistantRevisionSnapshot {
+  name: string;
+  description: string;
+  publicPurpose?: string;
+  systemPrompt: string;
+  starterPrompts: string[];
+  routableAssistantIds: string[];
+  subagentDelegationEnabled: boolean;
+  providerRequirements: string[];
+  safetyMetadata: Record<string, string>;
+  knowledgeRevisionIds: string[];
+}
+
+export interface AssistantRevision {
+  id: CanonicalId;
+  assistantId: string;
+  parentRevisionId?: CanonicalId;
+  schemaVersion: 1;
+  checksum: string;
+  snapshot: AssistantRevisionSnapshot;
+  createdAt: IsoDateTime;
+}
+
+export interface AssistantRevisionTest {
+  id: CanonicalId;
+  revisionId: CanonicalId;
+  revisionChecksum: string;
+  status: 'passed' | 'failed' | 'invalidated';
+  completedAt: IsoDateTime;
+  notes?: string;
+}
+
+export interface PublicationManifest {
+  assistantRevisionId: CanonicalId;
+  assistantRevisionChecksum: string;
+  knowledgeRevisionIds: CanonicalId[];
+  knowledgeRevisionSetChecksum: string;
+}
+
+export interface Publication {
+  id: CanonicalId;
+  assistantId: string;
+  sequence: number;
+  manifest: PublicationManifest;
+  checksum: string;
+  state: 'published' | 'retired';
+  createdAt: IsoDateTime;
+  rollbackOfPublicationId?: CanonicalId;
+}
+
+export interface ShareLink {
+  id: string;
+  publicationId: CanonicalId;
+  state: 'active' | 'expired' | 'revoked' | 'target-retired' | 'invalid';
+  createdAt: IsoDateTime;
+  expiresAt?: IsoDateTime;
+  revokedAt?: IsoDateTime;
+}
+
+export type ShareResolutionResult =
+  | { status: 'valid'; shareLink: ShareLink; publication: Publication }
+  | { status: 'not-found' | 'expired' | 'revoked' | 'target-retired' | 'publication-missing' };
+
+export interface KnowledgeDocument {
+  id: CanonicalId;
+  displayName: string;
+  mimeType?: string;
+  latestRevisionId?: CanonicalId;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+}
+
+export type KnowledgeProcessingStage =
+  | 'selected'
+  | 'validating'
+  | 'uploading'
+  | 'parsing'
+  | 'chunking'
+  | 'embedding'
+  | 'indexing'
+  | 'ready';
+
+export interface KnowledgeRevision {
+  id: CanonicalId;
+  documentId: CanonicalId;
+  version: number;
+  contentChecksum: string;
+  sourceName: string;
+  byteLength: number;
+  processingState:
+    | KnowledgeProcessingStage
+    | 'partial'
+    | 'failed-retryable'
+    | 'failed-terminal'
+    | 'offline-pending'
+    | 'sync-conflict'
+    | 'blocked-by-publication'
+    | 'tombstoned'
+    | 'purged';
+  createdAt: IsoDateTime;
+}
+
+export interface KnowledgeChunk {
+  id: CanonicalId;
+  documentId: CanonicalId;
+  revisionId: CanonicalId;
+  index: number;
+  content: string;
+  contentChecksum: string;
+  vector?: number[];
+  relevanceScore?: number;
+}
+
+export interface KnowledgeBinding {
+  id: CanonicalId;
+  targetType: 'task' | 'assistant-revision' | 'publication';
+  targetId: CanonicalId;
+  knowledgeRevisionId: CanonicalId;
+  createdAt: IsoDateTime;
+}
+
+export interface KnowledgeCollection {
+  id: CanonicalId;
+  name: string;
+  documentIds: CanonicalId[];
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+}
+
+export interface KnowledgeIndexManifest {
+  revisionId: CanonicalId;
+  chunkCount: number;
+  embeddedChunkCount: number;
+  checksum: string;
+  verifiedAt: IsoDateTime;
+}
+
+export interface KnowledgeSyncState {
+  revisionId: CanonicalId;
+  authority: 'local' | 'remote' | 'publication';
+  status: 'local-only' | 'pending' | 'synced' | 'conflict' | 'failed';
+  updatedAt: IsoDateTime;
+  remoteChecksum?: string;
+}
+
+export interface KnowledgeTombstone {
+  documentId: CanonicalId;
+  deletedAt: IsoDateTime;
+  purgeAfter: IsoDateTime;
+}
+
+export type KnowledgeQueryErrorCode =
+  | 'invalid-revision-set'
+  | 'index-unavailable'
+  | 'storage-unavailable'
+  | 'unknown';
+
+export type KnowledgeQueryResult =
+  | { status: 'ready-results'; revisionSetChecksum: string; chunks: KnowledgeChunk[] }
+  | { status: 'ready-empty'; revisionSetChecksum: string }
+  | { status: 'not-ready'; pending: KnowledgeProcessingStage[] }
+  | { status: 'partial'; chunks: KnowledgeChunk[]; failedRevisionIds: string[] }
+  | { status: 'offline-fallback'; chunks: KnowledgeChunk[]; staleAt?: string }
+  | { status: 'authority-conflict'; localRevisionIds: string[]; remoteRevisionIds: string[] }
+  | { status: 'tombstoned'; documentId: string }
+  | { status: 'failed'; category: KnowledgeQueryErrorCode; retryable: boolean };
+
+export interface TeachingTaskBrief {
+  outputType?: string;
+  gradeLevel?: string;
+  subject?: string;
+  learningObjectives?: string;
+  learnerContext?: string;
+  language?: string;
+  preferences?: string;
+  canvasIntent?: 'none' | 'preview' | 'interactive';
+}
+
+export interface TeachingTask {
+  id: CanonicalId;
+  kind: 'teacher-task' | 'legacy-conversation';
+  brief: TeachingTaskBrief;
+  status: 'draft' | 'ready' | 'active' | 'paused' | 'completed' | 'archived';
+  assistantId?: string;
+  assistantRevisionId?: CanonicalId;
+  knowledgeRevisionIds: CanonicalId[];
+  sessionId?: string;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+}
+
+export interface OutputRevision {
+  id: CanonicalId;
+  outputId: CanonicalId;
+  version: number;
+  content: string;
+  checksum: string;
+  createdAt: IsoDateTime;
+  sourceMessageId?: string;
+}
+
+export interface SavedOutput {
+  id: CanonicalId;
+  title: string;
+  taskId?: CanonicalId;
+  sourceSessionId?: string;
+  assistantRevisionId?: CanonicalId;
+  knowledgeRevisionIds: CanonicalId[];
+  currentRevisionId: CanonicalId;
+  status:
+    | 'saved'
+    | 'dirty'
+    | 'offline-checkpointed'
+    | 'conflict'
+    | 'failed'
+    | 'archived'
+    | 'deleted';
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+}
+
+export interface RecentWorkItem {
+  id: CanonicalId;
+  type: 'task' | 'output' | 'assistant' | 'knowledge' | 'project';
+  title: string;
+  status: string;
+  resumeRoute: string;
+  nextAction: string;
+  updatedAt: IsoDateTime;
+}
+
+export interface SessionUiCheckpoint {
+  ownerId: string;
+  composerDraft?: string;
+  scrollAnchorMessageId?: string;
+  activeMobileSurface?: 'chat' | 'knowledge' | 'outputs' | 'preview';
+  activeContextTab?: string;
+  selectedKnowledgeDocumentId?: string;
+  wizardStep?: string;
+  wizardInputs?: Record<string, unknown>;
+  activeProjectId?: string;
+  selectedProjectFile?: string;
+  pendingOutputEdit?: string;
+  activeRunId?: string;
+  updatedAt: IsoDateTime;
+}
+
+export interface MigrationCheckpoint {
+  cursor?: string;
+  processed: number;
+  total?: number;
+  checksum?: string;
+}
+
+export interface MigrationLedgerEntry {
+  migrationId: string;
+  fromSchema: number;
+  toSchema: number;
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed';
+  checkpoint: MigrationCheckpoint;
+  startedAt?: IsoDateTime;
+  completedAt?: IsoDateTime;
+  inputChecksum?: string;
+  outputChecksum?: string;
+  entityCounts: Record<string, number>;
+  failureCategory?: string;
+}
+
+export interface MigrationLease {
+  migrationId: string;
+  ownerId: string;
+  acquiredAt: IsoDateTime;
+  expiresAt: IsoDateTime;
+}
+
+export interface BackupManifest {
+  schemaVersion: 1;
+  backupId: CanonicalId;
+  createdAt: IsoDateTime;
+  entityCounts: Record<string, number>;
+  checksum: string;
+  secretFieldsRemoved: string[];
+}
+
+export interface CapabilityDefinition {
+  id: string;
+  dependencies: string[];
+  dataPrerequisites: string[];
+  buildDefault: boolean;
+  fallbackRoute: string;
+  telemetryEvent: string;
+  rollbackTrigger: string;
+  owner: string;
+  removalCriterion?: string;
+}
