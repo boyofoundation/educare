@@ -196,6 +196,36 @@ describe('BundleImportPage', () => {
     expect(locationStub.href).not.toContain('import=bundle');
   });
 
+  it('shows local storage cleanup guidance and does not navigate when bundle saving exceeds quota', async () => {
+    bundleService.parseBundleText.mockReturnValue(resultWith(validBundle(), []));
+    const record: BundleRecord = {
+      id: 'rec-quota',
+      bundle: validBundle(),
+      importedAt: 99,
+      sizeBytes: 512,
+    };
+    bundleService.buildImportedBundle.mockReturnValue(record);
+    const quotaError = new Error('Storage quota exceeded');
+    quotaError.name = 'QuotaExceededError';
+    db.saveBundle.mockRejectedValue(quotaError);
+
+    render(<BundleImportPage onClose={() => undefined} onOpenBundle={() => undefined} />);
+    await pasteAndParse('valid');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '啟用協作包' }));
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/瀏覽器儲存空間不足。請刪除不需要的協作包或對話紀錄後重試/),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/請創作者縮小知識庫/)).toBeInTheDocument();
+    expect(locationStub.href).toContain('import=bundle');
+    expect(locationStub.href).not.toContain('bundle=rec-quota');
+  });
+
   it('lists imported bundles, discloses conversation cleanup, and deletes on confirm', async () => {
     const existing: BundleRecord = {
       id: 'rec-old',

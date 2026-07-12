@@ -434,6 +434,63 @@ describe('BundleRunner', () => {
     expect(chat.mock.calls.at(-1)?.[0].onAcceptRouteProposal).toEqual(expect.any(Function));
   });
 
+  it('restores the latest session across every agent in a routed bundle', async () => {
+    const entrySession: ChatSession = {
+      id: 'entry-session',
+      assistantId: 'bundle-1:entry',
+      title: 'Entry history',
+      messages: [],
+      createdAt: 20,
+      tokenCount: 0,
+    };
+    const targetSession: ChatSession = {
+      id: 'math-session',
+      assistantId: 'bundle-1:math',
+      title: 'Math history',
+      messages: [],
+      createdAt: 50,
+      tokenCount: 0,
+    };
+    db.getBundle.mockResolvedValue({
+      id: 'bundle-1',
+      bundle: routedBundle(),
+      importedAt: 10,
+      sizeBytes: 100,
+    });
+    db.getSessionsForAssistant.mockImplementation(async (assistantId: string) =>
+      assistantId === 'bundle-1:math' ? [targetSession] : [entrySession],
+    );
+
+    render(<Harness />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Math tutor:math-session'),
+    );
+    expect(db.getSessionsForAssistant).toHaveBeenCalledWith('bundle-1:entry');
+    expect(db.getSessionsForAssistant).toHaveBeenCalledWith('bundle-1:math');
+  });
+
+  it('passes each route condition to the routing target override', async () => {
+    const conditional = routedBundle();
+    conditional.routes[0].condition = 'Only use for algebra questions.';
+    db.getBundle.mockResolvedValue({
+      id: 'bundle-1',
+      bundle: conditional,
+      importedAt: 10,
+      sizeBytes: 100,
+    });
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+    expect(chat.mock.calls.at(-1)?.[0].routableTargetsOverride).toEqual([
+      expect.objectContaining({
+        id: 'bundle-1:math',
+        description: expect.stringContaining('Only use for algebra questions.'),
+      }),
+    ]);
+  });
+
   it('lists persisted bundle sessions and supports resume and individual deletion', async () => {
     const older: ChatSession = {
       id: 'older-session',
@@ -459,13 +516,15 @@ describe('BundleRunner', () => {
     await act(async () => {
       fireEvent.click(screen.getByText('對話紀錄'));
     });
-    expect(screen.getByText('舊對話')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '續聊：舊對話' }).length).toBeGreaterThan(0);
 
     // Delete the older session.
     await act(async () => {
-      fireEvent.click(screen.getByLabelText('刪除對話'));
+      fireEvent.click(screen.getAllByLabelText('刪除對話').at(-1)!);
     });
     expect(actions.deleteSession).toHaveBeenCalledWith('older-session');
-    await waitFor(() => expect(screen.queryByText('舊對話')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryAllByRole('button', { name: '續聊：舊對話' })).toHaveLength(0),
+    );
   });
 });
