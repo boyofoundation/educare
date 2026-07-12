@@ -6,6 +6,7 @@ import {
   ChatSession,
   EmbeddingConfig,
   HtmlProjectPreviewArtifact,
+  AgentBundle,
 } from '../../types';
 
 export type ViewMode =
@@ -15,7 +16,8 @@ export type ViewMode =
   | 'settings'
   | 'api_setup'
   | 'provider_settings'
-  | 'bundle_import';
+  | 'bundle_import'
+  | 'bundle_builder';
 
 export interface ModelLoadingProgress {
   status: string;
@@ -33,7 +35,7 @@ export interface AppState {
   error: string | null;
   isShared: boolean | null;
   sharedAssistantId: string | null;
-  bundleMode?: { bundleId: string } | null;
+  bundleMode?: { bundleId: string; bundle?: AgentBundle } | null;
   isSidebarOpen: boolean;
   isSidebarCollapsed: boolean;
   isMobile: boolean;
@@ -66,7 +68,7 @@ export type AppAction =
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_ERROR'; payload: string | null }
   | { type: 'SET_SHARED_MODE'; payload: { isShared: boolean; assistantId: string | null } }
-  | { type: 'SET_BUNDLE_MODE'; payload: { bundleId: string } | null }
+  | { type: 'SET_BUNDLE_MODE'; payload: { bundleId: string; bundle?: AgentBundle } | null }
   | { type: 'SET_SIDEBAR_OPEN'; payload: boolean }
   | { type: 'SET_SIDEBAR_COLLAPSED'; payload: boolean }
   | { type: 'SET_SCREEN_SIZE'; payload: { isMobile: boolean; isTablet: boolean } }
@@ -106,6 +108,7 @@ export interface AppContextValue {
     deleteSession: (sessionId: string) => Promise<void>;
     updateSession: (session: ChatSession) => Promise<void>;
     setViewMode: (mode: ViewMode) => void;
+    setBundleMode: (payload: { bundleId: string; bundle?: AgentBundle } | null) => void;
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapse: () => void;

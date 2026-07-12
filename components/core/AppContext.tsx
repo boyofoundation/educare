@@ -1,5 +1,12 @@
 import React, { useReducer, useCallback, useEffect } from 'react';
-import { AgentRunState, Assistant, ChatSession, EmbeddingConfig, RouteProposal } from '../../types';
+import {
+  AgentBundle,
+  AgentRunState,
+  Assistant,
+  ChatSession,
+  EmbeddingConfig,
+  RouteProposal,
+} from '../../types';
 import * as db from '../../services/db';
 import { initializeProviders } from '../../services/providerRegistry';
 import {
@@ -457,6 +464,15 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   const setViewMode = useCallback((mode: ViewMode) => {
     dispatch({ type: 'SET_VIEW_MODE', payload: mode });
   }, []);
+
+  // Set bundle sandbox mode. An optional in-memory bundle enters creator preview
+  // without writing to IndexedDB; null exits the sandbox.
+  const setBundleMode = useCallback(
+    (payload: { bundleId: string; bundle?: AgentBundle } | null) => {
+      dispatch({ type: 'SET_BUNDLE_MODE', payload });
+    },
+    [],
+  );
 
   // Toggle sidebar (open/close — used for mobile/tablet drawer and desktop visibility)
   const toggleSidebar = useCallback(() => {
@@ -982,6 +998,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       deleteSession,
       updateSession,
       setViewMode,
+      setBundleMode,
       toggleSidebar,
       setSidebarOpen,
       toggleSidebarCollapse,

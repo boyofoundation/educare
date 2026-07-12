@@ -294,6 +294,18 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
   const bundle = loadedBundle;
   const headerActions = (
     <div className='flex items-center gap-2'>
+      {previewBundle && (
+        <button
+          type='button'
+          onClick={() => {
+            dispatch({ type: 'SET_BUNDLE_MODE', payload: null });
+            dispatch({ type: 'SET_VIEW_MODE', payload: 'bundle_builder' });
+          }}
+          className='rounded-lg border border-fuchsia-500/50 px-3 py-2 text-sm text-fuchsia-100 transition hover:bg-fuchsia-500/10'
+        >
+          返回精靈
+        </button>
+      )}
       <button
         type='button'
         onClick={() => void clearConversation()}

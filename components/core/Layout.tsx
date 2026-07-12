@@ -439,6 +439,10 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
               window.alert(`匯入助理設定檔失敗：${(error as Error).message}`);
             }
           }}
+          onBuildBundle={() => {
+            actions.setViewMode('bundle_builder');
+            closeDrawerIfMobile();
+          }}
           canShare={canShare}
           collapsed={collapsed}
         />

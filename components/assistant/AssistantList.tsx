@@ -46,6 +46,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
   onCreateNew,
   onExport,
   onImport,
+  onBuildBundle,
   canShare = true, // 預設為可分享
   collapsed = false,
 }) => {
@@ -100,6 +101,24 @@ export const AssistantList: React.FC<AssistantListProps> = ({
               <ImportGlyph className='w-4 h-4' />
             </button>
           </>
+        )}
+
+        {onBuildBundle && (
+          <button
+            onClick={onBuildBundle}
+            className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60'
+            title='打包協作包'
+            aria-label='打包協作包'
+          >
+            <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+              <path
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                strokeWidth={2}
+                d='M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
+              />
+            </svg>
+          </button>
         )}
 
         <div className='w-full border-t border-gray-700/40' />
@@ -227,6 +246,23 @@ export const AssistantList: React.FC<AssistantListProps> = ({
               <ImportGlyph className='w-4 h-4' />
             </button>
           </>
+        )}
+        {onBuildBundle && (
+          <button
+            onClick={onBuildBundle}
+            className='p-1.5 text-gray-400 hover:text-fuchsia-300 rounded-md hover:bg-fuchsia-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60'
+            title='打包協作包'
+            aria-label='打包協作包'
+          >
+            <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+              <path
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                strokeWidth={2}
+                d='M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
+              />
+            </svg>
+          </button>
         )}
         {selectedAssistant && (
           <>

@@ -10,6 +10,7 @@ export interface AssistantListProps {
   onCreateNew: () => void;
   onExport?: (assistant: Assistant) => void;
   onImport?: (file: File) => void;
+  onBuildBundle?: () => void;
   canShare?: boolean;
   collapsed?: boolean;
 }

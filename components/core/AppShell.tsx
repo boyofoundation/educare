@@ -8,6 +8,7 @@ import type { ChatTokenInfo } from '../chat/types';
 import BundleRunner from '../features/BundleRunner';
 import SharedAssistant from '../features/SharedAssistant';
 import BundleImportPage from '../bundle/BundleImportPage';
+import BundleBuilder from '../bundle/BundleBuilder';
 import ProviderSettings from '../settings/ProviderSettings';
 import ProviderSettingsImportModal from '../settings/ProviderSettingsImportModal';
 import { providerManager } from '../../services/providerRegistry';
@@ -129,7 +130,7 @@ function AppContent(): React.JSX.Element {
   if (state.bundleMode) {
     return (
       <Layout>
-        <BundleRunner bundleId={state.bundleMode.bundleId} />
+        <BundleRunner bundleId={state.bundleMode.bundleId} bundle={state.bundleMode.bundle} />
         {state.viewMode === 'provider_settings' && (
           <div className='absolute inset-0 overflow-y-auto bg-gray-900'>
             <ProviderSettings onClose={() => actions.setViewMode('chat')} />
@@ -399,6 +400,16 @@ function AppContent(): React.JSX.Element {
         />
       )}
 
+      {state.viewMode === 'bundle_builder' && (
+        <BundleBuilder
+          assistants={state.assistants}
+          onClose={() => actions.setViewMode(state.currentAssistant ? 'chat' : 'new_assistant')}
+          onPreviewBundle={bundle => {
+            actions.setBundleMode({ bundleId: `preview-${Date.now()}`, bundle });
+          }}
+        />
+      )}
+
       {/* Loading Screen */}
       {state.isLoading && (
         <div className='flex flex-col items-center justify-center h-full text-gray-400 p-8'>
@@ -448,7 +459,8 @@ function AppContent(): React.JSX.Element {
         state.viewMode !== 'settings' &&
         state.viewMode !== 'provider_settings' &&
         state.viewMode !== 'api_setup' &&
-        state.viewMode !== 'bundle_import' && (
+        state.viewMode !== 'bundle_import' &&
+        state.viewMode !== 'bundle_builder' && (
           <div className='flex flex-col items-center justify-center h-full text-gray-400 p-8'>
             <div className='w-20 h-20 bg-gray-700 rounded-full flex items-center justify-center mb-6'>
               <svg
