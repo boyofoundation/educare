@@ -444,6 +444,25 @@ describe('ChatContainer', () => {
     });
   });
 
+  it('prefers an explicit bundle routing override and treats sandbox mode as shared', async () => {
+    const routableTargets = [{ id: 'science', name: 'Science', description: 'Tutor' }];
+    render(
+      <ChatContainer {...defaultProps} sandboxMode routableTargetsOverride={routableTargets} />,
+    );
+
+    await sendMessage('Explain gravity');
+
+    await waitFor(() => {
+      expect(mockAgentRunControllerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          routableTargets,
+          sharedMode: true,
+          projectBootstrapEnabled: false,
+        }),
+      );
+    });
+  });
+
   it('finalizes the session with fullText + tokenInfo after run resolves', async () => {
     mockControllerRun.mockResolvedValueOnce(buildRunResult('Final response text'));
 

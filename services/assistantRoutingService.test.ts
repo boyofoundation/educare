@@ -4,6 +4,7 @@ import {
   buildRoutingSystemPrompt,
   clearSharedRoutingTargetCache,
   getCachedSharedRoutableTargets,
+  resolveBundleRoutableTargets,
   resolveRoutableTargets,
   resolveSharedRoutableTargets,
   validateRouteCall,
@@ -62,6 +63,55 @@ describe('assistant routing', () => {
       expect(result.proposal.reason).toHaveLength(200);
       expect(result.proposal.handoffSummary).toHaveLength(2000);
     }
+  });
+});
+
+describe('bundle routable targets', () => {
+  it('keeps ordered outgoing targets, dropping self, duplicates, and unknown agents', () => {
+    const bundle = {
+      manifest: {
+        format: 'educare-agent-bundle' as const,
+        schemaVersion: 1 as const,
+        name: 'Team',
+        description: '',
+        version: '1',
+        exportedAt: 1,
+        entryAgentId: 'math',
+      },
+      agents: [
+        {
+          id: 'math',
+          name: 'Math',
+          description: 'Math tutor',
+          systemPrompt: '',
+          starterPrompts: [],
+          ragChunks: [],
+        },
+        {
+          id: 'science',
+          name: 'Science',
+          description: 'Science tutor',
+          systemPrompt: '',
+          starterPrompts: [],
+          ragChunks: [],
+        },
+      ],
+      routes: [
+        { fromAgentId: 'writing', toAgentId: 'science' },
+        { fromAgentId: 'math', toAgentId: 'math' },
+        { fromAgentId: 'math', toAgentId: 'science', condition: 'science questions' },
+        { fromAgentId: 'math', toAgentId: 'science' },
+        { fromAgentId: 'math', toAgentId: 'missing' },
+      ],
+    };
+
+    expect(resolveBundleRoutableTargets(bundle, 'math')).toEqual([
+      {
+        id: 'science',
+        name: 'Science',
+        description: 'Science tutor Route condition: science questions',
+      },
+    ]);
   });
 });
 
