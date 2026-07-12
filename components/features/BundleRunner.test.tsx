@@ -321,7 +321,7 @@ describe('BundleRunner', () => {
     );
     // The same pending proposal must not trigger a second handoff on re-invocation.
     const mathTargetSaves = db.saveSession.mock.calls.filter(
-      ([session]: [ChatSession]) => session.assistantId === 'bundle-1:math',
+      call => (call[0] as ChatSession).assistantId === 'bundle-1:math',
     );
     expect(mathTargetSaves).toHaveLength(1);
     expect(db.saveSession).toHaveBeenCalledWith(
