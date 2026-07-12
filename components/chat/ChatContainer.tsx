@@ -18,6 +18,8 @@ import {
 import { htmlProjectStore } from '../../services/htmlProjectStore';
 import { applyTokenUsageToSession } from '../../services/sessionTokenUsage';
 import { isErrorMessage, isSyntheticMessage } from '../../services/conversationUtils';
+import { classifyChatError } from '../../services/chatErrorService';
+import { bundleStrings } from '../bundle/bundleStrings';
 import { useStickToBottom } from '../../hooks/useStickToBottom';
 import type {
   AgentRunCheckpoint,
@@ -744,10 +746,13 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
       const runDisplayed = isRunSessionDisplayed();
       const baseSession = activeRunSessionRef.current ?? sessionRef.current;
+      const classification = classifyChatError(errorMessageText, bundleStrings.errors);
       const errorMessage = buildAssistantMessage(
-        `${errorMessageText}\n\n請檢查您的 API 密鑰和控制檯以取得更多細節。`,
+        `${classification.message}\n\n（${errorMessageText}）`,
         { isError: true },
       );
+      // Retain the unsent user input so the recipient can edit and retry.
+      setInput(message);
       const finalSession = {
         ...baseSession,
         messages: [...baseSession.messages, errorMessage],
