@@ -384,6 +384,29 @@ describe('Layout', () => {
       expect(screen.getByTestId('assistant-list')).toBeInTheDocument();
     });
 
+    it('should expose a discoverable import-bundle entry point in the sidebar', async () => {
+      render(
+        <TestLayoutWrapper>
+          <TestLayoutContent />
+        </TestLayoutWrapper>,
+      );
+
+      await waitFor(
+        () => {
+          expect(screen.queryByTestId('loading-spinner')).not.toBeInTheDocument();
+        },
+        { timeout: 3000 },
+      );
+
+      const entry = screen.getByRole('button', { name: '匯入協作包' });
+      expect(entry).toBeInTheDocument();
+      // Clicking must not throw and should be keyboard-focusable.
+      expect(entry).toHaveAttribute('type', 'button');
+      await act(async () => {
+        fireEvent.click(entry);
+      });
+    });
+
     it('should render children content correctly', () => {
       render(
         <TestLayoutWrapper>
