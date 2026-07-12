@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatContainer from '../ChatContainer';
 import { createMockChatSession, TEST_ASSISTANTS } from './test-utils';
-import { useAppContext } from '../../core/useAppContext';
+import { AppContext, useAppContext } from '../../core/useAppContext';
 import type { AgentRunCheckpoint, AgentRunState, ChatMessage } from '../../../types';
 import type { AgentRunController, AgentRunResult } from '../../../services/agentRunController';
 
@@ -333,6 +334,21 @@ describe('ChatContainer', () => {
     expect(screen.getByRole('main', { name: '聊天對話' })).toBeInTheDocument();
   });
 
+  it('keeps a long sandbox welcome render scrollable within the chat container', () => {
+    render(
+      <ChatContainer
+        {...defaultProps}
+        sandboxMode
+        assistantDescription={'Long welcome content. '.repeat(200)}
+      />,
+    );
+
+    const main = screen.getByRole('main', { name: '聊天對話' });
+    expect(screen.getByTestId('welcome-message')).toBeInTheDocument();
+    expect(main.parentElement).toHaveClass('flex-1', 'min-h-0');
+    expect(main).toHaveClass('overflow-y-auto');
+  });
+
   it('hides the header when hideHeader is true', () => {
     render(<ChatContainer {...defaultProps} hideHeader={true} />);
 
@@ -362,6 +378,68 @@ describe('ChatContainer', () => {
     await waitFor(() => {
       expect(screen.getByText('Need help')).toBeInTheDocument();
     });
+  });
+
+  it('keeps both bubbles when sandbox context updates during an Agent run', async () => {
+    const sourceSession = createMockChatSession({ id: 'bundle-session', messages: [] });
+    let resolveRun: (value: AgentRunResult) => void = () => undefined;
+    mockControllerRun.mockImplementationOnce(
+      () =>
+        new Promise<AgentRunResult>(resolve => {
+          resolveRun = resolve;
+        }),
+    );
+
+    function BundleLikeHarness() {
+      const [agentRunState, setAgentRunState] = useState<AgentRunState | null>(null);
+      const [persistedSession, setPersistedSession] = useState(sourceSession);
+      const actions = {
+        createNewSession: mockCreateNewSession,
+        updateSession: mockUpdateSession,
+        setActiveProject: mockSetActiveProject,
+        setProjectWorkspaceOpen: mockSetProjectWorkspaceOpen,
+        setProjectPreview: mockSetProjectPreview,
+        appendProjectActivity: mockAppendProjectActivity,
+        clearProjectWorkspace: mockClearProjectWorkspace,
+        setAgentRunState,
+      };
+
+      return (
+        <AppContext.Provider value={{ state: { agentRunState }, actions } as never}>
+          <ChatContainer
+            {...defaultProps}
+            session={persistedSession}
+            sandboxMode
+            onNewMessage={async session => {
+              setPersistedSession(session);
+            }}
+          />
+        </AppContext.Provider>
+      );
+    }
+
+    render(<BundleLikeHarness />);
+    await sendMessage('Bundle learner question');
+
+    const controllerOptions = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+      callbacks: { onStateChange: (state: AgentRunState) => void };
+    };
+    await act(async () => {
+      controllerOptions.callbacks.onStateChange({
+        ...runningState,
+        sessionId: sourceSession.id,
+      });
+    });
+    expect(screen.getByText('Bundle learner question')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveRun(buildRunResult('Bundle tutor answer'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Bundle tutor answer')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Bundle learner question')).toBeInTheDocument();
   });
 
   it('shows a jump-to-latest button instead of auto-following when the user scrolls away from the bottom', async () => {

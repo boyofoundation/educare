@@ -434,15 +434,47 @@ describe('BundleRunner', () => {
     expect(chat.mock.calls.at(-1)?.[0].onAcceptRouteProposal).toEqual(expect.any(Function));
   });
 
-  it('restores the latest session across every agent in a routed bundle', async () => {
+  it('restores the latest entry session even when a routed target has newer history', async () => {
     const entrySession: ChatSession = {
       id: 'entry-session',
       assistantId: 'bundle-1:entry',
-      title: 'Entry history',
+      title: 'Latest entry history',
       messages: [],
       createdAt: 20,
       tokenCount: 0,
     };
+    const targetSession: ChatSession = {
+      id: 'math-session',
+      assistantId: 'bundle-1:math',
+      title: 'Newer math history',
+      messages: [],
+      createdAt: 50,
+      tokenCount: 0,
+    };
+    db.getBundle.mockResolvedValue({
+      id: 'bundle-1',
+      bundle: routedBundle(),
+      importedAt: 10,
+      sizeBytes: 100,
+    });
+    db.getSessionsForAssistant.mockImplementation(async assistantId => {
+      if (assistantId === 'bundle-1:math') {
+        return [targetSession];
+      }
+      return [{ ...entrySession, id: 'older-entry-session', createdAt: 10 }, entrySession];
+    });
+
+    render(<Harness />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor:entry-session'),
+    );
+    expect(db.saveSession).not.toHaveBeenCalled();
+    expect(db.getSessionsForAssistant).toHaveBeenCalledWith('bundle-1:entry');
+    expect(db.getSessionsForAssistant).toHaveBeenCalledWith('bundle-1:math');
+  });
+
+  it('creates and persists an entry session when only a routed target has history', async () => {
     const targetSession: ChatSession = {
       id: 'math-session',
       assistantId: 'bundle-1:math',
@@ -457,17 +489,50 @@ describe('BundleRunner', () => {
       importedAt: 10,
       sizeBytes: 100,
     });
-    db.getSessionsForAssistant.mockImplementation(async (assistantId: string) =>
-      assistantId === 'bundle-1:math' ? [targetSession] : [entrySession],
+    db.getSessionsForAssistant.mockImplementation(async assistantId =>
+      assistantId === 'bundle-1:math' ? [targetSession] : [],
     );
 
     render(<Harness />);
 
     await waitFor(() =>
-      expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Math tutor:math-session'),
+      expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor:bundle_bundle-1_'),
     );
-    expect(db.getSessionsForAssistant).toHaveBeenCalledWith('bundle-1:entry');
-    expect(db.getSessionsForAssistant).toHaveBeenCalledWith('bundle-1:math');
+    expect(db.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ assistantId: 'bundle-1:entry' }),
+    );
+  });
+
+  it('creates a new entry session after an automatic handoff', async () => {
+    db.getBundle.mockResolvedValue({
+      id: 'bundle-1',
+      bundle: routedBundle(),
+      importedAt: 10,
+      sizeBytes: 100,
+    });
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+    const onNewMessage = chat.mock.calls.at(-1)?.[0].onNewMessage;
+    await act(async () => {
+      await onNewMessage(sourceSessionWithProposal());
+    });
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Math tutor'));
+
+    db.saveSession.mockClear();
+    const onCreateSession = chat.mock.calls.at(-1)?.[0].onCreateSession;
+    await act(async () => {
+      await onCreateSession();
+    });
+
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+    expect(chat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ assistantId: 'bundle-1:entry' }),
+    );
+    expect(db.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ assistantId: 'bundle-1:entry' }),
+    );
   });
 
   it('passes each route condition to the routing target override', async () => {

@@ -138,6 +138,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const routeProposalRef = useRef<RouteProposal | undefined>(undefined);
   const handoffKickoffSessionIdRef = useRef<string | null>(null);
   const activeRunSessionRef = useRef<ChatSession | null>(null);
+  const runOwnershipSessionIdRef = useRef<string | null>(null);
   const { containerRef, isAtBottom, handleScroll, scrollToBottom, updatePinnedState } =
     useStickToBottom(STICKY_SCROLL_THRESHOLD_PX);
 
@@ -170,10 +171,17 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
   useEffect(() => {
     const previousSessionId = sessionRef.current.id;
+    const sessionChanged = session.id !== previousSessionId;
+
+    // Bundle run 期間由本地 session 擁有最新訊息；父層更新仍可能帶著 run 前快照。
+    if (!sessionChanged && sandboxMode && runOwnershipSessionIdRef.current === session.id) {
+      return;
+    }
+
     setCurrentSession(session);
     sessionRef.current = session;
 
-    if (session.id === previousSessionId || !controllerRef.current) {
+    if (!sessionChanged || !controllerRef.current) {
       return;
     }
     // Run 進行中切換 session(例如接受轉接):中斷舊 run 並清除它的即時 UI。
@@ -189,7 +197,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setPendingEmptyResponseNotice(null);
     setRunState(null);
     actions?.setAgentRunState?.(null);
-  }, [session, actions]);
+  }, [session, actions, sandboxMode]);
 
   useEffect(() => {
     sessionRef.current = currentSession;
@@ -585,6 +593,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       controllerRef.current = controller;
 
       const commitRunResult = async () => {
+        runOwnershipSessionIdRef.current = displaySession.id;
         const result = await controller.run();
         controllerRef.current = null;
         flushStreamingBuffer();
@@ -766,6 +775,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         candidatesTokenCount: 0,
       });
     } finally {
+      if (runOwnershipSessionIdRef.current === displaySession.id) {
+        runOwnershipSessionIdRef.current = null;
+      }
       activeRunSessionRef.current = null;
     }
   };
@@ -918,7 +930,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     !isAtBottom && (isThinking || streamingResponse !== '' || currentSession.messages.length > 0);
 
   return (
-    <div className='relative flex h-full flex-col bg-gray-900'>
+    <div className='relative flex h-full min-h-0 flex-1 flex-col bg-gray-900'>
       {!hideHeader && (
         <div className='flex-shrink-0 border-b border-gray-700 bg-gray-800 px-4 py-3 md:px-6 md:py-4'>
           <div className='flex items-center justify-between'>

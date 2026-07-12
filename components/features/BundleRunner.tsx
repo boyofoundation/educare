@@ -86,13 +86,10 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       ].sort(
         (left, right) => (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt),
       );
-      const restoredSession = sessions[0];
-      const restoredAgent = restoredSession
-        ? record.bundle.agents.find(agent => agent.id === restoredSession.assistantId)
-        : entryAgent;
-      const assistant = toAssistant(restoredAgent ?? entryAgent, record.bundle, record.importedAt);
+      const restoredEntrySession = sessions.find(session => session.assistantId === entryAgent.id);
+      const assistant = toAssistant(entryAgent, record.bundle, record.importedAt);
       const session =
-        restoredSession ??
+        restoredEntrySession ??
         ({
           id: `bundle_${bundleId}_${Date.now()}`,
           assistantId: assistant.id,
@@ -103,7 +100,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
           tokenUsage: undefined,
         } satisfies ChatSession);
 
-      if (!previewBundle && sessions.length === 0) {
+      if (!previewBundle && !restoredEntrySession) {
         await db.saveSession(session);
       }
       if (!previewBundle) {
@@ -111,7 +108,10 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       }
 
       dispatch({ type: 'SET_CURRENT_ASSISTANT', payload: assistant });
-      dispatch({ type: 'SET_SESSIONS', payload: sessions.length > 0 ? sessions : [session] });
+      dispatch({
+        type: 'SET_SESSIONS',
+        payload: restoredEntrySession ? sessions : [session, ...sessions],
+      });
       dispatch({ type: 'SET_CURRENT_SESSION', payload: session });
 
       await initializeProviders();
@@ -244,25 +244,29 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
   );
 
   const createSession = useCallback(async () => {
-    const assistant = state.currentAssistant;
-    if (!assistant) {
+    const bundle = loadedBundle;
+    const entryAgent = bundle?.agents.find(agent => agent.id === bundle.manifest.entryAgentId);
+    if (!bundle || !entryAgent) {
       return;
     }
 
+    const createdAt = Date.now();
+    const assistant = toAssistant(entryAgent, bundle, createdAt);
     const session: ChatSession = {
-      id: `bundle_${bundleId}_${Date.now()}`,
+      id: `bundle_${bundleId}_${createdAt}`,
       assistantId: assistant.id,
       title: `與 ${assistant.name} 聊天`,
       messages: [],
-      createdAt: Date.now(),
+      createdAt,
       tokenCount: 0,
       tokenUsage: undefined,
     };
     if (!previewBundle) {
       await db.saveSession(session);
     }
+    dispatch({ type: 'SET_CURRENT_ASSISTANT', payload: assistant });
     dispatch({ type: 'ADD_SESSION', payload: session });
-  }, [bundleId, dispatch, previewBundle, state.currentAssistant]);
+  }, [bundleId, dispatch, loadedBundle, previewBundle]);
 
   const clearConversation = useCallback(async () => {
     const session = state.currentSession;
@@ -352,6 +356,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
   }
 
   const bundle = loadedBundle;
+  const entryAssistant = bundle?.agents.find(agent => agent.id === bundle.manifest.entryAgentId);
   const headerActions = (
     <div className='flex items-center gap-2'>
       {previewBundle && (
@@ -416,7 +421,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
         <div className='absolute right-0 z-20 mt-2 w-72 rounded-lg border border-gray-700 bg-gray-800 p-3 text-sm text-gray-300 shadow-xl'>
           <p className='font-medium text-white'>{bundle?.manifest.name ?? '協作包'}</p>
           <p className='mt-1'>{bundle?.manifest.description}</p>
-          <p className='mt-2 text-xs text-gray-400'>接待入口：{state.currentAssistant.name}</p>
+          <p className='mt-2 text-xs text-gray-400'>接待入口：{entryAssistant?.name ?? '—'}</p>
         </div>
       </details>
       {bundle && (
