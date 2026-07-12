@@ -125,6 +125,8 @@ export interface RouteProposal {
   sourceAssistantId: string;
   sourceSessionId: string;
   status: 'pending' | 'accepted' | 'declined' | 'failed';
+  /** True when this proposal was accepted by a bundle's automatic handoff flow. */
+  automatic?: boolean;
   createdAt: number;
 }
 
@@ -268,6 +270,8 @@ export interface ChatSession {
     reason: string;
     summary: string;
     sourceSessionId: string;
+    /** Number of consecutive automatic bundle handoffs leading to this session. */
+    automaticHandoffCount?: number;
     createdAt: number;
   };
 }

@@ -1,5 +1,12 @@
 import type { ReactNode } from 'react';
-import { ChatMessage, ChatSession, RagChunk, SubagentRunRecord, ToolCallRecord } from '../../types';
+import {
+  ChatMessage,
+  ChatSession,
+  RagChunk,
+  RouteProposal,
+  SubagentRunRecord,
+  ToolCallRecord,
+} from '../../types';
 import type { ProviderUsageMetadata } from '../../services/llmAdapter';
 import type { RoutableTarget } from '../../services/assistantRoutingService';
 
@@ -16,6 +23,8 @@ export interface MessageBubbleProps {
   index: number;
   assistantName?: string;
   citationContentsById?: Record<string, string>;
+  onAcceptRouteProposal?: (proposal: RouteProposal) => Promise<void>;
+  onDeclineRouteProposal?: (proposal: RouteProposal) => Promise<void>;
 }
 
 export interface ChatInputProps {
@@ -56,6 +65,9 @@ export interface ChatContainerProps {
   subagentDelegationEnabled?: boolean;
   /** 覆寫本地／分享模式的路由目標；空陣列會明確停用路由。 */
   routableTargetsOverride?: RoutableTarget[] | null;
+  /** Optional host-owned route proposal decisions, used by the isolated bundle runner. */
+  onAcceptRouteProposal?: (proposal: RouteProposal) => Promise<void>;
+  onDeclineRouteProposal?: (proposal: RouteProposal) => Promise<void>;
 }
 
 export interface WelcomeMessageProps {

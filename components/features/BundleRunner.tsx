@@ -4,7 +4,13 @@ import { useAppContext } from '../core/useAppContext';
 import { downloadBundleJson } from '../../services/agentBundleService';
 import * as db from '../../services/db';
 import { initializeProviders, isLLMAvailable } from '../../services/providerRegistry';
-import type { AgentBundle, AgentBundleAgent, Assistant, ChatSession } from '../../types';
+import type {
+  AgentBundle,
+  AgentBundleAgent,
+  Assistant,
+  ChatSession,
+  RouteProposal,
+} from '../../types';
 
 interface BundleRunnerProps {
   bundleId: string;
@@ -33,6 +39,7 @@ const toAssistant = (
 const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBundle }) => {
   const { state, dispatch, actions } = useAppContext();
   const loadedBundleIdRef = useRef<string | null>(null);
+  const processedAutoHandoffsRef = useRef(new Set<string>());
   const [loadedBundle, setLoadedBundle] = useState<AgentBundle | null>(previewBundle ?? null);
 
   const loadBundle = useCallback(async () => {
@@ -41,6 +48,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
     }
 
     loadedBundleIdRef.current = bundleId;
+    processedAutoHandoffsRef.current.clear();
     dispatch({ type: 'SET_LOADING', payload: true });
     dispatch({ type: 'SET_ERROR', payload: null });
     dispatch({ type: 'RESET_PROJECT_WORKSPACE' });
@@ -102,6 +110,121 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
   useEffect(() => {
     void loadBundle();
   }, [loadBundle]);
+
+  const persistBundleSession = useCallback(
+    async (session: ChatSession) => {
+      if (previewBundle) {
+        dispatch({ type: 'UPDATE_SESSION', payload: session });
+        return;
+      }
+      await actions.updateSession(session);
+    },
+    [actions, dispatch, previewBundle],
+  );
+
+  const completeBundleHandoff = useCallback(
+    async (
+      sourceSession: ChatSession,
+      proposal: RouteProposal,
+      automatic: boolean,
+    ): Promise<boolean> => {
+      const bundle = loadedBundle;
+      const targetAgent = bundle?.agents.find(agent => agent.id === proposal.targetAssistantId);
+      const validRoute = bundle?.routes.some(
+        route =>
+          route.fromAgentId === sourceSession.assistantId &&
+          route.toAgentId === proposal.targetAssistantId,
+      );
+      if (
+        !bundle ||
+        !targetAgent ||
+        !validRoute ||
+        proposal.sourceAssistantId !== sourceSession.assistantId ||
+        proposal.sourceSessionId !== sourceSession.id ||
+        proposal.status !== 'pending'
+      ) {
+        return false;
+      }
+
+      const expectedKickoffMessages = sourceSession.handoffContext ? 1 : 0;
+      const hasInterveningUserMessage =
+        sourceSession.messages.filter(message => message.role === 'user').length >
+        expectedKickoffMessages;
+      const automaticHandoffCount = hasInterveningUserMessage
+        ? 0
+        : (sourceSession.handoffContext?.automaticHandoffCount ?? 0);
+      if (automatic && automaticHandoffCount >= 3) {
+        return false;
+      }
+
+      const acceptedSourceSession: ChatSession = {
+        ...sourceSession,
+        messages: sourceSession.messages.map(message =>
+          message.routeProposal?.createdAt === proposal.createdAt &&
+          message.routeProposal.sourceSessionId === proposal.sourceSessionId
+            ? {
+                ...message,
+                routeProposal: { ...message.routeProposal, status: 'accepted', automatic },
+              }
+            : message,
+        ),
+        updatedAt: Date.now(),
+      };
+      await persistBundleSession(acceptedSourceSession);
+
+      const createdAt = Date.now();
+      const targetSession: ChatSession = {
+        id: `bundle_${bundleId}_${targetAgent.id}_${createdAt}`,
+        assistantId: targetAgent.id,
+        title: `與 ${targetAgent.name} 聊天`,
+        messages: [],
+        createdAt,
+        tokenCount: 0,
+        tokenUsage: undefined,
+        handoffContext: {
+          fromAssistantId: proposal.sourceAssistantId,
+          fromAssistantName:
+            bundle.agents.find(agent => agent.id === sourceSession.assistantId)?.name ??
+            proposal.sourceAssistantId,
+          reason: proposal.reason,
+          summary: proposal.handoffSummary,
+          sourceSessionId: sourceSession.id,
+          automaticHandoffCount: automatic ? automaticHandoffCount + 1 : undefined,
+          createdAt,
+        },
+      };
+      if (!previewBundle) {
+        await db.saveSession(targetSession);
+      }
+      dispatch({
+        type: 'SET_CURRENT_ASSISTANT',
+        payload: toAssistant(targetAgent, bundle, createdAt),
+      });
+      dispatch({ type: 'ADD_SESSION', payload: targetSession });
+      return true;
+    },
+    [bundleId, dispatch, loadedBundle, persistBundleSession, previewBundle],
+  );
+
+  const declineBundleProposal = useCallback(
+    async (proposal: RouteProposal) => {
+      const sourceSession = state.currentSession;
+      if (!sourceSession || proposal.sourceSessionId !== sourceSession.id) {
+        return;
+      }
+      await persistBundleSession({
+        ...sourceSession,
+        messages: sourceSession.messages.map(message =>
+          message.routeProposal?.createdAt === proposal.createdAt &&
+          message.routeProposal.sourceSessionId === proposal.sourceSessionId
+            ? { ...message, routeProposal: { ...message.routeProposal, status: 'declined' } }
+            : message,
+        ),
+        updatedAt: Date.now(),
+      });
+    },
+    [persistBundleSession, state.currentSession],
+  );
 
   const createSession = useCallback(async () => {
     const assistant = state.currentAssistant;
@@ -208,16 +331,39 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       assistantId={state.currentAssistant.id}
       ragChunks={state.currentAssistant.ragChunks ?? []}
       onNewMessage={async session => {
-        if (previewBundle) {
-          dispatch({ type: 'UPDATE_SESSION', payload: session });
+        await persistBundleSession(session);
+
+        const latestMessage = session.messages.at(-1);
+        const proposal = latestMessage?.routeProposal;
+        if (latestMessage?.role !== 'model' || !proposal || proposal.status !== 'pending') {
           return;
         }
-        await actions.updateSession(session);
+        const proposalKey = `${proposal.sourceSessionId}:${proposal.createdAt}`;
+        if (processedAutoHandoffsRef.current.has(proposalKey)) {
+          return;
+        }
+        processedAutoHandoffsRef.current.add(proposalKey);
+        await completeBundleHandoff(session, proposal, true);
       }}
       sandboxMode
       assistantDescription={state.currentAssistant.description}
       starterPrompts={state.currentAssistant.starterPrompts ?? []}
       subagentDelegationEnabled={false}
+      routableTargetsOverride={
+        bundle
+          ? bundle.routes
+              .filter(route => route.fromAgentId === state.currentAssistant?.id)
+              .map(route => bundle.agents.find(agent => agent.id === route.toAgentId))
+              .filter((agent): agent is AgentBundleAgent => Boolean(agent))
+              .map(({ id, name, description }) => ({ id, name, description }))
+          : null
+      }
+      onAcceptRouteProposal={proposal =>
+        completeBundleHandoff(state.currentSession as ChatSession, proposal, false).then(
+          () => undefined,
+        )
+      }
+      onDeclineRouteProposal={declineBundleProposal}
       onCreateSession={createSession}
       headerActions={headerActions}
     />

@@ -35,9 +35,27 @@ const formatTimestamp = (timestamp?: number): string | null => {
   });
 };
 
-const RouteProposalCard: React.FC<{ proposal: RouteProposal }> = ({ proposal }) => {
+const RouteProposalCard: React.FC<{
+  proposal: RouteProposal;
+  onAccept?: (proposal: RouteProposal) => Promise<void>;
+  onDecline?: (proposal: RouteProposal) => Promise<void>;
+}> = ({ proposal, onAccept, onDecline }) => {
   const context = useContext(AppContext);
   const pending = proposal.status === 'pending';
+
+  if (proposal.automatic) {
+    return (
+      <details
+        className='w-full max-w-[85%] rounded-xl border border-gray-700 bg-gray-800/50 px-4 py-3 text-sm text-gray-200 md:max-w-[65ch]'
+        aria-label='自動轉接紀錄'
+      >
+        <summary className='cursor-pointer font-medium text-gray-100'>
+          已自動轉接至 {proposal.targetAssistantName}
+        </summary>
+        <p className='mt-2 text-gray-300'>{proposal.reason}</p>
+      </details>
+    );
+  }
   const statusLabel: Record<RouteProposal['status'], string> = {
     pending: '建議轉接',
     accepted: '已轉接',
@@ -57,14 +75,18 @@ const RouteProposalCard: React.FC<{ proposal: RouteProposal }> = ({ proposal }) 
         <div className='mt-3 flex gap-2'>
           <button
             type='button'
-            onClick={() => void context?.actions.acceptRouteProposal(proposal)}
+            onClick={() =>
+              void (onAccept?.(proposal) ?? context?.actions.acceptRouteProposal(proposal))
+            }
             className='rounded-lg bg-cyan-600 px-3 py-1.5 font-medium text-white hover:bg-cyan-500'
           >
             轉接至 {proposal.targetAssistantName}
           </button>
           <button
             type='button'
-            onClick={() => void context?.actions.declineRouteProposal(proposal)}
+            onClick={() =>
+              void (onDecline?.(proposal) ?? context?.actions.declineRouteProposal(proposal))
+            }
             className='rounded-lg border border-gray-600 px-3 py-1.5 text-gray-200 hover:bg-gray-700'
           >
             留在原助理
@@ -79,6 +101,8 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
   message,
   index,
   citationContentsById,
+  onAcceptRouteProposal,
+  onDeclineRouteProposal,
 }) => {
   const [syntheticExpanded, setSyntheticExpanded] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
@@ -253,7 +277,13 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
               />
             </div>
           </div>
-          {message.routeProposal && <RouteProposalCard proposal={message.routeProposal} />}
+          {message.routeProposal && (
+            <RouteProposalCard
+              proposal={message.routeProposal}
+              onAccept={onAcceptRouteProposal}
+              onDecline={onDeclineRouteProposal}
+            />
+          )}
           {citations.length > 0 && (
             <div className='w-full max-w-[85%] rounded-2xl border border-cyan-500/20 bg-gray-900/60 px-4 py-3 text-sm text-gray-200 md:max-w-[65ch]'>
               <div className='mb-3 text-sm font-medium text-cyan-200'>📚 參考資料</div>

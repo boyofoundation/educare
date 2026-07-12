@@ -104,6 +104,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   onCreateSession,
   subagentDelegationEnabled = false,
   routableTargetsOverride,
+  onAcceptRouteProposal,
+  onDeclineRouteProposal,
 }) => {
   const appContext = useContext(AppContext);
   const isSandboxMode = sharedMode || sandboxMode;
@@ -1074,6 +1076,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                       index={index}
                       assistantName={assistantName}
                       citationContentsById={citationContentsById}
+                      onAcceptRouteProposal={onAcceptRouteProposal}
+                      onDeclineRouteProposal={onDeclineRouteProposal}
                     />
                   </div>
                 );
