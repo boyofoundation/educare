@@ -278,13 +278,9 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       activeProjectId: null,
       updatedAt: Date.now(),
     };
-    if (!previewBundle) {
-      await actions.updateSession(clearedSession);
-    } else {
-      dispatch({ type: 'UPDATE_SESSION', payload: clearedSession });
-    }
+    await persistBundleSession(clearedSession);
     dispatch({ type: 'RESET_PROJECT_WORKSPACE' });
-  }, [actions, dispatch, previewBundle, state.currentSession]);
+  }, [dispatch, persistBundleSession, state.currentSession]);
 
   const bundleSessions = useMemo(() => {
     if (previewBundle) {
@@ -471,11 +467,9 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       routableTargetsOverride={
         bundle ? resolveBundleRoutableTargets(bundle, state.currentAssistant.id) : null
       }
-      onAcceptRouteProposal={proposal =>
-        completeBundleHandoff(state.currentSession as ChatSession, proposal, false).then(
-          () => undefined,
-        )
-      }
+      onAcceptRouteProposal={async proposal => {
+        await completeBundleHandoff(state.currentSession as ChatSession, proposal, false);
+      }}
       onDeclineRouteProposal={declineBundleProposal}
       onCreateSession={createSession}
       headerActions={headerActions}

@@ -98,6 +98,14 @@ const BundleImportPage: React.FC<BundleImportPageProps> = ({ onClose, onOpenBund
     applyResult(parseBundleText(pasteText));
   }, [applyResult, pasteText]);
 
+  const handleOpen = useCallback(
+    (bundleId: string) => {
+      onOpenBundle(bundleId);
+      navigateToBundle(bundleId);
+    },
+    [onOpenBundle],
+  );
+
   const handleActivate = useCallback(async () => {
     if (!preview) {
       return;
@@ -108,8 +116,7 @@ const BundleImportPage: React.FC<BundleImportPageProps> = ({ onClose, onOpenBund
       await db.saveBundle(record);
       recordBundleImportSuccess();
       await refreshBundles();
-      onOpenBundle(record.id);
-      navigateToBundle(record.id);
+      handleOpen(record.id);
     } catch (error) {
       if ((error as Error).name === 'QuotaExceededError') {
         setDragError(
@@ -121,15 +128,7 @@ const BundleImportPage: React.FC<BundleImportPageProps> = ({ onClose, onOpenBund
     } finally {
       setActivating(false);
     }
-  }, [onOpenBundle, preview, refreshBundles]);
-
-  const handleOpen = useCallback(
-    (bundleId: string) => {
-      onOpenBundle(bundleId);
-      navigateToBundle(bundleId);
-    },
-    [onOpenBundle],
-  );
+  }, [handleOpen, preview, refreshBundles]);
 
   const handleDelete = useCallback(
     async (bundleId: string) => {
