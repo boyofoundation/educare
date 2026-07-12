@@ -9,8 +9,10 @@ import {
   getSessionsForAssistant,
   saveSession,
   deleteSession,
+  saveBundle,
+  BundleQuotaExceededError,
 } from './db';
-import { Assistant, ChatSession } from '../types';
+import { Assistant, BundleRecord, ChatSession } from '../types';
 import type { IDBPDatabase } from 'idb';
 
 // Mock idb module
@@ -164,6 +166,45 @@ describe('Database Service', () => {
       expect(mockDB.getAllFromIndex).toHaveBeenCalledWith('sessions', 'by-assistant', 'test-id');
       expect(mockDB.transaction).toHaveBeenCalledWith('sessions', 'readwrite');
       expect(mockTx.store.delete).toHaveBeenCalledWith('session-id');
+    });
+  });
+
+  describe('saveBundle', () => {
+    it('surfaces storage quota failures as BundleQuotaExceededError', async () => {
+      // Arrange
+      const bundle: BundleRecord = {
+        id: 'bundle-quota',
+        importedAt: 1,
+        sizeBytes: 100,
+        bundle: {
+          manifest: {
+            format: 'educare-agent-bundle',
+            schemaVersion: 1,
+            name: 'Quota test bundle',
+            description: 'Verifies quota errors are actionable.',
+            version: '1.0.0',
+            exportedAt: 1,
+            entryAgentId: 'agent-1',
+          },
+          agents: [
+            {
+              id: 'agent-1',
+              name: 'Agent one',
+              description: 'Test agent',
+              systemPrompt: 'Be helpful.',
+              starterPrompts: [],
+              ragChunks: [],
+            },
+          ],
+          routes: [],
+        },
+      };
+      mockDB.put.mockRejectedValue(
+        Object.assign(new Error('Storage is full.'), { name: 'QuotaExceededError' }),
+      );
+
+      // Act / Assert
+      await expect(saveBundle(bundle)).rejects.toBeInstanceOf(BundleQuotaExceededError);
     });
   });
 
