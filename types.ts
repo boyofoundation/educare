@@ -45,6 +45,78 @@ export interface Assistant {
   routableAssistantIds?: string[];
 }
 
+export interface AgentBundleRagChunk {
+  fileName: string;
+  content: string;
+}
+
+export interface AgentBundleModelParams {
+  temperature?: number;
+  maxOutputTokens?: number;
+}
+
+export interface AgentBundleAgent {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  starterPrompts: string[];
+  ragChunks: AgentBundleRagChunk[];
+  icon?: string;
+  modelParams?: AgentBundleModelParams;
+}
+
+export interface AgentBundleRoute {
+  fromAgentId: string;
+  toAgentId: string;
+  condition?: string;
+}
+
+export interface AgentBundleManifest {
+  format: 'educare-agent-bundle';
+  schemaVersion: 1;
+  name: string;
+  description: string;
+  version: string;
+  exportedAt: number;
+  entryAgentId: string;
+}
+
+export interface AgentBundle {
+  manifest: AgentBundleManifest;
+  agents: AgentBundleAgent[];
+  routes: AgentBundleRoute[];
+}
+
+export interface BundleRecord {
+  id: string;
+  bundle: AgentBundle;
+  importedAt: number;
+  lastOpenedAt?: number;
+  sizeBytes: number;
+}
+
+export type BundleIssueCode =
+  | 'corrupted-json'
+  | 'not-a-bundle'
+  | 'schema-too-new'
+  | 'missing-field'
+  | 'dangling-route'
+  | 'empty-prompt'
+  | 'oversize';
+
+export interface BundleIssue {
+  code: BundleIssueCode;
+  message: string;
+  nextStep: string;
+}
+
+export interface BundleValidationResult {
+  bundle: AgentBundle | null;
+  errors: BundleIssue[];
+  warnings: BundleIssue[];
+}
+
 export interface RouteProposal {
   targetAssistantId: string;
   targetAssistantName: string;
