@@ -1,4 +1,4 @@
-import type { Assistant, RouteProposal } from '../types';
+import type { AgentBundle, Assistant, RouteProposal } from '../types';
 import { getAssistantMetaFromTurso } from './tursoService';
 
 export const ROUTE_TOOL_NAME = 'routeToAssistant';
@@ -76,6 +76,38 @@ export const resolveRoutableTargets = (
   return assistants
     .filter(item => item.id !== assistant.id && ids.has(item.id))
     .map(({ id, name, description }) => ({ id, name, description }));
+};
+
+export const resolveBundleRoutableTargets = (
+  bundle: AgentBundle,
+  currentAgentId: string,
+): RoutableTarget[] => {
+  const agentsById = new Map(bundle.agents.map(agent => [agent.id, agent]));
+  const targetIds = new Set<string>();
+
+  return bundle.routes.flatMap(route => {
+    if (
+      route.fromAgentId !== currentAgentId ||
+      route.toAgentId === currentAgentId ||
+      targetIds.has(route.toAgentId)
+    ) {
+      return [];
+    }
+
+    const target = agentsById.get(route.toAgentId);
+    if (!target) {
+      return [];
+    }
+
+    targetIds.add(target.id);
+    return [
+      {
+        id: target.id,
+        name: target.name,
+        description: `${target.description}${route.condition ? ` Route condition: ${route.condition}` : ''}`,
+      },
+    ];
+  });
 };
 
 const sharedTargetCache = new Map<string, Promise<RoutableTarget[]>>();

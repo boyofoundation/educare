@@ -103,6 +103,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   headerActions,
   onCreateSession,
   subagentDelegationEnabled = false,
+  routableTargetsOverride,
 }) => {
   const appContext = useContext(AppContext);
   const isSandboxMode = sharedMode || sandboxMode;
@@ -503,11 +504,13 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       const projectEditingActive = Boolean(effectiveProjectId);
 
       const currentAssistant = appContext?.state?.currentAssistant;
-      const routableTargets = currentAssistant
-        ? sharedMode
-          ? getCachedSharedRoutableTargets(currentAssistant)
-          : resolveRoutableTargets(currentAssistant, appContext.state.assistants)
-        : [];
+      const routableTargets =
+        routableTargetsOverride ??
+        (currentAssistant
+          ? sharedMode
+            ? getCachedSharedRoutableTargets(currentAssistant)
+            : resolveRoutableTargets(currentAssistant, appContext.state.assistants)
+          : []);
 
       const controller = new AgentRunController({
         assistantId,
