@@ -1,10 +1,11 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
-import { Assistant, ChatSession } from '../types';
+import { Assistant, BundleRecord, ChatSession } from '../types';
 
 const DB_NAME = 'professional-assistant-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const ASSISTANTS_STORE = 'assistants';
 export const SESSIONS_STORE = 'sessions';
+const BUNDLES_STORE = 'bundles';
 
 interface ProfessionalAssistantDB extends DBSchema {
   [ASSISTANTS_STORE]: {
@@ -16,6 +17,17 @@ interface ProfessionalAssistantDB extends DBSchema {
     value: ChatSession;
     indexes: { 'by-assistant': string };
   };
+  [BUNDLES_STORE]: {
+    key: string;
+    value: BundleRecord;
+  };
+}
+
+export class BundleQuotaExceededError extends Error {
+  constructor() {
+    super('Storage quota exceeded while saving the agent bundle.');
+    this.name = 'QuotaExceededError';
+  }
 }
 
 let dbPromise: Promise<IDBPDatabase<ProfessionalAssistantDB>> | null = null;
@@ -30,6 +42,9 @@ const getDb = () => {
         if (!db.objectStoreNames.contains(SESSIONS_STORE)) {
           const sessionStore = db.createObjectStore(SESSIONS_STORE, { keyPath: 'id' });
           sessionStore.createIndex('by-assistant', 'assistantId');
+        }
+        if (!db.objectStoreNames.contains(BUNDLES_STORE)) {
+          db.createObjectStore(BUNDLES_STORE, { keyPath: 'id' });
         }
       },
     });
@@ -60,6 +75,48 @@ export const deleteAssistant = async (id: string): Promise<void> => {
   const sessions = await getSessionsForAssistant(id);
   const tx = db.transaction(SESSIONS_STORE, 'readwrite');
   await Promise.all(sessions.map(session => tx.store.delete(session.id)));
+  await tx.done;
+};
+
+// Bundle operations
+export const listBundles = async (): Promise<BundleRecord[]> => {
+  const db = await getDb();
+  return db.getAll(BUNDLES_STORE);
+};
+
+export const getBundle = async (id: string): Promise<BundleRecord | undefined> => {
+  const db = await getDb();
+  return db.get(BUNDLES_STORE, id);
+};
+
+export const saveBundle = async (bundle: BundleRecord): Promise<void> => {
+  const db = await getDb();
+  try {
+    await db.put(BUNDLES_STORE, bundle);
+  } catch (error) {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'name' in error &&
+      error.name === 'QuotaExceededError'
+    ) {
+      throw new BundleQuotaExceededError();
+    }
+    throw error;
+  }
+};
+
+export const deleteBundle = async (id: string): Promise<void> => {
+  const db = await getDb();
+  await db.delete(BUNDLES_STORE, id);
+
+  const sessions = await db.getAll(SESSIONS_STORE);
+  const tx = db.transaction(SESSIONS_STORE, 'readwrite');
+  await Promise.all(
+    sessions
+      .filter(session => session.assistantId.startsWith(`${id}:`))
+      .map(session => tx.store.delete(session.id)),
+  );
   await tx.done;
 };
 
