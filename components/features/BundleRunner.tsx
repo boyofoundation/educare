@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatContainer } from '../chat';
 import { useAppContext } from '../core/useAppContext';
 import { downloadBundleJson } from '../../services/agentBundleService';
+import { bundleStrings } from '../bundle/bundleStrings';
 import * as db from '../../services/db';
 import { initializeProviders, isLLMAvailable } from '../../services/providerRegistry';
 import type {
@@ -269,6 +270,53 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
     dispatch({ type: 'RESET_PROJECT_WORKSPACE' });
   }, [actions, dispatch, previewBundle, state.currentSession]);
 
+  const bundleSessions = useMemo(() => {
+    if (previewBundle) {
+      return state.sessions;
+    }
+    const prefix = `${bundleId}:`;
+    return state.sessions
+      .filter(session => session.assistantId.startsWith(prefix))
+      .sort(
+        (left, right) => (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt),
+      );
+  }, [bundleId, previewBundle, state.sessions]);
+
+  const resumeSession = useCallback(
+    (session: ChatSession) => {
+      const agent = loadedBundle?.agents.find(a => a.id === session.assistantId);
+      if (agent) {
+        dispatch({
+          type: 'SET_CURRENT_ASSISTANT',
+          payload: toAssistant(
+            agent,
+            loadedBundle!,
+            loadedBundle?.manifest.exportedAt ?? Date.now(),
+          ),
+        });
+      }
+      dispatch({ type: 'SET_CURRENT_SESSION', payload: session });
+    },
+    [bundleId, dispatch, loadedBundle],
+  );
+
+  const deleteSessionById = useCallback(
+    async (sessionId: string) => {
+      if (!window.confirm(bundleStrings.sandbox.confirmDeleteSession)) {
+        return;
+      }
+      const remaining = state.sessions.filter(s => s.id !== sessionId);
+      if (!previewBundle) {
+        await actions.deleteSession(sessionId);
+      }
+      dispatch({ type: 'SET_SESSIONS', payload: remaining });
+      if (state.currentSession?.id === sessionId) {
+        dispatch({ type: 'SET_CURRENT_SESSION', payload: remaining[0] ?? null });
+      }
+    },
+    [actions, dispatch, previewBundle, state.currentSession, state.sessions],
+  );
+
   if (state.isLoading) {
     return (
       <div className='flex h-full items-center justify-center text-gray-400'>載入協作包中...</div>
@@ -303,7 +351,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
           }}
           className='rounded-lg border border-fuchsia-500/50 px-3 py-2 text-sm text-fuchsia-100 transition hover:bg-fuchsia-500/10'
         >
-          返回精靈
+          {bundleStrings.sandbox.backToWizard}
         </button>
       )}
       <button
@@ -311,11 +359,47 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
         onClick={() => void clearConversation()}
         className='rounded-lg border border-gray-600 px-3 py-2 text-sm text-gray-200 transition hover:bg-gray-700'
       >
-        清除對話
+        {bundleStrings.sandbox.clearConversation}
       </button>
       <details className='relative'>
         <summary className='cursor-pointer rounded-lg border border-gray-600 px-3 py-2 text-sm text-gray-200'>
-          包內容
+          {bundleStrings.sandbox.sessionList}
+        </summary>
+        <div className='absolute right-0 z-20 mt-2 w-80 rounded-lg border border-gray-700 bg-gray-800 p-3 text-sm text-gray-300 shadow-xl'>
+          {bundleSessions.length === 0 ? (
+            <p className='text-gray-500'>目前沒有其他對話紀錄。</p>
+          ) : (
+            <ul className='max-h-72 space-y-1 overflow-y-auto'>
+              {bundleSessions.map(session => (
+                <li
+                  key={session.id}
+                  className='flex items-center justify-between gap-2 rounded-md p-1 hover:bg-gray-700/40'
+                >
+                  <button
+                    type='button'
+                    onClick={() => resumeSession(session)}
+                    className='min-w-0 flex-1 truncate text-left text-gray-200 hover:text-cyan-200'
+                    aria-label={bundleStrings.sandbox.resumeSession(session.title)}
+                  >
+                    {session.title}
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => void deleteSessionById(session.id)}
+                    aria-label={bundleStrings.sandbox.deleteSession}
+                    className='rounded border border-red-700/50 px-2 py-0.5 text-xs text-red-200 hover:bg-red-900/30'
+                  >
+                    刪除
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </details>
+      <details className='relative'>
+        <summary className='cursor-pointer rounded-lg border border-gray-600 px-3 py-2 text-sm text-gray-200'>
+          {bundleStrings.sandbox.bundleDetails}
         </summary>
         <div className='absolute right-0 z-20 mt-2 w-72 rounded-lg border border-gray-700 bg-gray-800 p-3 text-sm text-gray-300 shadow-xl'>
           <p className='font-medium text-white'>{bundle?.manifest.name ?? '協作包'}</p>
@@ -329,7 +413,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
           onClick={() => downloadBundleJson(bundle)}
           className='rounded-lg border border-cyan-500/50 px-3 py-2 text-sm text-cyan-100 transition hover:bg-cyan-500/10'
         >
-          重新匯出
+          {bundleStrings.sandbox.reExport}
         </button>
       )}
     </div>

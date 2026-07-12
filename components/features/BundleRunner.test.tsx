@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React, { useReducer } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import BundleRunner from './BundleRunner';
@@ -7,7 +7,7 @@ import type { AppAction, AppContextValue, AppState } from '../core/AppContext.ty
 import type { AgentBundle, ChatSession } from '../../types';
 
 const { actions, db, providers, chat } = vi.hoisted(() => ({
-  actions: { updateSession: vi.fn() },
+  actions: { updateSession: vi.fn(), deleteSession: vi.fn() },
   db: {
     getBundle: vi.fn(),
     getSessionsForAssistant: vi.fn(),
@@ -23,6 +23,7 @@ vi.mock('../chat', () => ({
   ChatContainer: (props: {
     assistantId: string;
     assistantName: string;
+    headerActions?: React.ReactNode;
     onAcceptRouteProposal: (proposal: import('../../types').RouteProposal) => void;
     onNewMessage: (session: ChatSession) => Promise<void>;
     ragChunks: import('../../types').RagChunk[];
@@ -30,7 +31,12 @@ vi.mock('../chat', () => ({
     sandboxMode?: boolean;
   }) => {
     chat(props);
-    return <div data-testid='bundle-chat'>{`${props.assistantName}:${props.session.id}`}</div>;
+    return (
+      <div data-testid='bundle-chat'>
+        {`${props.assistantName}:${props.session.id}`}
+        {props.headerActions}
+      </div>
+    );
   },
 }));
 
@@ -196,6 +202,7 @@ describe('BundleRunner', () => {
     db.getSessionsForAssistant.mockResolvedValue([]);
     db.saveSession.mockResolvedValue(undefined);
     db.saveBundle.mockResolvedValue(undefined);
+    actions.deleteSession.mockResolvedValue(undefined);
     actions.updateSession.mockImplementation(async (session: ChatSession) => {
       await db.saveSession(session);
     });
@@ -425,5 +432,40 @@ describe('BundleRunner', () => {
     );
     expect(fourthProposal.messages.at(-1)?.routeProposal).toMatchObject({ status: 'pending' });
     expect(chat.mock.calls.at(-1)?.[0].onAcceptRouteProposal).toEqual(expect.any(Function));
+  });
+
+  it('lists persisted bundle sessions and supports resume and individual deletion', async () => {
+    const older: ChatSession = {
+      id: 'older-session',
+      assistantId: 'bundle-1:entry',
+      title: '舊對話',
+      messages: [],
+      createdAt: 5,
+      tokenCount: 0,
+    };
+    db.getBundle.mockResolvedValue({
+      id: 'bundle-1',
+      bundle: routedBundle(),
+      importedAt: 10,
+      sizeBytes: 100,
+    });
+    db.getSessionsForAssistant.mockResolvedValue([older]);
+
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    // Open the session record panel.
+    await act(async () => {
+      fireEvent.click(screen.getByText('對話紀錄'));
+    });
+    expect(screen.getByText('舊對話')).toBeInTheDocument();
+
+    // Delete the older session.
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('刪除對話'));
+    });
+    expect(actions.deleteSession).toHaveBeenCalledWith('older-session');
+    await waitFor(() => expect(screen.queryByText('舊對話')).not.toBeInTheDocument());
   });
 });
