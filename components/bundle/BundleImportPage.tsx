@@ -7,6 +7,7 @@ import {
   parseBundleText,
 } from '../../services/agentBundleService';
 import * as db from '../../services/db';
+import { recordBundleImportSuccess } from '../../services/bundleMetricsService';
 import type { AgentBundle, BundleIssue, BundleRecord, BundleValidationResult } from '../../types';
 
 export interface BundleImportPageProps {
@@ -105,11 +106,18 @@ const BundleImportPage: React.FC<BundleImportPageProps> = ({ onClose, onOpenBund
     try {
       const record = buildImportedBundle(preview.bundle);
       await db.saveBundle(record);
+      recordBundleImportSuccess();
       await refreshBundles();
       onOpenBundle(record.id);
       navigateToBundle(record.id);
     } catch (error) {
-      setDragError(`匯入失敗：${(error as Error).message}`);
+      if ((error as Error).name === 'QuotaExceededError') {
+        setDragError(
+          '瀏覽器儲存空間不足。請刪除不需要的協作包或對話紀錄後重試，或請創作者縮小知識庫。',
+        );
+      } else {
+        setDragError(`匯入失敗：${(error as Error).message}`);
+      }
     } finally {
       setActivating(false);
     }

@@ -3,6 +3,8 @@ import { ChatContainer } from '../chat';
 import { useAppContext } from '../core/useAppContext';
 import { downloadBundleJson } from '../../services/agentBundleService';
 import { bundleStrings } from '../bundle/bundleStrings';
+import { resolveBundleRoutableTargets } from '../../services/assistantRoutingService';
+import { recordBundleFirstChatCompletion } from '../../services/bundleMetricsService';
 import * as db from '../../services/db';
 import { initializeProviders, isLLMAvailable } from '../../services/providerRegistry';
 import type {
@@ -72,11 +74,25 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
         return;
       }
 
-      const assistant = toAssistant(entryAgent, record.bundle, record.importedAt);
-      const storedSessions = previewBundle ? [] : await db.getSessionsForAssistant(assistant.id);
-      const sessions = storedSessions.sort((left, right) => right.createdAt - left.createdAt);
+      const storedSessions = previewBundle
+        ? []
+        : (
+            await Promise.all(
+              record.bundle.agents.map(agent => db.getSessionsForAssistant(agent.id)),
+            )
+          ).flat();
+      const sessions = [
+        ...new Map(storedSessions.map(session => [session.id, session])).values(),
+      ].sort(
+        (left, right) => (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt),
+      );
+      const restoredSession = sessions[0];
+      const restoredAgent = restoredSession
+        ? record.bundle.agents.find(agent => agent.id === restoredSession.assistantId)
+        : entryAgent;
+      const assistant = toAssistant(restoredAgent ?? entryAgent, record.bundle, record.importedAt);
       const session =
-        sessions[0] ??
+        restoredSession ??
         ({
           id: `bundle_${bundleId}_${Date.now()}`,
           assistantId: assistant.id,
@@ -297,7 +313,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       }
       dispatch({ type: 'SET_CURRENT_SESSION', payload: session });
     },
-    [bundleId, dispatch, loadedBundle],
+    [dispatch, loadedBundle],
   );
 
   const deleteSessionById = useCallback(
@@ -430,6 +446,13 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
         await persistBundleSession(session);
 
         const latestMessage = session.messages.at(-1);
+        if (
+          !previewBundle &&
+          latestMessage?.role === 'model' &&
+          session.messages.some(message => message.role === 'user')
+        ) {
+          recordBundleFirstChatCompletion(session.id);
+        }
         const proposal = latestMessage?.routeProposal;
         if (latestMessage?.role !== 'model' || !proposal || proposal.status !== 'pending') {
           return;
@@ -446,13 +469,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       starterPrompts={state.currentAssistant.starterPrompts ?? []}
       subagentDelegationEnabled={false}
       routableTargetsOverride={
-        bundle
-          ? bundle.routes
-              .filter(route => route.fromAgentId === state.currentAssistant?.id)
-              .map(route => bundle.agents.find(agent => agent.id === route.toAgentId))
-              .filter((agent): agent is AgentBundleAgent => Boolean(agent))
-              .map(({ id, name, description }) => ({ id, name, description }))
-          : null
+        bundle ? resolveBundleRoutableTargets(bundle, state.currentAssistant.id) : null
       }
       onAcceptRouteProposal={proposal =>
         completeBundleHandoff(state.currentSession as ChatSession, proposal, false).then(

@@ -228,13 +228,22 @@ const sanitizeProviderConfig = (
   }),
 });
 
+export interface SessionProviderOverride {
+  type: ProviderType;
+  config: ProviderConfig;
+}
+
+export const BUNDLE_SESSION_PROVIDER_STORAGE_KEY = 'educare_bundle_session_provider';
+
 export class ProviderManager {
   private static instance: ProviderManager;
   private providers: Map<ProviderType, LLMProvider> = new Map();
   private settings: ProviderSettings;
+  private sessionProviderOverride: SessionProviderOverride | null;
 
   private constructor() {
     this.settings = this.loadSettings();
+    this.sessionProviderOverride = this.loadSessionProviderOverride();
   }
 
   static getInstance(): ProviderManager {
@@ -279,6 +288,70 @@ export class ProviderManager {
     return DEFAULT_PROVIDER_SETTINGS;
   }
 
+  private loadSessionProviderOverride(): SessionProviderOverride | null {
+    if (typeof sessionStorage === 'undefined') {
+      return null;
+    }
+
+    try {
+      const raw = sessionStorage.getItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      const parsed = JSON.parse(raw) as Partial<SessionProviderOverride>;
+      if (!parsed.type || !parsed.config || !(parsed.type in DEFAULT_PROVIDER_SETTINGS.providers)) {
+        return null;
+      }
+      const type = parsed.type as ProviderType;
+      return {
+        type,
+        config: sanitizeProviderConfig(
+          DEFAULT_PROVIDER_SETTINGS.providers[type].config,
+          parsed.config,
+        ),
+      };
+    } catch {
+      sessionStorage.removeItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY);
+      return null;
+    }
+  }
+
+  async setSessionProviderConfig(
+    type: ProviderType,
+    config: Partial<ProviderConfig>,
+  ): Promise<void> {
+    const provider = this.providers.get(type);
+    if (!provider) {
+      throw new Error('找不到指定的 AI 服務商。');
+    }
+
+    const configured = sanitizeProviderConfig(
+      DEFAULT_PROVIDER_SETTINGS.providers[type].config,
+      config,
+    );
+    const override = { type, config: configured };
+    this.sessionProviderOverride = override;
+    sessionStorage.setItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY, JSON.stringify(override));
+
+    if (provider.reinitialize) {
+      provider.reinitialize();
+    }
+    await provider.initialize(configured);
+  }
+
+  clearSessionProviderConfig(): void {
+    this.sessionProviderOverride = null;
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY);
+    }
+  }
+
+  getSessionProviderConfig(): SessionProviderOverride | null {
+    return this.sessionProviderOverride
+      ? { ...this.sessionProviderOverride, config: { ...this.sessionProviderOverride.config } }
+      : null;
+  }
+
   saveSettings(): void {
     localStorage.setItem('providerSettings', JSON.stringify(this.settings));
   }
@@ -288,12 +361,12 @@ export class ProviderManager {
   }
 
   getProvider(type?: ProviderType): LLMProvider | null {
-    const providerType = type || this.settings.activeProvider;
+    const providerType = type || this.sessionProviderOverride?.type || this.settings.activeProvider;
     return this.providers.get(providerType) || null;
   }
 
   getActiveProvider(): LLMProvider | null {
-    return this.getProvider(this.settings.activeProvider);
+    return this.getProvider(this.sessionProviderOverride?.type ?? this.settings.activeProvider);
   }
 
   setActiveProvider(type: ProviderType): void {
@@ -343,7 +416,9 @@ export class ProviderManager {
   }
 
   isProviderEnabled(type: ProviderType): boolean {
-    return this.settings.providers[type]?.enabled || false;
+    return (
+      this.sessionProviderOverride?.type === type || this.settings.providers[type]?.enabled || false
+    );
   }
 
   getAvailableProviders(): Array<{ type: ProviderType; provider: LLMProvider }> {

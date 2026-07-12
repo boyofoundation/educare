@@ -9,14 +9,17 @@ import BundleRunner from '../features/BundleRunner';
 import SharedAssistant from '../features/SharedAssistant';
 import BundleImportPage from '../bundle/BundleImportPage';
 import BundleBuilder from '../bundle/BundleBuilder';
+import BundleProviderSetup from '../bundle/BundleProviderSetup';
 import ProviderSettings from '../settings/ProviderSettings';
 import ProviderSettingsImportModal from '../settings/ProviderSettingsImportModal';
 import { providerManager } from '../../services/providerRegistry';
 import { ChatCompactorService } from '../../services/chatCompactorService';
 import { countConversationRounds, groupMessagesByRounds } from '../../services/conversationUtils';
+import { getBundleMetrics } from '../../services/bundleMetricsService';
 
 function AppContent(): React.JSX.Element {
   const { state, actions } = useAppContext();
+  const bundleMetrics = getBundleMetrics();
 
   // Initialize compression service with default configuration
   const compressionService = new ChatCompactorService({
@@ -132,8 +135,8 @@ function AppContent(): React.JSX.Element {
       <Layout>
         <BundleRunner bundleId={state.bundleMode.bundleId} bundle={state.bundleMode.bundle} />
         {state.viewMode === 'provider_settings' && (
-          <div className='absolute inset-0 overflow-y-auto bg-gray-900'>
-            <ProviderSettings onClose={() => actions.setViewMode('chat')} />
+          <div className='absolute inset-0 overflow-y-auto bg-gray-900 p-4 md:p-8'>
+            <BundleProviderSetup onReady={() => actions.setViewMode('chat')} />
           </div>
         )}
         <ProviderSettingsImportModal onApplied={() => actions.setViewMode('chat')} />
@@ -349,6 +352,36 @@ function AppContent(): React.JSX.Element {
                 </div>
               );
             })()}
+
+            <section
+              className='mb-6 rounded-2xl border border-fuchsia-500/20 bg-fuchsia-500/5 p-5'
+              aria-label='協作包本機統計'
+            >
+              <h3 className='text-xs font-semibold uppercase tracking-wide text-fuchsia-200'>
+                協作包本機統計
+              </h3>
+              <p className='mt-1 text-xs text-gray-400'>只儲存在此瀏覽器，不會傳送到伺服器。</p>
+              <dl className='mt-3 grid grid-cols-3 gap-3 text-center'>
+                <div>
+                  <dt className='text-xs text-gray-500'>成功匯入</dt>
+                  <dd className='text-lg font-semibold text-white'>
+                    {bundleMetrics.importSuccesses}
+                  </dd>
+                </div>
+                <div>
+                  <dt className='text-xs text-gray-500'>完成金鑰設定</dt>
+                  <dd className='text-lg font-semibold text-white'>
+                    {bundleMetrics.byokCompletions}
+                  </dd>
+                </div>
+                <div>
+                  <dt className='text-xs text-gray-500'>首次完成對話</dt>
+                  <dd className='text-lg font-semibold text-white'>
+                    {bundleMetrics.firstChatCompletions}
+                  </dd>
+                </div>
+              </dl>
+            </section>
 
             {/* 設定入口 */}
             <h3 className='text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3 px-1'>

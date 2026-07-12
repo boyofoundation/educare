@@ -1060,7 +1060,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               />
             )}
 
-          <div role='log' aria-label='訊息列表'>
+          <div role='log' aria-label='訊息列表' aria-live='polite' aria-relevant='additions text'>
             <Virtuoso
               key={`${currentSession.id}:${currentSession.messages.length}`}
               data={currentSession.messages}
