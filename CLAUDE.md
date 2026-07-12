@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is EduCare - an Educational AI Assistant application - a React-based web app designed for Lumina Foundation to create, manage, and chat with AI assistants for educational support, powered by Google's Gemini API. The app features advanced RAG (Retrieval-Augmented Generation) capabilities with support for PDF, DOCX, and MD files, Turso DB for cloud persistence, and comprehensive assistant sharing functionality with QR codes.
+This is EduCare - an Educational AI Assistant application - a React-based web app designed for Lumina Foundation to create, manage, and chat with AI assistants for educational support. AI access is BYOK (bring-your-own-key) across multiple providers (Gemini, OpenAI, Anthropic, OpenRouter, Groq, plus local LLMs via Ollama / LM Studio). The app features agent-driven RAG over PDF, DOCX, and MD files (the model retrieves knowledge by calling a text-search tool — no embeddings), local-first persistence in IndexedDB with Turso DB backing assistant sharing (QR-code links), assistant-to-assistant routing/handoff, and an HTML project workspace (Canvas) with an agentic tool harness.
 
 ## Development Commands
 
@@ -35,43 +35,47 @@ This is EduCare - an Educational AI Assistant application - a React-based web ap
 
 ### Core Components
 
-- **App.tsx**: Main application orchestrating assistants, sessions, and view modes (chat, edit, settings)
-- **types.ts**: Core TypeScript interfaces defining Assistant, ChatSession, ChatMessage, and RagChunk
-- **components/**: React components for UI (AssistantEditor, ChatWindow, Icons)
-- **services/**: Business logic and external integrations
+- **App.tsx**: Thin entry that mounts `components/core/AppShell.tsx`
+- **components/core/AppShell.tsx + AppContext.tsx**: Main orchestration — assistants, sessions, view modes, shared mode, conversation compression
+- **types.ts**: Core TypeScript interfaces (Assistant, ChatSession, ChatMessage, RagChunk, RouteProposal, HtmlProject, agent-run contracts)
+- **components/**: Feature-organized React components (`assistant/`, `chat/`, `canvas/`, `core/`, `features/`, `settings/`, `ui/`)
+- **services/**: Business logic and provider integrations
 
 ### Data Layer
 
-- **services/db.ts**: Database operations interface for assistants and chat sessions
-- **services/tursoService.ts**: Turso DB integration for cloud-based data persistence
-- **services/geminiService.ts**: Google Gemini AI integration with streaming chat capabilities
-- **services/embeddingService.ts**: Vector embeddings for RAG functionality using HuggingFace transformers
-- **services/fileProcessingService.ts**: Document processing for PDF, DOCX, and MD files
-- **services/sharingService.ts**: Assistant sharing with secure links and QR code generation
+- **services/db.ts**: IndexedDB (idb) local persistence for assistants and chat sessions — the primary data store
+- **services/tursoService.ts**: Turso DB integration for assistant sharing (`?share=<id>` links and shared-mode loading)
+- **services/llmService.ts + llmAdapter.ts + providerRegistry.ts + providers/**: Multi-provider streaming chat with a tool-call loop (knowledge search, routing, HTML project tools)
+- **services/agentRunController.ts**: Multi-turn agent runs (auto-continue, checkpoint/resume, abort)
+- **services/knowledgeSearchService.ts**: `searchKnowledgeBase` text-search tool over knowledge chunks (normalization + CJK bigram tokenization + scoring)
+- **services/knowledgeGatherService.ts**: Hidden first-turn background gatherer that uses the same search tool to produce ragContext + citations
+- **services/documentParserService.ts + textChunkingService.ts**: PDF/DOCX/MD parsing and text chunking (pure text chunks, no vectorization)
+- **LEGACY — not in the chat path, do not use for new features**: `embeddingService.ts`, `ragQueryService.ts`, `ragCacheManagerV2.ts`, `queryCacheService.ts` (embedding-era chain; only referenced by the cache-management settings UI)
 
 ### Key Architecture Patterns
 
-- **State Management**: React hooks with local component state, no external state library
-- **Data Flow**: Turso DB → React state → UI components
-- **AI Integration**: Streaming responses from Gemini with token counting and chat history truncation (max 20 messages)
-- **RAG Implementation**: Multi-format file processing (PDF/DOCX/MD), text chunking, vector embeddings, and similarity search for context injection
-- **Sharing System**: Secure assistant sharing with QR codes and public/private link management
-- **Performance**: Preloaded embedding models and optimized UI rendering
+- **State Management**: React hooks with context state (`components/core/AppContext.tsx`), no external state library
+- **Data Flow**: IndexedDB (local-first) → React context state → UI components; Turso is only consulted for shared assistants
+- **AI Integration**: Provider-agnostic streaming with tool-call rounds; long conversations are compressed via `ChatCompactorService` summary compaction rather than hard truncation
+- **RAG Implementation (agentic, no embeddings)**: Knowledge base = pure text chunks (`fileName` + `content`); the model calls the `searchKnowledgeBase` tool on demand, and a first-turn background gather pass (`gatherKnowledge`) injects context + citations
+- **Routing/Handoff**: Assistants propose handoffs to other assistants via the `routeToAssistant` tool (user-confirmed, with handoff summary carried into the new session)
+- **Sharing System**: Secure assistant sharing with QR codes and short links (`?share=`, `?s=`)
+- **Performance**: Optimized UI rendering with mobile-responsive layout
 
 ### Environment Configuration
 
-- **GEMINI_API_KEY**: Required in `.env.local` for AI functionality (user-configurable in UI)
+- **API keys are BYOK**: configured per provider in the UI and stored in the browser (localStorage); `GEMINI_API_KEY` in `.env.local` is optional for development convenience
 - **TURSO_DATABASE_URL**: Turso database connection URL
 - **TURSO_AUTH_TOKEN**: Turso database authentication token
 - **Vite Configuration**: Exposes environment variables for both development and production
 
 ### Data Models
 
-- **Assistant**: Has id, name, description, systemPrompt, ragChunks (for context), isShared and timestamps
-- **ChatSession**: Belongs to assistant, contains message history, token counts, and session metadata
-- **RagChunk**: Enhanced with file metadata, chunk type, and vector embeddings
-- **ShareData**: Public sharing configuration with QR codes and access controls
-- **RAG Integration**: Multi-format file processing, intelligent chunking, vectorization, and contextual retrieval
+- **Assistant**: Has id, name, description, systemPrompt, ragChunks, starterPrompts, routableAssistantIds (handoff whitelist), subagentDelegationEnabled, isShared and timestamps
+- **ChatSession**: Belongs to assistant; contains message history, token usage, optional compactContext (compressed summary) and handoffContext
+- **RagChunk**: Pure text chunk `{ fileName, content }` — the optional `vector` field is legacy and no longer produced on upload
+- **RouteProposal / handoffContext**: Assistant-to-assistant handoff contract (reason + summary, user-confirmed)
+- **RAG Integration**: Multi-format file processing, intelligent chunking, and agent-driven text-search retrieval with citations (`MessageCitation`)
 
 ### Build System
 
@@ -109,20 +113,21 @@ This is EduCare - an Educational AI Assistant application - a React-based web ap
 
 ## Important Notes
 
-- The app requires a valid Gemini API key to function for AI features (configurable in UI)
-- Data persists in Turso DB for cross-device synchronization
+- The app requires at least one configured AI provider key to function (BYOK, configurable in UI)
+- Data persists locally in IndexedDB; Turso DB backs assistant sharing (`?share=` links) across devices
 - Assistant sharing uses secure public links with QR codes
-- RAG supports PDF, DOCX, and MD file processing with intelligent chunking
-- Chat sessions have token counting and automatic history truncation
+- RAG supports PDF, DOCX, and MD file processing with intelligent chunking; retrieval is agent-driven text search (no embeddings, no model download)
+- Chat sessions have token usage tracking and summary-based conversation compression
 - This project uses pnpm as the package manager
 - Pre-commit hooks automatically lint and format code before commits
 - Mobile-responsive design optimized for all device sizes
-- Performance optimizations include preloaded embedding models
 
 ### Recent Architectural Changes
 
-- **Database Migration**: Moved from IndexedDB + Google Sheets to Turso DB for better scalability
+- **RAG Evolution (2026)**: Replaced embedding/vector similarity search with agent-driven text search — `searchKnowledgeBase` tool + `gatherKnowledge` background gatherer. The embedding chain (`embeddingService` → `ragQueryService` → `ragCacheManagerV2` → `queryCacheService`) is legacy and off the chat path; new features must not depend on it
+- **Multi-Provider LLM Adapter**: Replaced the single Gemini service with a provider registry (7 providers incl. local LLMs via Ollama / LM Studio)
+- **Local-First Storage**: Assistants/sessions live in IndexedDB (`services/db.ts`); Turso serves shared assistants and short links
+- **Agentic Harness**: Multi-turn agent runs with checkpoint/resume, HTML project workspace (Canvas) with tool packs and local git (isomorphic-git), assistant routing/handoff, subagent delegation
 - **Enhanced File Processing**: Added support for PDF and DOCX documents alongside markdown
-- **Improved Sharing**: Dedicated sharing modal with QR code generation
 - **UI/UX Overhaul**: Complete redesign with mobile responsiveness and custom styling
 - **Development Infrastructure**: Added comprehensive linting, testing, and formatting pipeline
