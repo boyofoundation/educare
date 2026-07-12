@@ -7,6 +7,7 @@ import { ChatSession } from '../../types';
 import type { ChatTokenInfo } from '../chat/types';
 import BundleRunner from '../features/BundleRunner';
 import SharedAssistant from '../features/SharedAssistant';
+import BundleImportPage from '../bundle/BundleImportPage';
 import ProviderSettings from '../settings/ProviderSettings';
 import ProviderSettingsImportModal from '../settings/ProviderSettingsImportModal';
 import { providerManager } from '../../services/providerRegistry';
@@ -391,6 +392,13 @@ function AppContent(): React.JSX.Element {
         </div>
       )}
 
+      {state.viewMode === 'bundle_import' && (
+        <BundleImportPage
+          onClose={() => actions.setViewMode(state.currentAssistant ? 'chat' : 'new_assistant')}
+          onOpenBundle={() => undefined}
+        />
+      )}
+
       {/* Loading Screen */}
       {state.isLoading && (
         <div className='flex flex-col items-center justify-center h-full text-gray-400 p-8'>
@@ -439,7 +447,8 @@ function AppContent(): React.JSX.Element {
         state.viewMode !== 'new_assistant' &&
         state.viewMode !== 'settings' &&
         state.viewMode !== 'provider_settings' &&
-        state.viewMode !== 'api_setup' && (
+        state.viewMode !== 'api_setup' &&
+        state.viewMode !== 'bundle_import' && (
           <div className='flex flex-col items-center justify-center h-full text-gray-400 p-8'>
             <div className='w-20 h-20 bg-gray-700 rounded-full flex items-center justify-center mb-6'>
               <svg

@@ -443,6 +443,39 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           collapsed={collapsed}
         />
 
+        <div className={collapsed ? 'mb-4 flex flex-col items-center gap-2' : 'mb-4 px-3'}>
+          <button
+            type='button'
+            onClick={() => {
+              actions.setViewMode('bundle_import');
+              closeDrawerIfMobile();
+            }}
+            className={
+              collapsed
+                ? 'flex w-12 h-12 items-center justify-center rounded-xl bg-fuchsia-600/15 text-fuchsia-300 border border-fuchsia-500/30 hover:bg-fuchsia-500/25 hover:text-fuchsia-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60'
+                : 'flex w-full items-center justify-center gap-2 rounded-xl border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-sm font-medium text-fuchsia-100 transition hover:bg-fuchsia-500/20'
+            }
+            title='匯入協作包'
+            aria-label='匯入協作包'
+          >
+            <svg
+              className={collapsed ? 'w-5 h-5' : 'w-4 h-4'}
+              fill='none'
+              stroke='currentColor'
+              viewBox='0 0 24 24'
+              aria-hidden='true'
+            >
+              <path
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                strokeWidth={2}
+                d='M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
+              />
+            </svg>
+            {!collapsed && <span>匯入協作包</span>}
+          </button>
+        </div>
+
         {state.currentAssistant && state.currentSession && (
           <ProjectPicker
             assistantId={state.currentAssistant.id}
