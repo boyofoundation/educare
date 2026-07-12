@@ -44,10 +44,13 @@ export interface ChatContainerProps {
   ) => Promise<void>;
   hideHeader?: boolean;
   sharedMode?: boolean;
+  /** Bundle sandbox mode: uses shared-mode safeguards without shared-assistant routing. */
+  sandboxMode?: boolean;
   assistantDescription?: string;
   starterPrompts?: string[];
   isWorkspaceOpen?: boolean;
   headerActions?: ReactNode;
+  onCreateSession?: () => Promise<void>;
   /** 子代理人委派開關。由父層從 assistant.subagentDelegationEnabled 傳入。 */
   subagentDelegationEnabled?: boolean;
 }

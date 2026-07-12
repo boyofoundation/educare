@@ -60,6 +60,7 @@ const initialState: AppState = {
   error: null,
   isShared: null, // Changed to null to indicate "not yet determined"
   sharedAssistantId: null,
+  bundleMode: null,
   isSidebarOpen: true,
   isSidebarCollapsed: loadSidebarCollapsed(),
   isMobile: false,
@@ -101,6 +102,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
         isShared: action.payload.isShared,
         sharedAssistantId: action.payload.assistantId,
       };
+    case 'SET_BUNDLE_MODE':
+      return { ...state, bundleMode: action.payload };
     case 'SET_SIDEBAR_OPEN':
       return { ...state, isSidebarOpen: action.payload };
     case 'SET_SIDEBAR_COLLAPSED':
@@ -267,7 +270,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   // Load data from database
   const loadData = useCallback(async () => {
     // Only load data if we're definitely not in shared mode
-    if (state.isShared === null || state.isShared === true) {
+    if (state.isShared === null || state.isShared === true || state.bundleMode) {
       return;
     }
 
@@ -307,7 +310,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false });
     }
-  }, [selectAssistant, state.isShared]);
+  }, [selectAssistant, state.bundleMode, state.isShared]);
 
   const loadSharedAssistant = useCallback(
     async (assistantId: string) => {
@@ -502,8 +505,24 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   // Check for shared mode first, then check screen size
   useEffect(() => {
     const handleSharedMode = async () => {
-      // Check for short URL parameter format (?s=shortCode)
       const urlParams = new URLSearchParams(window.location.search);
+      const bundleId = urlParams.get('bundle');
+      const importBundle = urlParams.get('import') === 'bundle';
+
+      if (bundleId || importBundle) {
+        dispatch({ type: 'SET_SHARED_MODE', payload: { isShared: false, assistantId: null } });
+        dispatch({ type: 'SET_BUNDLE_MODE', payload: bundleId ? { bundleId } : null });
+        if (importBundle) {
+          dispatch({ type: 'SET_VIEW_MODE', payload: 'bundle_import' });
+          dispatch({ type: 'SET_LOADING', payload: false });
+        }
+        checkScreenSize();
+        return;
+      }
+
+      dispatch({ type: 'SET_BUNDLE_MODE', payload: null });
+
+      // Check for short URL parameter format (?s=shortCode)
       const shortCode = urlParams.get('s');
 
       if (shortCode) {
@@ -563,8 +582,13 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   useEffect(() => {
     console.log('🔍 [AppContext] Data loading useEffect, isShared:', state.isShared);
 
-    // Don't load if shared mode hasn't been determined yet (null) or if in shared mode (true)
-    if (state.isShared === null || state.isShared === true) {
+    // Don't load if shared mode has not been determined, or while a bundle route owns the shell.
+    if (
+      state.isShared === null ||
+      state.isShared === true ||
+      state.bundleMode ||
+      state.viewMode === 'bundle_import'
+    ) {
       if (state.isShared === null) {
         console.log('⏳ [AppContext] Waiting for shared mode determination');
       } else {
@@ -575,7 +599,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
 
     console.log('🔄 [AppContext] Starting normal loadData');
     loadData();
-  }, [loadData, state.isShared]);
+  }, [loadData, state.bundleMode, state.isShared, state.viewMode]);
 
   // Separate effect for shared mode to prevent any interference
   useEffect(() => {

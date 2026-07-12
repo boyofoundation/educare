@@ -96,13 +96,16 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   onNewMessage,
   hideHeader = false,
   sharedMode = false,
+  sandboxMode = false,
   assistantDescription,
   starterPrompts = [],
   isWorkspaceOpen: _isWorkspaceOpen = false,
   headerActions,
+  onCreateSession,
   subagentDelegationEnabled = false,
 }) => {
   const appContext = useContext(AppContext);
+  const isSandboxMode = sharedMode || sandboxMode;
   const actions = appContext?.actions ?? null;
   const [input, setInput] = useState('');
   const [streamingResponse, setStreamingResponse] = useState('');
@@ -522,8 +525,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         // 未開啟專案時,提供 createProject bootstrap 工具讓模型自行建立專案;
         // 已綁定專案或 shared 模式(無 canvas workspace)時停用,以現有專案為準。
         projectBootstrapEnabled:
-          resumeCheckpoint?.projectBootstrapEnabled ?? (!projectEditingActive && !sharedMode),
-        sharedMode: resumeCheckpoint?.sharedMode ?? sharedMode,
+          resumeCheckpoint?.projectBootstrapEnabled ?? (!projectEditingActive && !isSandboxMode),
+        sharedMode: resumeCheckpoint?.sharedMode ?? isSandboxMode,
         resumeFrom: resumeCheckpoint,
         callbacks: {
           // 即時 callback 只在 run 的 session 仍顯示中時更新 UI;
@@ -914,9 +917,13 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             </h2>
             <div className='flex items-center space-x-3'>
               {headerActions}
-              {sharedMode && (
+              {isSandboxMode && (
                 <button
                   onClick={async () => {
+                    if (onCreateSession) {
+                      await onCreateSession();
+                      return;
+                    }
                     await actions?.createNewSession?.(assistantId);
                     const resetSession = {
                       ...currentSession,
@@ -1035,7 +1042,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               <WelcomeMessage
                 assistantName={assistantName}
                 assistantDescription={assistantDescription}
-                sharedMode={sharedMode}
+                sharedMode={isSandboxMode}
                 starterPrompts={starterPrompts}
                 onPromptSelect={prompt => {
                   void handlePromptSelect(prompt);

@@ -5,6 +5,7 @@ import { ChatContainer } from '../chat';
 import { HtmlProjectWorkspace } from '../canvas';
 import { ChatSession } from '../../types';
 import type { ChatTokenInfo } from '../chat/types';
+import BundleRunner from '../features/BundleRunner';
 import SharedAssistant from '../features/SharedAssistant';
 import ProviderSettings from '../settings/ProviderSettings';
 import ProviderSettingsImportModal from '../settings/ProviderSettingsImportModal';
@@ -123,6 +124,20 @@ function AppContent(): React.JSX.Element {
 
     await actions.updateSession(updatedSession);
   };
+
+  if (state.bundleMode) {
+    return (
+      <Layout>
+        <BundleRunner bundleId={state.bundleMode.bundleId} />
+        {state.viewMode === 'provider_settings' && (
+          <div className='absolute inset-0 overflow-y-auto bg-gray-900'>
+            <ProviderSettings onClose={() => actions.setViewMode('chat')} />
+          </div>
+        )}
+        <ProviderSettingsImportModal onApplied={() => actions.setViewMode('chat')} />
+      </Layout>
+    );
+  }
 
   // If in shared mode, render SharedAssistant component (which sets up state) and continue with normal rendering
   if (state.isShared && state.sharedAssistantId) {
