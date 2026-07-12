@@ -66,6 +66,25 @@ Since 2002, Boyo Social Welfare Foundation has been dedicated to education for d
 - **Streaming Responses** - Real-time token streaming with thinking indicators and abort controls
 - **Session Token Tracking** - Per-session input/output/reasoning/cache token counts across providers
 
+### 📦 Agent Bundles (local JSON sharing)
+
+Create a portable **Agent Bundle** when a lesson needs a receptionist and several specialist assistants. A bundle contains the selected assistants' system prompts, text knowledge chunks, starter prompts, and an explicit routing map in one `.educare-bundle.json` file.
+
+#### 60-second import guide
+
+1. In the sidebar, choose **Import bundle** and either drop the `.json` file, select it, or paste its JSON.
+2. Read the preview: it shows names, descriptions, route entry point, and knowledge size — never system prompts.
+3. Choose **Activate bundle**. The imported package stays in this browser's IndexedDB and opens at a local `?bundle=` URL; that URL is not a sharing link.
+4. Set your own provider key. **This session** is the default scope (kept in session storage and cleared when the tab closes); **Remember in this browser** is opt-in.
+5. Chat with the receptionist. It may automatically transfer to an allowed specialist; its transition record is expandable and the specialist receives a handoff summary.
+
+#### Authoring and safety boundaries
+
+- From the assistant list, choose **Build bundle**; select at least two assistants, pick one receptionist, configure allowed routes/conditions, validate the metadata, then download JSON.
+- Bundles are file-based and local-first: importing does not overwrite or upload existing assistants. Deleting an imported bundle also removes only that bundle's conversations.
+- Knowledge data is plain `fileName` + `content` text chunks. The app uses agent-driven text search after import; it exports no vectors, embeddings, provider keys, or server credentials.
+- Treat an external bundle like any untrusted prompt configuration: inspect the preview, use a provider key you control, and do not expect copied `?bundle=` URLs to work on another device.
+
 ### 🛠️ HTML Project Assistant _(new)_
 
 A full in-browser IDE-like workflow powered by **LightningFS + isomorphic-git**:
