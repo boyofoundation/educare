@@ -943,7 +943,7 @@ describe('ChatContainer', () => {
     await clickResume();
 
     await waitFor(() => {
-      expect(screen.getByText('session persistence failed')).toBeInTheDocument();
+      expect(screen.getByText(/session persistence failed/)).toBeInTheDocument();
     });
     expect(onNewMessage).toHaveBeenCalled();
     expect(mockDeleteCheckpoint).not.toHaveBeenCalledWith('run-persist-failure');
