@@ -587,7 +587,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       state.isShared === null ||
       state.isShared === true ||
       state.bundleMode ||
-      state.viewMode === 'bundle_import'
+      new URLSearchParams(window.location.search).get('import') === 'bundle'
     ) {
       if (state.isShared === null) {
         console.log('⏳ [AppContext] Waiting for shared mode determination');
@@ -599,7 +599,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
 
     console.log('🔄 [AppContext] Starting normal loadData');
     loadData();
-  }, [loadData, state.bundleMode, state.isShared, state.viewMode]);
+  }, [loadData, state.bundleMode, state.isShared]);
 
   // Separate effect for shared mode to prevent any interference
   useEffect(() => {
