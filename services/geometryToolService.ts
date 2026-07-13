@@ -23,43 +23,47 @@ export const DRAW_GEOMETRY_TOOL_SCHEMA = {
         oneOf: [
           {
             type: 'object',
-            properties: { kind: { const: 'point' } },
+            properties: { kind: { enum: ['point'] } },
             required: ['kind', 'x', 'y'],
           },
-          { type: 'object', properties: { kind: { const: 'line' } }, required: ['kind', 'points'] },
           {
             type: 'object',
-            properties: { kind: { const: 'segment' } },
+            properties: { kind: { enum: ['line'] } },
             required: ['kind', 'points'],
           },
           {
             type: 'object',
-            properties: { kind: { const: 'circle' } },
+            properties: { kind: { enum: ['segment'] } },
+            required: ['kind', 'points'],
+          },
+          {
+            type: 'object',
+            properties: { kind: { enum: ['circle'] } },
             required: ['kind', 'center'],
           },
           {
             type: 'object',
-            properties: { kind: { const: 'functiongraph' } },
+            properties: { kind: { enum: ['functiongraph'] } },
             required: ['kind', 'expr'],
           },
           {
             type: 'object',
-            properties: { kind: { const: 'implicit' } },
+            properties: { kind: { enum: ['implicit'] } },
             required: ['kind', 'expr'],
           },
           {
             type: 'object',
-            properties: { kind: { const: 'polygon' } },
+            properties: { kind: { enum: ['polygon'] } },
             required: ['kind', 'points'],
           },
           {
             type: 'object',
-            properties: { kind: { const: 'text' } },
+            properties: { kind: { enum: ['text'] } },
             required: ['kind', 'x', 'y', 'text'],
           },
           {
             type: 'object',
-            properties: { kind: { const: 'intersection' } },
+            properties: { kind: { enum: ['intersection'] } },
             required: ['kind', 'sources'],
           },
         ],
