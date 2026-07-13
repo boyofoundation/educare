@@ -442,6 +442,88 @@ describe('ChatContainer', () => {
     expect(screen.getByText('Bundle learner question')).toBeInTheDocument();
   });
 
+  it('keeps the optimistic user message through normal-mode AppContext action churn and persists it before a provider error', async () => {
+    const sourceSession = createMockChatSession({ id: 'normal-session', messages: [] });
+    const onNewMessage = vi.fn().mockResolvedValue(undefined);
+    const renderedActions: Array<{ setAgentRunState: (state: AgentRunState | null) => void }> = [];
+    let rejectRun: (reason?: unknown) => void = () => undefined;
+
+    mockControllerRun.mockImplementationOnce(
+      () =>
+        new Promise<AgentRunResult>((_resolve, reject) => {
+          rejectRun = reject;
+        }),
+    );
+
+    function NormalModeHarness() {
+      const [agentRunState, setAgentRunState] = useState<AgentRunState | null>(null);
+      const actions = {
+        createNewSession: mockCreateNewSession,
+        updateSession: mockUpdateSession,
+        setActiveProject: mockSetActiveProject,
+        setProjectWorkspaceOpen: mockSetProjectWorkspaceOpen,
+        setProjectPreview: mockSetProjectPreview,
+        appendProjectActivity: mockAppendProjectActivity,
+        clearProjectWorkspace: mockClearProjectWorkspace,
+        setAgentRunState,
+      };
+      renderedActions.push(actions);
+
+      return (
+        <AppContext.Provider value={{ state: { agentRunState }, actions } as never}>
+          <ChatContainer {...defaultProps} session={sourceSession} onNewMessage={onNewMessage} />
+        </AppContext.Provider>
+      );
+    }
+
+    render(<NormalModeHarness />);
+    await sendMessage('Keep this normal-mode question');
+
+    await waitFor(() => {
+      expect(mockAgentRunControllerCtor).toHaveBeenCalledTimes(1);
+    });
+    const controllerOptions = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+      callbacks: { onStateChange: (state: AgentRunState) => void };
+    };
+
+    await act(async () => {
+      controllerOptions.callbacks.onStateChange({
+        ...runningState,
+        sessionId: sourceSession.id,
+      });
+    });
+
+    const latestActions = renderedActions.at(-1);
+    expect(latestActions).not.toBe(renderedActions[0]);
+    expect(latestActions?.setAgentRunState).toBe(renderedActions[0].setAgentRunState);
+    expect(screen.getByText('Keep this normal-mode question')).toBeInTheDocument();
+
+    await act(async () => {
+      rejectRun(new Error('Normal provider failure'));
+    });
+
+    await waitFor(() => {
+      expect(onNewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              role: 'user',
+              content: 'Keep this normal-mode question',
+            }),
+            expect.objectContaining({
+              role: 'model',
+              isError: true,
+              content: expect.stringContaining('Normal provider failure'),
+            }),
+          ],
+        }),
+        'Keep this normal-mode question',
+        expect.stringContaining('Normal provider failure'),
+        expect.anything(),
+      );
+    });
+  });
+
   it('shows a jump-to-latest button instead of auto-following when the user scrolls away from the bottom', async () => {
     mockControllerRun.mockImplementationOnce(async () => {
       const options = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {

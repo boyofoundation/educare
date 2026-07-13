@@ -112,6 +112,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const appContext = useContext(AppContext);
   const isSandboxMode = sharedMode || sandboxMode;
   const actions = appContext?.actions ?? null;
+  const setAgentRunState = actions?.setAgentRunState;
   const [input, setInput] = useState('');
   const [streamingResponse, setStreamingResponse] = useState('');
   const [pendingEmptyResponseNotice, setPendingEmptyResponseNotice] = useState<string | null>(null);
@@ -196,8 +197,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setToolCallRecords([]);
     setPendingEmptyResponseNotice(null);
     setRunState(null);
-    actions?.setAgentRunState?.(null);
-  }, [session, actions, sandboxMode]);
+    setAgentRunState?.(null);
+  }, [session, sandboxMode, setAgentRunState]);
 
   useEffect(() => {
     sessionRef.current = currentSession;
