@@ -64,6 +64,7 @@ import {
   DRAW_GEOMETRY_TOOL_NAME,
   DRAW_GEOMETRY_TOOL_SCHEMA,
   executeDrawGeometry,
+  normalizeGeometryDoc,
   type DrawGeometryResult,
   type GeometryDoc,
 } from './geometryToolService';
@@ -532,10 +533,11 @@ export const streamChat = async (params: StreamChatParams) => {
                   };
           }
         } else if (mathToolsEnabled && call.name === DRAW_GEOMETRY_TOOL_NAME) {
-          const drawGeometryResult = await executeDrawGeometry(call.args);
+          const geometryDocument = normalizeGeometryDoc(call.args);
+          const drawGeometryResult = await executeDrawGeometry(geometryDocument);
           if (drawGeometryResult.ok) {
             geometryBoards.push({
-              document: call.args as unknown as GeometryDoc,
+              document: geometryDocument as GeometryDoc,
               result: drawGeometryResult,
             });
             result = drawGeometryResult;

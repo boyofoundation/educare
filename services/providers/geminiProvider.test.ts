@@ -256,9 +256,72 @@ describe('GeminiProvider', () => {
     expect(responses.at(-1)?.isComplete).toBe(true);
   });
 
+  it('recursively converts JSON Schema const and oneOf into Gemini-compatible enum and anyOf', async () => {
+    // Arrange
+    const provider = new GeminiProvider();
+    const { create } = await setupProvider(provider);
+    const parameters = {
+      type: 'object',
+      properties: {
+        object: {
+          oneOf: [
+            {
+              type: 'object',
+              properties: {
+                kind: { const: 'point' },
+                x: { type: 'number' },
+                y: { type: 'number' },
+              },
+              required: ['kind', 'x', 'y'],
+            },
+            {
+              type: 'object',
+              properties: { kind: { const: 'line' }, points: { type: 'array' } },
+              required: ['kind', 'points'],
+            },
+          ],
+        },
+      },
+    } as const;
+
+    // Act
+    await collectResponses(provider, {
+      tools: [{ name: 'geometry_fixture', description: 'Geometry fixture', parameters }],
+    });
+
+    // Assert
+    const declaration = create.mock.calls[0]?.[0]?.config?.tools?.[0]?.functionDeclarations?.[0];
+    expect(declaration?.parameters).toStrictEqual({
+      type: 'object',
+      properties: {
+        object: {
+          anyOf: [
+            {
+              type: 'object',
+              properties: {
+                kind: { enum: ['point'] },
+                x: { type: 'number' },
+                y: { type: 'number' },
+              },
+              required: ['kind', 'x', 'y'],
+            },
+            {
+              type: 'object',
+              properties: { kind: { enum: ['line'] }, points: { type: 'array' } },
+              required: ['kind', 'points'],
+            },
+          ],
+        },
+      },
+    });
+    expect(JSON.stringify(declaration?.parameters)).not.toContain('"const"');
+    expect(JSON.stringify(declaration?.parameters)).not.toContain('"oneOf"');
+  });
+
   it('normalizes draw_geometry schemas for Gemini while retaining each required kind constraint', async () => {
     const provider = new GeminiProvider();
     const { create } = await setupProvider(provider);
+    const sourceSchemaJson = JSON.stringify(DRAW_GEOMETRY_TOOL_SCHEMA);
 
     await collectResponses(provider, {
       tools: [
@@ -290,11 +353,11 @@ describe('GeminiProvider', () => {
     expect(variants).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          properties: { kind: { enum: ['point'] } },
+          properties: expect.objectContaining({ kind: { enum: ['point'] } }),
           required: expect.arrayContaining(['kind']),
         }),
         expect.objectContaining({
-          properties: { kind: { enum: ['line'] } },
+          properties: expect.objectContaining({ kind: { enum: ['line'] } }),
           required: expect.arrayContaining(['kind']),
         }),
       ]),
@@ -303,6 +366,16 @@ describe('GeminiProvider', () => {
     expect(
       variants.every((variant: { required?: string[] }) => variant.required?.includes('kind')),
     ).toBe(true);
+    expect(
+      variants.every((variant: { properties?: object; required?: string[] }) =>
+        variant.required?.every(required =>
+          Object.prototype.hasOwnProperty.call(variant.properties ?? {}, required),
+        ),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(DRAW_GEOMETRY_TOOL_SCHEMA)).toBe(sourceSchemaJson);
+    expect(DRAW_GEOMETRY_TOOL_SCHEMA.properties.objects.items).toHaveProperty('oneOf');
+    expect(DRAW_GEOMETRY_TOOL_SCHEMA.properties.objects.items).not.toHaveProperty('anyOf');
   });
 
   it('keeps AUTO mode without allowedFunctionNames by default', async () => {

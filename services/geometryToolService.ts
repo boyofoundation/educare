@@ -23,47 +23,108 @@ export const DRAW_GEOMETRY_TOOL_SCHEMA = {
         oneOf: [
           {
             type: 'object',
-            properties: { kind: { enum: ['point'] } },
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['point'] },
+              x: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              y: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              label: { type: 'string' },
+            },
             required: ['kind', 'x', 'y'],
           },
           {
             type: 'object',
-            properties: { kind: { enum: ['line'] } },
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['line'] },
+              points: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 2,
+                maxItems: 2,
+              },
+            },
             required: ['kind', 'points'],
           },
           {
             type: 'object',
-            properties: { kind: { enum: ['segment'] } },
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['segment'] },
+              points: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 2,
+                maxItems: 2,
+              },
+            },
             required: ['kind', 'points'],
           },
           {
             type: 'object',
-            properties: { kind: { enum: ['circle'] } },
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['circle'] },
+              center: { type: 'string' },
+              point: { type: 'string' },
+              radius: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+            },
             required: ['kind', 'center'],
           },
           {
             type: 'object',
-            properties: { kind: { enum: ['functiongraph'] } },
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['functiongraph'] },
+              expr: { type: 'string' },
+            },
             required: ['kind', 'expr'],
           },
           {
             type: 'object',
-            properties: { kind: { enum: ['implicit'] } },
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['implicit'] },
+              expr: { type: 'string' },
+            },
             required: ['kind', 'expr'],
           },
           {
             type: 'object',
-            properties: { kind: { enum: ['polygon'] } },
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['polygon'] },
+              points: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 3,
+              },
+            },
             required: ['kind', 'points'],
           },
           {
             type: 'object',
-            properties: { kind: { enum: ['text'] } },
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['text'] },
+              x: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              y: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              text: { type: 'string' },
+            },
             required: ['kind', 'x', 'y', 'text'],
           },
           {
             type: 'object',
-            properties: { kind: { enum: ['intersection'] } },
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['intersection'] },
+              sources: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 2,
+                maxItems: 2,
+              },
+            },
             required: ['kind', 'sources'],
           },
         ],
@@ -309,6 +370,47 @@ const validateObject = async (
   }
 };
 
+export const normalizeGeometryDoc = (doc: unknown): unknown => {
+  const record = asRecord(doc);
+  if (!record || !Array.isArray(record.objects)) {
+    return doc;
+  }
+
+  return {
+    ...record,
+    objects: record.objects.map(object => {
+      const objectRecord = asRecord(object);
+      if (!objectRecord) {
+        return object;
+      }
+
+      const kind =
+        typeof objectRecord.kind === 'string'
+          ? objectRecord.kind
+          : typeof objectRecord.type === 'string'
+            ? objectRecord.type
+            : undefined;
+      const name =
+        typeof objectRecord.name === 'string' && objectRecord.name.trim().length > 0
+          ? objectRecord.name
+          : undefined;
+      const id =
+        typeof objectRecord.id === 'string' && objectRecord.id.trim().length > 0
+          ? objectRecord.id
+          : name;
+
+      return {
+        ...objectRecord,
+        ...(kind ? { kind } : {}),
+        ...(id ? { id } : {}),
+        ...(kind === 'point' && name && typeof objectRecord.label !== 'string'
+          ? { label: name }
+          : {}),
+      };
+    }),
+  };
+};
+
 export const validateGeometryDoc = async (doc: unknown): Promise<GeometryValidationResult> => {
   const errors: GeometryDiagnostic[] = [];
   const record = asRecord(doc);
@@ -388,7 +490,8 @@ export type DrawGeometryResult =
     };
 
 export const executeDrawGeometry = async (args: unknown): Promise<DrawGeometryResult> => {
-  const validation = await validateGeometryDoc(args);
+  const normalizedArgs = normalizeGeometryDoc(args);
+  const validation = await validateGeometryDoc(normalizedArgs);
   if (validation.errors.length > 0) {
     return {
       ok: false,
@@ -429,7 +532,7 @@ export const executeDrawGeometry = async (args: unknown): Promise<DrawGeometryRe
     | undefined;
   try {
     const { renderGeometryDoc } = await import('./geometryRenderer');
-    renderResult = await renderGeometryDoc(probe, args as GeometryDoc);
+    renderResult = await renderGeometryDoc(probe, normalizedArgs as GeometryDoc);
     if (renderResult.errors.length > 0) {
       return {
         ok: false,

@@ -80,6 +80,7 @@ vi.mock('./mathComputeService', () => ({
 
 vi.mock('./geometryToolService', () => ({
   executeDrawGeometry: mockExecuteDrawGeometry,
+  normalizeGeometryDoc: (document: unknown) => document,
   DRAW_GEOMETRY_TOOL_NAME: 'draw_geometry',
   DRAW_GEOMETRY_TOOL_DESCRIPTION: 'Draw a geometry diagram.',
   DRAW_GEOMETRY_TOOL_SCHEMA: {

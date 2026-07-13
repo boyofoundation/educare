@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateGeometryDoc } from './geometryToolService';
+import { normalizeGeometryDoc, validateGeometryDoc } from './geometryToolService';
 
 const createDocument = (objects: unknown[], boundingbox: unknown = [-10, 10, 10, -10]) => ({
   title: 'Geometry validation fixture',
@@ -75,6 +75,37 @@ describe('geometryToolService: validateGeometryDoc', () => {
 
     // Assert
     expect(result.errors).toEqual([]);
+  });
+
+  it('normalizes common Gemini geometry aliases before validation', async () => {
+    // Arrange
+    const rawDocument = createDocument([
+      { type: 'point', name: 'A', x: 0, y: 0 },
+      { type: 'point', name: 'B', x: 2, y: 3 },
+      { type: 'point', name: 'C', x: 0, y: 3 },
+      { type: 'point', name: 'D', x: 2, y: 0 },
+      { type: 'line', name: 'first', points: ['A', 'B'] },
+      { type: 'line', name: 'second', points: ['C', 'D'] },
+      { type: 'intersection', sources: ['first', 'second'] },
+    ]);
+
+    // Act
+    const normalizedDocument = normalizeGeometryDoc(rawDocument);
+    const result = await validateGeometryDoc(normalizedDocument);
+
+    // Assert
+    expect(result.errors).toEqual([]);
+    expect(normalizedDocument).toMatchObject({
+      objects: [
+        { id: 'A', kind: 'point', label: 'A' },
+        { id: 'B', kind: 'point', label: 'B' },
+        { id: 'C', kind: 'point', label: 'C' },
+        { id: 'D', kind: 'point', label: 'D' },
+        { id: 'first', kind: 'line', points: ['A', 'B'] },
+        { id: 'second', kind: 'line', points: ['C', 'D'] },
+        { kind: 'intersection', sources: ['first', 'second'] },
+      ],
+    });
   });
 
   const invalidBoundingBoxes = [

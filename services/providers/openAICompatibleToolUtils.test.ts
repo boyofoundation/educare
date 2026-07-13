@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { streamOpenAICompatibleChat } from './openAICompatibleToolUtils';
 import { TOOL_LOOP_CONTRACT_CASES } from './toolLoopContract.cases';
+import {
+  DRAW_GEOMETRY_TOOL_DESCRIPTION,
+  DRAW_GEOMETRY_TOOL_NAME,
+  DRAW_GEOMETRY_TOOL_SCHEMA,
+} from '../geometryToolService';
 
 const TOOL_DEFINITIONS = [
   {
@@ -39,6 +44,57 @@ describe('streamOpenAICompatibleChat', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  it.each([
+    ['openai', 'https://api.openai.com/v1/chat/completions'],
+    ['openrouter', 'https://openrouter.ai/api/v1/chat/completions'],
+  ] as const)(
+    'serializes draw_geometry parameters unchanged for %s',
+    async (providerName, endpoint) => {
+      // Arrange
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        createJsonResponse({
+          choices: [{ message: { role: 'assistant', content: 'done' } }],
+          usage: { prompt_tokens: 3, completion_tokens: 1 },
+        }),
+      );
+      const sourceSchemaJson = JSON.stringify(DRAW_GEOMETRY_TOOL_SCHEMA);
+
+      // Act
+      for await (const chunk of streamOpenAICompatibleChat({
+        endpoint,
+        headers: { Authorization: 'Bearer test' },
+        providerName,
+        model: 'test-model',
+        params: {
+          systemPrompt: 'You are helpful.',
+          history: [],
+          message: 'Draw a point.',
+          tools: [
+            {
+              name: DRAW_GEOMETRY_TOOL_NAME,
+              description: DRAW_GEOMETRY_TOOL_DESCRIPTION,
+              parameters: DRAW_GEOMETRY_TOOL_SCHEMA,
+            },
+          ],
+          executeTool: vi.fn(),
+        },
+      })) {
+        void chunk;
+      }
+
+      // Assert
+      const requestBody = fetchMock.mock.calls[0]?.[1]?.body as string;
+      const wireParameters = JSON.parse(requestBody).tools[0]?.function?.parameters;
+      expect(wireParameters).toStrictEqual(DRAW_GEOMETRY_TOOL_SCHEMA);
+      expect(JSON.stringify(wireParameters)).toBe(sourceSchemaJson);
+      expect(wireParameters.properties.objects.items).toStrictEqual({
+        oneOf: DRAW_GEOMETRY_TOOL_SCHEMA.properties.objects.items.oneOf,
+      });
+      expect(DRAW_GEOMETRY_TOOL_SCHEMA.properties.objects.items).toHaveProperty('oneOf');
+      expect(DRAW_GEOMETRY_TOOL_SCHEMA.properties.objects.items).not.toHaveProperty('anyOf');
+    },
+  );
 
   it('uses auto tool choice by default and avoids Gemini-only fields', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(

@@ -23,7 +23,7 @@ export const MATH_COMPUTE_TOOL_SCHEMA = {
 } as const;
 
 export const MATH_TOOLS_SYSTEM_PROMPT = `
-When math tools are available, use compute before stating any concrete numeric result. Write multiplication explicitly: use 2*x, not 2x; use ^ for powers; and state logarithm bases explicitly. For implicit geometry, expr represents F(x,y)=0. If a compute or draw_geometry result reports an error or warning, correct the declaration and retry instead of continuing with unsupported claims. Prefer several small diagrams, each with its own explanation, over one crowded diagram. Read intersection coordinates only from computed_points; do not calculate them mentally. Every draw_geometry call must be self-contained: fully declare every object needed for that board, including objects repeated from an earlier board.
+When math tools are available, use compute before stating any concrete numeric result. Write multiplication explicitly: use 2*x, not 2x; use ^ for powers; and state logarithm bases explicitly. For implicit geometry, expr represents F(x,y)=0. If a compute or draw_geometry result reports an error or warning, correct the declaration and retry instead of continuing with unsupported claims. Prefer several small diagrams, each with its own explanation, over one crowded diagram. Read intersection coordinates only from computed_points; do not calculate them mentally. Every draw_geometry call must be self-contained: fully declare every object needed for that board, including objects repeated from an earlier board. For each object, use the exact property 'kind' (never 'type') and use 'id' for references; point annotations belong in 'label' (never 'name').
 `.trim();
 
 export interface ComputeArgs {
