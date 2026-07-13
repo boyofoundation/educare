@@ -6,7 +6,17 @@ import { bundleStrings } from '../bundle/bundleStrings';
 import { resolveBundleRoutableTargets } from '../../services/assistantRoutingService';
 import { recordBundleFirstChatCompletion } from '../../services/bundleMetricsService';
 import * as db from '../../services/db';
-import { initializeProviders, isLLMAvailable } from '../../services/providerRegistry';
+import {
+  initializeProviders,
+  isLLMAvailable,
+  providerManager,
+} from '../../services/providerRegistry';
+import {
+  BUNDLE_PROVIDER_CREDENTIALS_ERROR,
+  decryptBundleProviderCredentials,
+  type BundleProviderCredentials,
+} from '../../services/bundleProviderCredentialsService';
+import type { BundleProviderOverrideSource } from '../../services/llmAdapter';
 import type {
   AgentBundle,
   AgentBundleAgent,
@@ -44,6 +54,43 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
   const loadedBundleIdRef = useRef<string | null>(null);
   const processedAutoHandoffsRef = useRef(new Set<string>());
   const [loadedBundle, setLoadedBundle] = useState<AgentBundle | null>(previewBundle ?? null);
+  const [credentialAccess, setCredentialAccess] = useState<'pending' | 'bundle' | 'own'>('pending');
+  const [unlockStage, setUnlockStage] = useState<'locked' | 'preview'>('locked');
+  const [unlockPassword, setUnlockPassword] = useState('');
+  const [decryptedCredentials, setDecryptedCredentials] =
+    useState<BundleProviderCredentials | null>(null);
+  const [credentialError, setCredentialError] = useState<string | null>(null);
+  const bundleOverrideSourceRef = useRef<BundleProviderOverrideSource | null>(null);
+
+  const clearCredentialState = useCallback(() => {
+    setUnlockPassword('');
+    setDecryptedCredentials(null);
+    setCredentialError(null);
+    setUnlockStage('locked');
+  }, []);
+
+  const clearBundleOverride = useCallback(async () => {
+    const source = bundleOverrideSourceRef.current;
+    if (!source) {
+      return;
+    }
+
+    bundleOverrideSourceRef.current = null;
+    await providerManager.clearBundleProviderConfig(source);
+  }, []);
+
+  useEffect(() => {
+    loadedBundleIdRef.current = null;
+    setCredentialAccess('pending');
+    clearCredentialState();
+  }, [bundleId, clearCredentialState]);
+
+  useEffect(() => {
+    return () => {
+      clearCredentialState();
+      void clearBundleOverride();
+    };
+  }, [bundleId, clearBundleOverride, clearCredentialState]);
 
   const loadBundle = useCallback(async () => {
     if (loadedBundleIdRef.current === bundleId) {
@@ -66,6 +113,14 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       }
 
       setLoadedBundle(record.bundle);
+      if (
+        record.bundle.manifest.schemaVersion === 2 &&
+        record.bundle.encryptedProviderSettings &&
+        credentialAccess === 'pending'
+      ) {
+        return;
+      }
+
       const entryAgent = record.bundle.agents.find(
         agent => agent.id === record.bundle.manifest.entryAgentId,
       );
@@ -114,7 +169,9 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       });
       dispatch({ type: 'SET_CURRENT_SESSION', payload: session });
 
-      await initializeProviders();
+      if (credentialAccess !== 'bundle') {
+        await initializeProviders();
+      }
       dispatch({ type: 'SET_VIEW_MODE', payload: isLLMAvailable() ? 'chat' : 'provider_settings' });
     } catch (error) {
       console.error('Failed to load agent bundle:', error);
@@ -122,11 +179,69 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false });
     }
-  }, [bundleId, dispatch, previewBundle]);
+  }, [bundleId, credentialAccess, dispatch, previewBundle]);
 
   useEffect(() => {
     void loadBundle();
   }, [loadBundle]);
+
+  const handleUnlock = useCallback(async () => {
+    if (!loadedBundle || !unlockPassword) {
+      setCredentialError('請輸入協作包密碼。');
+      return;
+    }
+
+    setCredentialError(null);
+    try {
+      const credentials = await decryptBundleProviderCredentials(
+        loadedBundle,
+        unlockPassword,
+        previewBundle ? undefined : bundleId,
+      );
+      setUnlockPassword('');
+      setDecryptedCredentials(credentials);
+      setUnlockStage('preview');
+    } catch {
+      setUnlockPassword('');
+      setDecryptedCredentials(null);
+      setCredentialError(BUNDLE_PROVIDER_CREDENTIALS_ERROR);
+    }
+  }, [bundleId, loadedBundle, previewBundle, unlockPassword]);
+
+  const handleConfirmBundleCredentials = useCallback(async () => {
+    if (!decryptedCredentials) {
+      return;
+    }
+
+    setCredentialError(null);
+    try {
+      await initializeProviders();
+      const source: BundleProviderOverrideSource = {
+        kind: 'bundle',
+        bundleId,
+        credentialFingerprint: decryptedCredentials.credentialFingerprint,
+      };
+      await providerManager.setBundleProviderConfig(
+        source,
+        decryptedCredentials.provider,
+        decryptedCredentials.config,
+      );
+      bundleOverrideSourceRef.current = source;
+      clearCredentialState();
+      loadedBundleIdRef.current = null;
+      setCredentialAccess('bundle');
+    } catch {
+      clearCredentialState();
+      setCredentialError('無法啟用隨附服務商設定。請改用自己的 AI 服務商。');
+    }
+  }, [bundleId, clearCredentialState, decryptedCredentials]);
+
+  const handleUseOwnProvider = useCallback(async () => {
+    clearCredentialState();
+    await clearBundleOverride();
+    loadedBundleIdRef.current = null;
+    setCredentialAccess('own');
+  }, [clearBundleOverride, clearCredentialState]);
 
   const persistBundleSession = useCallback(
     async (session: ChatSession) => {
@@ -360,6 +475,100 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
     return (
       <div className='flex h-full items-center justify-center p-8 text-center text-red-300'>
         {state.error}
+      </div>
+    );
+  }
+
+  const protectedBundle =
+    loadedBundle?.manifest.schemaVersion === 2 && Boolean(loadedBundle.encryptedProviderSettings);
+  if (protectedBundle && credentialAccess === 'pending') {
+    return (
+      <div className='mx-auto flex h-full max-w-xl items-center p-6'>
+        <section
+          aria-label='受保護協作包解鎖'
+          className='w-full rounded-2xl border border-fuchsia-700/50 bg-gray-800/70 p-6 shadow-xl'
+        >
+          <h2 className='text-xl font-bold text-white'>此協作包包含受保護的服務商設定</h2>
+          <p className='mt-2 text-sm text-gray-400'>
+            請輸入創作者另行提供的密碼以預覽設定，確認後才會在本次執行期間使用。也可明確改用自己的
+            AI 服務商。
+          </p>
+          {unlockStage === 'locked' ? (
+            <>
+              <label
+                className='mt-5 block text-sm font-medium text-gray-300'
+                htmlFor='bundle-unlock-password'
+              >
+                協作包密碼
+              </label>
+              <input
+                id='bundle-unlock-password'
+                type='password'
+                value={unlockPassword}
+                onChange={event => setUnlockPassword(event.target.value)}
+                className='mt-2 w-full rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:border-fuchsia-400 focus:outline-none'
+              />
+              {credentialError && (
+                <p role='alert' className='mt-3 text-sm text-red-200'>
+                  {credentialError}
+                </p>
+              )}
+              <div className='mt-5 flex flex-col gap-2 sm:flex-row'>
+                <button
+                  type='button'
+                  onClick={() => void handleUnlock()}
+                  disabled={!unlockPassword}
+                  className='min-h-11 flex-1 rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-fuchsia-500 disabled:cursor-not-allowed disabled:opacity-50'
+                >
+                  解鎖並預覽
+                </button>
+                <button
+                  type='button'
+                  onClick={() => void handleUseOwnProvider()}
+                  className='min-h-11 flex-1 rounded-lg border border-gray-600 px-4 py-2 text-sm text-gray-100 transition hover:bg-gray-700'
+                >
+                  改用自己的 AI 服務商
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className='mt-5 rounded-xl border border-fuchsia-700/40 bg-fuchsia-900/20 p-4'>
+              <p className='text-sm text-fuchsia-100'>
+                已解鎖服務商：{decryptedCredentials?.provider ?? '—'}
+              </p>
+              <p className='mt-1 text-xs text-gray-300'>
+                模型：{decryptedCredentials?.config.model ?? '—'}
+              </p>
+              {decryptedCredentials?.config.baseUrl && (
+                <p className='mt-1 break-all text-xs text-gray-300'>
+                  端點：{decryptedCredentials.config.baseUrl}
+                </p>
+              )}
+              <p className='mt-2 text-xs text-gray-300'>金鑰不會顯示，也不會寫入瀏覽器儲存空間。</p>
+              {credentialError && (
+                <p role='alert' className='mt-3 text-sm text-red-200'>
+                  {credentialError}
+                </p>
+              )}
+              <div className='mt-4 flex flex-col gap-2 sm:flex-row'>
+                <button
+                  type='button'
+                  onClick={() => void handleConfirmBundleCredentials()}
+                  className='min-h-11 flex-1 rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-fuchsia-500'
+                >
+                  確認使用隨附設定
+                </button>
+                <button
+                  type='button'
+                  onClick={clearCredentialState}
+                  className='min-h-11 flex-1 rounded-lg border border-gray-600 px-4 py-2 text-sm text-gray-100 transition hover:bg-gray-700'
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
       </div>
     );
   }

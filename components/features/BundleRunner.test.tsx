@@ -6,7 +6,7 @@ import { AppContext } from '../core/useAppContext';
 import type { AppAction, AppContextValue, AppState } from '../core/AppContext.types';
 import type { AgentBundle, ChatSession } from '../../types';
 
-const { actions, db, providers, chat } = vi.hoisted(() => ({
+const { actions, db, providers, credentials, chat } = vi.hoisted(() => ({
   actions: { updateSession: vi.fn(), deleteSession: vi.fn() },
   db: {
     getBundle: vi.fn(),
@@ -14,11 +14,23 @@ const { actions, db, providers, chat } = vi.hoisted(() => ({
     saveBundle: vi.fn(),
     saveSession: vi.fn(),
   },
-  providers: { initializeProviders: vi.fn(), isLLMAvailable: vi.fn() },
+  providers: {
+    initializeProviders: vi.fn(),
+    isLLMAvailable: vi.fn(),
+    providerManager: {
+      setBundleProviderConfig: vi.fn(),
+      clearBundleProviderConfig: vi.fn(),
+    },
+  },
+  credentials: { decryptBundleProviderCredentials: vi.fn() },
   chat: vi.fn(),
 }));
 vi.mock('../../services/db', () => db);
 vi.mock('../../services/providerRegistry', () => providers);
+vi.mock('../../services/bundleProviderCredentialsService', () => ({
+  BUNDLE_PROVIDER_CREDENTIALS_ERROR: '無法解密或驗證隨附服務商設定',
+  decryptBundleProviderCredentials: credentials.decryptBundleProviderCredentials,
+}));
 vi.mock('../chat', () => ({
   ChatContainer: (props: {
     assistantId: string;
@@ -61,6 +73,19 @@ const bundle = (): AgentBundle => ({
     },
   ],
   routes: [],
+});
+
+const protectedBundle = (): AgentBundle => ({
+  ...bundle(),
+  manifest: { ...bundle().manifest, schemaVersion: 2 },
+  encryptedProviderSettings: {
+    v: 1,
+    algorithm: 'AES-GCM',
+    kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: 100000 },
+    salt: 'abcdefghijklmnopqrstuv',
+    iv: 'abcdefghijklmnop',
+    ciphertext: 'abcdefghijklmnop',
+  },
 });
 
 const routedBundle = (): AgentBundle => ({
@@ -199,6 +224,13 @@ describe('BundleRunner', () => {
     vi.clearAllMocks();
     providers.initializeProviders.mockResolvedValue(undefined);
     providers.isLLMAvailable.mockReturnValue(true);
+    providers.providerManager.setBundleProviderConfig.mockResolvedValue(undefined);
+    providers.providerManager.clearBundleProviderConfig.mockResolvedValue(true);
+    credentials.decryptBundleProviderCredentials.mockResolvedValue({
+      provider: 'gemini',
+      config: { apiKey: 'encrypted-key', model: 'gemini-2.0-flash' },
+      credentialFingerprint: 'credential-fingerprint',
+    });
     db.getSessionsForAssistant.mockResolvedValue([]);
     db.saveSession.mockResolvedValue(undefined);
     db.saveBundle.mockResolvedValue(undefined);
@@ -283,6 +315,80 @@ describe('BundleRunner', () => {
       expect(screen.getByTestId('view-mode')).toHaveTextContent('provider_settings'),
     );
     expect(screen.queryByTestId('bundle-chat')).not.toBeInTheDocument();
+  });
+
+  it('requires an explicit unlock or own-provider fallback before opening a protected bundle', async () => {
+    db.getBundle.mockResolvedValue({
+      id: 'bundle-1',
+      bundle: protectedBundle(),
+      importedAt: 10,
+      sizeBytes: 100,
+    });
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByLabelText('受保護協作包解鎖')).toBeInTheDocument());
+    expect(providers.initializeProviders).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('bundle-chat')).not.toBeInTheDocument();
+  });
+
+  it('opens with the recipient provider only after explicitly declining protected credentials', async () => {
+    db.getBundle.mockResolvedValue({
+      id: 'bundle-1',
+      bundle: protectedBundle(),
+      importedAt: 10,
+      sizeBytes: 100,
+    });
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByLabelText('受保護協作包解鎖')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '改用自己的 AI 服務商' }));
+
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+    expect(credentials.decryptBundleProviderCredentials).not.toHaveBeenCalled();
+    expect(providers.providerManager.setBundleProviderConfig).not.toHaveBeenCalled();
+    expect(providers.initializeProviders).toHaveBeenCalledOnce();
+  });
+
+  it('uses decrypted credentials only after explicit confirmation and clears the matching override on unmount', async () => {
+    db.getBundle.mockResolvedValue({
+      id: 'bundle-1',
+      bundle: protectedBundle(),
+      importedAt: 10,
+      sizeBytes: 100,
+    });
+    const { unmount } = render(<Harness />);
+
+    await waitFor(() => expect(screen.getByLabelText('受保護協作包解鎖')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('協作包密碼'), { target: { value: 'shared-password' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '解鎖並預覽' }));
+    });
+    expect(screen.getByText('已解鎖服務商：gemini')).toBeInTheDocument();
+    expect(screen.queryByTestId('bundle-chat')).not.toBeInTheDocument();
+    expect(providers.initializeProviders).not.toHaveBeenCalled();
+    expect(providers.providerManager.setBundleProviderConfig).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '確認使用隨附設定' }));
+    });
+
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+    expect(providers.providerManager.setBundleProviderConfig).toHaveBeenCalledWith(
+      { kind: 'bundle', bundleId: 'bundle-1', credentialFingerprint: 'credential-fingerprint' },
+      'gemini',
+      { apiKey: 'encrypted-key', model: 'gemini-2.0-flash' },
+    );
+
+    unmount();
+    await waitFor(() =>
+      expect(providers.providerManager.clearBundleProviderConfig).toHaveBeenCalledWith({
+        kind: 'bundle',
+        bundleId: 'bundle-1',
+        credentialFingerprint: 'credential-fingerprint',
+      }),
+    );
   });
 
   it('automatically persists an accepted source proposal and switches to its routed target', async () => {

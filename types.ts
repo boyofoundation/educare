@@ -82,15 +82,52 @@ export interface AgentBundleManifest {
   entryAgentId: string;
 }
 
+export interface EncryptedProviderSettingsEnvelope {
+  v: 1;
+  algorithm: 'AES-GCM';
+  kdf: {
+    name: 'PBKDF2';
+    hash: 'SHA-256';
+    iterations: number;
+  };
+  salt: string;
+  iv: string;
+  ciphertext: string;
+}
+
+export interface AgentBundleManifestV2 {
+  format: 'educare-agent-bundle';
+  schemaVersion: 2;
+  name: string;
+  description: string;
+  version: string;
+  exportedAt: number;
+  entryAgentId: string;
+}
+
+/** Schema v1 bundle. This remains the default export format. */
 export interface AgentBundle {
-  manifest: AgentBundleManifest;
+  manifest: AgentBundleManifest | AgentBundleManifestV2;
   agents: AgentBundleAgent[];
   routes: AgentBundleRoute[];
+  encryptedProviderSettings?: EncryptedProviderSettingsEnvelope;
 }
+
+export interface AgentBundleV1 extends AgentBundle {
+  manifest: AgentBundleManifest;
+  encryptedProviderSettings?: never;
+}
+
+export interface AgentBundleV2 extends AgentBundle {
+  manifest: AgentBundleManifestV2;
+  encryptedProviderSettings?: EncryptedProviderSettingsEnvelope;
+}
+
+export type VersionedAgentBundle = AgentBundle;
 
 export interface BundleRecord {
   id: string;
-  bundle: AgentBundle;
+  bundle: VersionedAgentBundle;
   importedAt: number;
   lastOpenedAt?: number;
   sizeBytes: number;
@@ -112,7 +149,7 @@ export interface BundleIssue {
 }
 
 export interface BundleValidationResult {
-  bundle: AgentBundle | null;
+  bundle: VersionedAgentBundle | null;
   errors: BundleIssue[];
   warnings: BundleIssue[];
 }

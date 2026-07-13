@@ -1,17 +1,19 @@
 import {
   AgentBundle,
   AgentBundleAgent,
-  AgentBundleManifest,
   AgentBundleModelParams,
   AgentBundleRoute,
   Assistant,
   BundleIssue,
   BundleRecord,
   BundleValidationResult,
+  EncryptedProviderSettingsEnvelope,
+  VersionedAgentBundle,
 } from '../types';
 
 export const AGENT_BUNDLE_FORMAT = 'educare-agent-bundle';
 export const AGENT_BUNDLE_SCHEMA_VERSION = 1;
+export const AGENT_BUNDLE_ENCRYPTED_SCHEMA_VERSION = 2;
 export const AGENT_BUNDLE_MAX_AGENTS = 20;
 export const AGENT_BUNDLE_MAX_SIZE_BYTES = 15 * 1024 * 1024;
 export const AGENT_BUNDLE_LARGE_FILE_BYTES = 2 * 1024 * 1024;
@@ -36,6 +38,53 @@ const issue = (code: BundleIssue['code'], message: string, nextStep: string): Bu
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
+  Object.keys(value).every(key => keys.includes(key)) && keys.every(key => key in value);
+
+const isBase64Url = (value: unknown, maxLength: number, minLength = 1): value is string =>
+  typeof value === 'string' &&
+  value.length >= minLength &&
+  value.length <= maxLength &&
+  /^[A-Za-z0-9_-]+$/.test(value);
+
+const parseEncryptedProviderSettings = (
+  raw: unknown,
+  errors: BundleIssue[],
+): EncryptedProviderSettingsEnvelope | undefined => {
+  if (
+    !isRecord(raw) ||
+    !hasExactKeys(raw, ['v', 'algorithm', 'kdf', 'salt', 'iv', 'ciphertext']) ||
+    raw.v !== 1 ||
+    raw.algorithm !== 'AES-GCM' ||
+    !isRecord(raw.kdf) ||
+    !hasExactKeys(raw.kdf, ['name', 'hash', 'iterations']) ||
+    raw.kdf.name !== 'PBKDF2' ||
+    raw.kdf.hash !== 'SHA-256' ||
+    raw.kdf.iterations !== 100_000 ||
+    !isBase64Url(raw.salt, 22, 22) ||
+    !isBase64Url(raw.iv, 16, 16) ||
+    !isBase64Url(raw.ciphertext, 16_384, 16)
+  ) {
+    errors.push(
+      issue(
+        'missing-field',
+        'encryptedProviderSettings 格式錯誤。',
+        '請重新向創作者索取有效的協作包。',
+      ),
+    );
+    return undefined;
+  }
+
+  return {
+    v: 1,
+    algorithm: 'AES-GCM',
+    kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: 100_000 },
+    salt: raw.salt,
+    iv: raw.iv,
+    ciphertext: raw.ciphertext,
+  };
+};
+
 const sanitizeFileName = (name: string): string => {
   const cleaned = Array.from(name.trim())
     .map(char => {
@@ -52,7 +101,49 @@ const sanitizeFileName = (name: string): string => {
 
 const bytesFor = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
 
-export const estimateBundleSize = (bundle: AgentBundle): number => bytesFor(bundle);
+const removeImportedBundleNamespace = (id: string, importedBundleId?: string): string => {
+  const prefix = importedBundleId ? `${importedBundleId}:` : '';
+  return prefix && id.startsWith(prefix) ? id.slice(prefix.length) : id;
+};
+
+export const getBundleContentFingerprint = async (
+  bundle: VersionedAgentBundle,
+  importedBundleId?: string,
+): Promise<string> => {
+  const publicContent = {
+    manifest: {
+      format: bundle.manifest.format,
+      schemaVersion: bundle.manifest.schemaVersion,
+      name: bundle.manifest.name,
+      description: bundle.manifest.description,
+      version: bundle.manifest.version,
+      exportedAt: bundle.manifest.exportedAt,
+      entryAgentId: removeImportedBundleNamespace(bundle.manifest.entryAgentId, importedBundleId),
+    },
+    agents: bundle.agents.map(agent => ({
+      id: removeImportedBundleNamespace(agent.id, importedBundleId),
+      name: agent.name,
+      description: agent.description,
+      systemPrompt: agent.systemPrompt,
+      starterPrompts: agent.starterPrompts,
+      ragChunks: agent.ragChunks.map(({ fileName, content }) => ({ fileName, content })),
+      ...(agent.icon === undefined ? {} : { icon: agent.icon }),
+      ...(agent.modelParams === undefined ? {} : { modelParams: agent.modelParams }),
+    })),
+    routes: bundle.routes.map(route => ({
+      fromAgentId: removeImportedBundleNamespace(route.fromAgentId, importedBundleId),
+      toAgentId: removeImportedBundleNamespace(route.toAgentId, importedBundleId),
+      ...(route.condition === undefined ? {} : { condition: route.condition }),
+    })),
+  };
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(JSON.stringify(publicContent)),
+  );
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+};
+
+export const estimateBundleSize = (bundle: VersionedAgentBundle): number => bytesFor(bundle);
 
 const validateString = (
   value: unknown,
@@ -279,19 +370,15 @@ export const validateBundle = (raw: unknown): BundleValidationResult => {
   }
 
   const manifestRaw = raw.manifest;
-  if (typeof manifestRaw.schemaVersion !== 'number') {
+  const schemaVersion = manifestRaw.schemaVersion;
+  if (
+    schemaVersion !== AGENT_BUNDLE_SCHEMA_VERSION &&
+    schemaVersion !== AGENT_BUNDLE_ENCRYPTED_SCHEMA_VERSION
+  ) {
     errors.push(
-      issue(
-        'missing-field',
-        'manifest.schemaVersion 必須是數字。',
-        '請重新向創作者索取有效的協作包。',
-      ),
-    );
-  } else if (manifestRaw.schemaVersion > AGENT_BUNDLE_SCHEMA_VERSION) {
-    errors.push(issue('schema-too-new', '此協作包版本較新。', '請更新 EduCare 後再匯入。'));
-  } else if (manifestRaw.schemaVersion !== AGENT_BUNDLE_SCHEMA_VERSION) {
-    errors.push(
-      issue('not-a-bundle', '此協作包版本不受支援。', '請向創作者索取 schema v1 的協作包。'),
+      typeof schemaVersion === 'number' && schemaVersion > AGENT_BUNDLE_ENCRYPTED_SCHEMA_VERSION
+        ? issue('schema-too-new', '此協作包版本較新。', '請更新 EduCare 後再匯入。')
+        : issue('not-a-bundle', '此協作包版本不受支援。', '請向創作者索取有效的協作包。'),
     );
   }
 
@@ -316,6 +403,12 @@ export const validateBundle = (raw: unknown): BundleValidationResult => {
       issue('missing-field', 'manifest.exportedAt 必須是數字。', '請修正協作包後重新匯出。'),
     );
   }
+
+  const encryptedProviderSettings =
+    schemaVersion === AGENT_BUNDLE_ENCRYPTED_SCHEMA_VERSION &&
+    raw.encryptedProviderSettings !== undefined
+      ? parseEncryptedProviderSettings(raw.encryptedProviderSettings, errors)
+      : undefined;
 
   if (!Array.isArray(raw.agents)) {
     errors.push(issue('missing-field', 'agents 必須是陣列。', '請修正協作包後重新匯出。'));
@@ -385,6 +478,8 @@ export const validateBundle = (raw: unknown): BundleValidationResult => {
 
   if (
     errors.length > 0 ||
+    (schemaVersion !== AGENT_BUNDLE_SCHEMA_VERSION &&
+      schemaVersion !== AGENT_BUNDLE_ENCRYPTED_SCHEMA_VERSION) ||
     !validName ||
     !validDescription ||
     !validVersion ||
@@ -396,9 +491,8 @@ export const validateBundle = (raw: unknown): BundleValidationResult => {
     return { bundle: null, errors, warnings };
   }
 
-  const manifest: AgentBundleManifest = {
-    format: AGENT_BUNDLE_FORMAT,
-    schemaVersion: AGENT_BUNDLE_SCHEMA_VERSION,
+  const manifestBase = {
+    format: AGENT_BUNDLE_FORMAT as 'educare-agent-bundle',
     name: manifestRaw.name as string,
     description: manifestRaw.description as string,
     version: manifestRaw.version as string,
@@ -406,7 +500,24 @@ export const validateBundle = (raw: unknown): BundleValidationResult => {
     entryAgentId: manifestRaw.entryAgentId as string,
   };
 
-  return { bundle: { manifest, agents, routes }, errors, warnings };
+  const bundle: VersionedAgentBundle =
+    schemaVersion === AGENT_BUNDLE_SCHEMA_VERSION
+      ? {
+          manifest: { ...manifestBase, schemaVersion: AGENT_BUNDLE_SCHEMA_VERSION },
+          agents,
+          routes,
+        }
+      : {
+          manifest: {
+            ...manifestBase,
+            schemaVersion: AGENT_BUNDLE_ENCRYPTED_SCHEMA_VERSION,
+          },
+          agents,
+          routes,
+          ...(encryptedProviderSettings === undefined ? {} : { encryptedProviderSettings }),
+        };
+
+  return { bundle, errors, warnings };
 };
 
 export const buildAgentBundle = (
@@ -416,7 +527,7 @@ export const buildAgentBundle = (
   metadata: AgentBundleMetadata,
 ): AgentBundle => ({
   manifest: {
-    format: AGENT_BUNDLE_FORMAT,
+    format: AGENT_BUNDLE_FORMAT as 'educare-agent-bundle',
     schemaVersion: AGENT_BUNDLE_SCHEMA_VERSION,
     name: metadata.name,
     description: metadata.description,
@@ -439,9 +550,10 @@ export const buildAgentBundle = (
   })),
 });
 
-export const serializeBundle = (bundle: AgentBundle): string => JSON.stringify(bundle, null, 2);
+export const serializeBundle = (bundle: VersionedAgentBundle): string =>
+  JSON.stringify(bundle, null, 2);
 
-export const downloadBundleJson = (bundle: AgentBundle): string => {
+export const downloadBundleJson = (bundle: VersionedAgentBundle): string => {
   const fileName = `${sanitizeFileName(bundle.manifest.name)}.educare-bundle.json`;
   const blob = new globalThis.Blob([serializeBundle(bundle)], { type: 'application/json' });
   const objectUrl = URL.createObjectURL(blob);
@@ -498,19 +610,10 @@ export const parseBundleFile = async (file: File): Promise<BundleValidationResul
   return parseBundleText(await file.text());
 };
 
-export const buildImportedBundle = (bundle: AgentBundle): BundleRecord => {
+export const buildImportedBundle = (bundle: VersionedAgentBundle): BundleRecord => {
   const id = crypto.randomUUID();
   const namespacedIds = new Map(bundle.agents.map(agent => [agent.id, `${id}:${agent.id}`]));
-  const importedBundle: AgentBundle = {
-    manifest: {
-      format: AGENT_BUNDLE_FORMAT,
-      schemaVersion: AGENT_BUNDLE_SCHEMA_VERSION,
-      name: bundle.manifest.name,
-      description: bundle.manifest.description,
-      version: bundle.manifest.version,
-      exportedAt: bundle.manifest.exportedAt,
-      entryAgentId: namespacedIds.get(bundle.manifest.entryAgentId)!,
-    },
+  const importedBase = {
     agents: bundle.agents.map(agent => ({
       id: namespacedIds.get(agent.id)!,
       name: agent.name,
@@ -527,6 +630,35 @@ export const buildImportedBundle = (bundle: AgentBundle): BundleRecord => {
       ...(route.condition === undefined ? {} : { condition: route.condition }),
     })),
   };
+  const manifestBase = {
+    format: AGENT_BUNDLE_FORMAT as 'educare-agent-bundle',
+    name: bundle.manifest.name,
+    description: bundle.manifest.description,
+    version: bundle.manifest.version,
+    exportedAt: bundle.manifest.exportedAt,
+    entryAgentId: namespacedIds.get(bundle.manifest.entryAgentId)!,
+  };
+  const importedBundle: VersionedAgentBundle =
+    bundle.manifest.schemaVersion === AGENT_BUNDLE_SCHEMA_VERSION
+      ? {
+          manifest: { ...manifestBase, schemaVersion: AGENT_BUNDLE_SCHEMA_VERSION },
+          ...importedBase,
+        }
+      : {
+          manifest: {
+            ...manifestBase,
+            schemaVersion: AGENT_BUNDLE_ENCRYPTED_SCHEMA_VERSION,
+          },
+          ...importedBase,
+          ...(bundle.encryptedProviderSettings === undefined
+            ? {}
+            : {
+                encryptedProviderSettings: {
+                  ...bundle.encryptedProviderSettings,
+                  kdf: { ...bundle.encryptedProviderSettings.kdf },
+                },
+              }),
+        };
 
   return {
     id,

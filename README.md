@@ -68,22 +68,25 @@ Since 2002, Boyo Social Welfare Foundation has been dedicated to education for d
 
 ### 📦 Agent Bundles (local JSON sharing)
 
-Create a portable **Agent Bundle** when a lesson needs a receptionist and several specialist assistants. A bundle contains the selected assistants' system prompts, text knowledge chunks, starter prompts, and an explicit routing map in one `.educare-bundle.json` file.
+Create a portable **Agent Bundle** when a lesson needs a receptionist and several specialist assistants. By default, a bundle contains the selected assistants' system prompts, text knowledge chunks, starter prompts, and an explicit routing map in one `.educare-bundle.json` file — **not provider credentials**. An exporter may explicitly create a schema-v2 bundle with one password-encrypted provider configuration instead.
 
 #### 60-second import guide
 
 1. In the sidebar, choose **Import bundle** and either drop the `.json` file, select it, or paste its JSON.
-2. Read the preview: it shows names, descriptions, route entry point, and knowledge size — never system prompts.
+2. Read the preview: it shows names, descriptions, route entry point, and knowledge size — never system prompts or provider keys.
 3. Choose **Activate bundle**. The imported package stays in this browser's IndexedDB and opens at a local `?bundle=` URL; that URL is not a sharing link.
-4. Set your own provider key. **This session** is the default scope (kept in session storage and cleared when the tab closes); **Remember in this browser** is opt-in.
-5. Chat with the receptionist. It may automatically transfer to an allowed specialist; its transition record is expandable and the specialist receives a handoff summary.
+4. For a default bundle, set your own provider key. **This session** is the default scope (kept in session storage and cleared when the tab closes); **Remember in this browser** is opt-in.
+5. For a schema-v2 bundle with encrypted provider settings, get the password from the exporter through a separate secure channel, unlock the configuration, and explicitly confirm its use. The decrypted configuration is memory-only: it is not saved to browser storage, and reopening or reloading the bundle requires the password again. You can instead choose your own provider.
+6. Chat with the receptionist. It may automatically transfer to an allowed specialist; its transition record is expandable and the specialist receives a handoff summary.
 
 #### Authoring and safety boundaries
 
 - From the assistant list, choose **Build bundle**; select at least two assistants, pick one receptionist, configure allowed routes/conditions, validate the metadata, then download JSON.
+- Default exports use the credential-free bundle schema. To include one configured provider, the exporter must opt in during export, select that provider, and set a protection password. That choice produces schema version 2; the configuration is encrypted and no plaintext key is written to the JSON.
+- Send the protection password separately from the bundle. Do not put it in the filename, bundle metadata, a `?bundle=` URL, or the same message or storage location as the JSON.
 - Bundles are file-based and local-first: importing does not overwrite or upload existing assistants. Deleting an imported bundle also removes only that bundle's conversations.
-- Knowledge data is plain `fileName` + `content` text chunks. The app uses agent-driven text search after import; it exports no vectors, embeddings, provider keys, or server credentials.
-- Treat an external bundle like any untrusted prompt configuration: inspect the preview, use a provider key you control, and do not expect copied `?bundle=` URLs to work on another device.
+- Knowledge data is plain `fileName` + `content` text chunks. The app uses agent-driven text search after import; it exports no vectors or embeddings. Server credentials, including Turso credentials, are never included in any bundle.
+- Treat an external bundle like any untrusted prompt configuration. A credential-bearing bundle is sensitive: anyone who obtains both its JSON and password can use the included provider configuration. It cannot be remotely revoked or recalled; rotate the affected provider credential if it is exposed. Inspect the preview, use a provider key you control when appropriate, and do not expect copied `?bundle=` URLs to work on another device.
 
 ### 🛠️ HTML Project Assistant _(new)_
 

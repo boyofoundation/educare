@@ -6,7 +6,10 @@ import {
   estimateBundleSize,
   validateBundle,
 } from '../../services/agentBundleService';
-import type { AgentBundle, AgentBundleRoute, Assistant } from '../../types';
+import { encryptBundleProviderCredentials } from '../../services/bundleProviderCredentialsService';
+import { providerManager } from '../../services/providerRegistry';
+import type { ProviderType } from '../../services/llmAdapter';
+import type { AgentBundle, AgentBundleRoute, AgentBundleV2, Assistant } from '../../types';
 
 export interface BundleBuilderProps {
   assistants: Assistant[];
@@ -35,6 +38,16 @@ const knowledgeChars = (assistant: Assistant): number =>
 
 const routeKey = (from: string, to: string): string => `${from}>${to}`;
 
+const PROVIDER_NAMES: Record<ProviderType, string> = {
+  gemini: 'Google Gemini',
+  openai: 'OpenAI',
+  anthropic: 'Anthropic Claude',
+  ollama: 'Ollama',
+  groq: 'Groq',
+  openrouter: 'OpenRouter',
+  lmstudio: 'OpenAI 相容端點',
+};
+
 const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPreviewBundle }) => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [entryAgentId, setEntryAgentId] = useState<string | null>(null);
@@ -46,6 +59,12 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
   });
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [routesSeeded, setRoutesSeeded] = useState(false);
+  const [includeProviderCredentials, setIncludeProviderCredentials] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderType | ''>('');
+  const [password, setPassword] = useState('');
+  const [passwordConfirmation, setPasswordConfirmation] = useState('');
+  const [credentialConsent, setCredentialConsent] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const sortedAssistants = useMemo(
     () => [...assistants].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant')),
@@ -56,6 +75,17 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
     () => sortedAssistants.filter(assistant => selectedIds.has(assistant.id)),
     [selectedIds, sortedAssistants],
   );
+
+  const availableProviders = useMemo(
+    () => providerManager.getAvailableProviders().map(({ type }) => type),
+    [],
+  );
+  const protectedExportReady =
+    !includeProviderCredentials ||
+    (selectedProvider !== '' &&
+      password.length >= 12 &&
+      password === passwordConfirmation &&
+      credentialConsent);
 
   const toggleSelected = useCallback((id: string) => {
     setSelectedIds(prev => {
@@ -137,21 +167,72 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
   const stepTwoValid = Boolean(entryAgentId) && selectedAssistants.length >= 2;
   const hasErrors = (validation?.errors.length ?? 0) > 0;
   const metadataValid = metadata.name.trim().length > 0;
-  const canExport = Boolean(bundle) && !hasErrors && metadataValid;
+  const canExport = Boolean(bundle) && !hasErrors && metadataValid && protectedExportReady;
 
-  const handleExport = useCallback(() => {
-    if (!bundle || hasErrors || !metadataValid) {
+  const buildExportBundle = useCallback(async (): Promise<AgentBundle | null> => {
+    if (!bundle || hasErrors || !protectedExportReady) {
+      return null;
+    }
+    if (!includeProviderCredentials) {
+      return bundle;
+    }
+    if (!selectedProvider) {
+      setExportError('請選擇要隨附的已設定 AI 服務商。');
+      return null;
+    }
+
+    try {
+      const protectedBundle: AgentBundleV2 = {
+        ...bundle,
+        manifest: { ...bundle.manifest, schemaVersion: 2 },
+      };
+      const encryptedProviderSettings = await encryptBundleProviderCredentials(
+        protectedBundle,
+        providerManager.getSettings(),
+        selectedProvider,
+        password,
+      );
+      return { ...protectedBundle, encryptedProviderSettings };
+    } catch {
+      setExportError('無法加密服務商設定。請確認已選取可用服務商後重試。');
+      return null;
+    }
+  }, [
+    bundle,
+    hasErrors,
+    includeProviderCredentials,
+    password,
+    protectedExportReady,
+    selectedProvider,
+  ]);
+
+  const clearCredentialInputs = useCallback(() => {
+    setPassword('');
+    setPasswordConfirmation('');
+  }, []);
+
+  const handleExport = useCallback(async () => {
+    if (!canExport) {
       return;
     }
-    downloadBundleJson(bundle);
-  }, [bundle, hasErrors, metadataValid]);
-
-  const handlePreview = useCallback(() => {
-    if (!bundle || hasErrors) {
+    setExportError(null);
+    const exportBundle = await buildExportBundle();
+    if (!exportBundle) {
       return;
     }
-    onPreviewBundle(bundle);
-  }, [bundle, hasErrors, onPreviewBundle]);
+    downloadBundleJson(exportBundle);
+    clearCredentialInputs();
+  }, [buildExportBundle, canExport, clearCredentialInputs]);
+
+  const handlePreview = useCallback(async () => {
+    setExportError(null);
+    const exportBundle = await buildExportBundle();
+    if (!exportBundle) {
+      return;
+    }
+    onPreviewBundle(exportBundle);
+    clearCredentialInputs();
+  }, [buildExportBundle, clearCredentialInputs, onPreviewBundle]);
 
   return (
     <div className='h-full overflow-y-auto bg-gray-900'>
@@ -371,6 +452,108 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
               </label>
             </div>
 
+            <fieldset className='rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/5 p-4'>
+              <legend className='px-1 text-sm font-semibold text-fuchsia-100'>
+                加密服務商設定（選用）
+              </legend>
+              <label className='mt-2 flex cursor-pointer items-start gap-2 text-sm text-gray-200'>
+                <input
+                  type='checkbox'
+                  checked={includeProviderCredentials}
+                  onChange={event => {
+                    setIncludeProviderCredentials(event.target.checked);
+                    setExportError(null);
+                    if (!event.target.checked) {
+                      clearCredentialInputs();
+                      setCredentialConsent(false);
+                    }
+                  }}
+                  className='mt-0.5'
+                />
+                <span>隨附目前已設定 AI 服務商的加密設定</span>
+              </label>
+              {includeProviderCredentials && (
+                <div className='mt-4 space-y-3'>
+                  <p className='rounded-lg border border-yellow-700/50 bg-yellow-900/20 p-3 text-xs text-yellow-100'>
+                    協作包只會寫入以密碼加密的設定，不會寫入明文金鑰。請用另一個安全管道傳送密碼。
+                  </p>
+                  {availableProviders.length === 0 ? (
+                    <p className='text-sm text-yellow-200'>
+                      找不到已設定且可用的 AI 服務商，無法隨附設定。
+                    </p>
+                  ) : (
+                    <label className='block'>
+                      <span className='mb-1 block text-xs font-medium text-gray-400'>
+                        要隨附的已設定 AI 服務商
+                      </span>
+                      <select
+                        value={selectedProvider}
+                        onChange={event => setSelectedProvider(event.target.value as ProviderType)}
+                        className='w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:border-fuchsia-400 focus:outline-none'
+                      >
+                        <option value=''>請選擇</option>
+                        {availableProviders.map(provider => (
+                          <option key={provider} value={provider}>
+                            {PROVIDER_NAMES[provider]}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+                    <label>
+                      <span className='mb-1 block text-xs font-medium text-gray-400'>保護密碼</span>
+                      <input
+                        type='password'
+                        value={password}
+                        onChange={event => setPassword(event.target.value)}
+                        className='w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:border-fuchsia-400 focus:outline-none'
+                      />
+                    </label>
+                    <label>
+                      <span className='mb-1 block text-xs font-medium text-gray-400'>確認密碼</span>
+                      <input
+                        type='password'
+                        value={passwordConfirmation}
+                        onChange={event => setPasswordConfirmation(event.target.value)}
+                        className='w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:border-fuchsia-400 focus:outline-none'
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type='button'
+                    onClick={() => {
+                      const bytes = crypto.getRandomValues(new Uint8Array(18));
+                      const generated = Array.from(bytes, byte =>
+                        byte.toString(36).padStart(2, '0'),
+                      ).join('');
+                      setPassword(generated);
+                      setPasswordConfirmation(generated);
+                    }}
+                    className='rounded-lg border border-fuchsia-500/50 px-3 py-2 text-xs text-fuchsia-100 transition hover:bg-fuchsia-500/10'
+                  >
+                    產生密碼
+                  </button>
+                  <p className='text-xs text-gray-500'>密碼至少 12 個字元，且必須一致。</p>
+                  <label className='flex cursor-pointer items-start gap-2 text-xs text-gray-300'>
+                    <input
+                      type='checkbox'
+                      checked={credentialConsent}
+                      onChange={event => setCredentialConsent(event.target.checked)}
+                      className='mt-0.5'
+                    />
+                    <span>我知道密碼必須另行安全傳送，且收件者可改用自己的 AI 服務商。</span>
+                  </label>
+                </div>
+              )}
+            </fieldset>
+
+            {exportError && (
+              <p role='alert' className='text-sm text-red-200'>
+                {exportError}
+              </p>
+            )}
+
             <div className='rounded-xl border border-gray-700/40 bg-gray-800/30 p-4 text-sm'>
               <p className='mb-1 text-gray-300'>預估體積：{formatBytes(sizeBytes)}</p>
               {largeBundle && (
@@ -380,18 +563,18 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
 
             {(validation.errors.length > 0 || validation.warnings.length > 0) && (
               <div className='space-y-2' aria-label='自檢結果'>
-                {validation.errors.map(issue => (
+                {validation.errors.map((issue, index) => (
                   <div
-                    key={issue.code}
+                    key={`${issue.code}-${index}`}
                     className='rounded-lg border border-red-700/50 bg-red-900/20 p-3 text-sm text-red-200'
                   >
                     <p className='font-medium'>{issue.message}</p>
                     <p className='mt-1 text-xs opacity-80'>{issue.nextStep}</p>
                   </div>
                 ))}
-                {validation.warnings.map(issue => (
+                {validation.warnings.map((issue, index) => (
                   <div
-                    key={issue.code}
+                    key={`${issue.code}-${index}`}
                     className='rounded-lg border border-yellow-700/50 bg-yellow-900/20 p-3 text-sm text-yellow-200'
                   >
                     <p className='font-medium'>{issue.message}</p>

@@ -9,17 +9,27 @@ export interface EncryptedData {
   salt: string;
 }
 
+export interface PasswordEncryptionOptions {
+  additionalData?: string;
+  iterations?: number;
+}
+
 export class CryptoService {
   private static readonly ALGORITHM = 'AES-GCM';
   private static readonly KEY_LENGTH = 256;
   private static readonly IV_LENGTH = 12;
   private static readonly SALT_LENGTH = 16;
+  static readonly PBKDF2_ITERATIONS = 100_000;
   private static readonly DEFAULT_QUERY_PARAM = 'keys';
 
   /**
    * 從密碼生成加密金鑰
    */
-  private static async deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+  private static async deriveKey(
+    password: string,
+    salt: Uint8Array,
+    iterations = this.PBKDF2_ITERATIONS,
+  ): Promise<CryptoKey> {
     const encoder = new TextEncoder();
     const passwordBuffer = encoder.encode(password);
 
@@ -35,7 +45,7 @@ export class CryptoService {
       {
         name: 'PBKDF2',
         salt: salt.buffer as ArrayBuffer,
-        iterations: 100000,
+        iterations,
         hash: 'SHA-256',
       },
       keyMaterial,
@@ -50,34 +60,44 @@ export class CryptoService {
    */
   static async encryptPayload<T>(payload: T, password: string): Promise<string> {
     try {
+      const encrypted = await this.encryptPayloadWithPassword(payload, password);
+      return this.arrayBufferToBase64Url(
+        new TextEncoder().encode(JSON.stringify(encrypted)).buffer as ArrayBuffer,
+      );
+    } catch {
+      throw new Error('無法加密資料');
+    }
+  }
+
+  static async encryptPayloadWithPassword<T>(
+    payload: T,
+    password: string,
+    options: PasswordEncryptionOptions = {},
+  ): Promise<EncryptedData> {
+    try {
       const salt = crypto.getRandomValues(new Uint8Array(this.SALT_LENGTH));
       const iv = crypto.getRandomValues(new Uint8Array(this.IV_LENGTH));
-      const key = await this.deriveKey(password, salt);
-
-      const dataToEncrypt = JSON.stringify(payload);
-      const encoder = new TextEncoder();
-      const data = encoder.encode(dataToEncrypt);
-
+      const key = await this.deriveKey(password, salt, options.iterations);
+      const additionalData = options.additionalData
+        ? new TextEncoder().encode(options.additionalData)
+        : undefined;
+      const data = new TextEncoder().encode(JSON.stringify(payload));
       const encryptedBuffer = await crypto.subtle.encrypt(
         {
           name: this.ALGORITHM,
           iv,
+          ...(additionalData === undefined ? {} : { additionalData }),
         },
         key,
         data,
       );
 
-      const encrypted: EncryptedData = {
+      return {
         iv: this.arrayBufferToBase64Url(iv.buffer as ArrayBuffer),
         data: this.arrayBufferToBase64Url(encryptedBuffer),
         salt: this.arrayBufferToBase64Url(salt.buffer as ArrayBuffer),
       };
-
-      return this.arrayBufferToBase64Url(
-        new TextEncoder().encode(JSON.stringify(encrypted)).buffer as ArrayBuffer,
-      );
-    } catch (error) {
-      console.error('加密失敗:', error);
+    } catch {
       throw new Error('無法加密資料');
     }
   }
@@ -88,27 +108,38 @@ export class CryptoService {
   static async decryptPayload<T>(encryptedString: string, password: string): Promise<T> {
     try {
       const decodedData = new TextDecoder().decode(this.base64UrlToArrayBuffer(encryptedString));
-      const encrypted: EncryptedData = JSON.parse(decodedData);
+      const encrypted = JSON.parse(decodedData) as EncryptedData;
+      return await this.decryptPayloadWithPassword<T>(encrypted, password);
+    } catch {
+      throw new Error('無法解密資料，請檢查密碼是否正確');
+    }
+  }
 
+  static async decryptPayloadWithPassword<T>(
+    encrypted: EncryptedData,
+    password: string,
+    options: PasswordEncryptionOptions = {},
+  ): Promise<T> {
+    try {
       const salt = this.base64UrlToArrayBuffer(encrypted.salt);
       const iv = this.base64UrlToArrayBuffer(encrypted.iv);
       const data = this.base64UrlToArrayBuffer(encrypted.data);
-      const key = await this.deriveKey(password, new Uint8Array(salt));
-
+      const key = await this.deriveKey(password, new Uint8Array(salt), options.iterations);
+      const additionalData = options.additionalData
+        ? new TextEncoder().encode(options.additionalData)
+        : undefined;
       const decryptedBuffer = await crypto.subtle.decrypt(
         {
           name: this.ALGORITHM,
           iv,
+          ...(additionalData === undefined ? {} : { additionalData }),
         },
         key,
         data,
       );
 
-      const decoder = new TextDecoder();
-      const decryptedString = decoder.decode(decryptedBuffer);
-      return JSON.parse(decryptedString) as T;
-    } catch (error) {
-      console.error('解密失敗:', error);
+      return JSON.parse(new TextDecoder().decode(decryptedBuffer)) as T;
+    } catch {
       throw new Error('無法解密資料，請檢查密碼是否正確');
     }
   }

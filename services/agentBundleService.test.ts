@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentBundle, Assistant } from '../types';
 import {
+  AGENT_BUNDLE_ENCRYPTED_SCHEMA_VERSION,
   AGENT_BUNDLE_FORMAT,
   AGENT_BUNDLE_MAX_SIZE_BYTES,
   AGENT_BUNDLE_SCHEMA_VERSION,
@@ -107,6 +108,31 @@ describe('agentBundleService', () => {
     });
   });
 
+  it('parses and preserves encrypted v2 provider settings during import', () => {
+    const bundle = {
+      ...createBundle(),
+      manifest: { ...createBundle().manifest, schemaVersion: 2 as const },
+      encryptedProviderSettings: {
+        v: 1 as const,
+        algorithm: 'AES-GCM' as const,
+        kdf: { name: 'PBKDF2' as const, hash: 'SHA-256' as const, iterations: 100_000 },
+        salt: 'a'.repeat(22),
+        iv: 'b'.repeat(16),
+        ciphertext: 'c'.repeat(32),
+      },
+    };
+
+    const parsed = parseBundleText(JSON.stringify(bundle));
+    const imported = buildImportedBundle(parsed.bundle!);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.bundle).toMatchObject({ manifest: { schemaVersion: 2 } });
+    expect(imported.bundle).toMatchObject({
+      manifest: { schemaVersion: 2 },
+      encryptedProviderSettings: bundle.encryptedProviderSettings,
+    });
+  });
+
   describe('parseBundleText validation', () => {
     it('returns a typed corrupted-json issue for malformed JSON', () => {
       const result = parseBundleText('{ invalid json');
@@ -139,7 +165,7 @@ describe('agentBundleService', () => {
           createBundle({
             manifest: {
               ...createBundle().manifest,
-              schemaVersion: AGENT_BUNDLE_SCHEMA_VERSION + 1,
+              schemaVersion: AGENT_BUNDLE_ENCRYPTED_SCHEMA_VERSION + 1,
             } as never,
           }),
         ),

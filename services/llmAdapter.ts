@@ -233,6 +233,16 @@ export interface SessionProviderOverride {
   config: ProviderConfig;
 }
 
+export interface BundleProviderOverrideSource {
+  kind: 'bundle';
+  bundleId: string;
+  credentialFingerprint: string;
+}
+
+interface BundleProviderOverride extends SessionProviderOverride {
+  source: BundleProviderOverrideSource;
+}
+
 export const BUNDLE_SESSION_PROVIDER_STORAGE_KEY = 'educare_bundle_session_provider';
 
 export class ProviderManager {
@@ -240,6 +250,7 @@ export class ProviderManager {
   private providers: Map<ProviderType, LLMProvider> = new Map();
   private settings: ProviderSettings;
   private sessionProviderOverride: SessionProviderOverride | null;
+  private bundleProviderOverride: BundleProviderOverride | null = null;
 
   private constructor() {
     this.settings = this.loadSettings();
@@ -346,6 +357,114 @@ export class ProviderManager {
     }
   }
 
+  async setBundleProviderConfig(
+    source: BundleProviderOverrideSource,
+    type: ProviderType,
+    config: Partial<ProviderConfig>,
+  ): Promise<void> {
+    const provider = this.providers.get(type);
+    if (
+      !provider ||
+      source.kind !== 'bundle' ||
+      !source.bundleId ||
+      !source.credentialFingerprint
+    ) {
+      throw new Error('無法啟用隨附服務商設定。');
+    }
+
+    const previousOverride = this.bundleProviderOverride;
+    const configured = sanitizeProviderConfig(
+      DEFAULT_PROVIDER_SETTINGS.providers[type].config,
+      config,
+    );
+    this.bundleProviderOverride = {
+      source: { ...source },
+      type,
+      config: configured,
+    };
+
+    try {
+      if (provider.reinitialize) {
+        provider.reinitialize();
+      }
+      await provider.initialize(configured);
+    } catch {
+      this.bundleProviderOverride = null;
+      provider.reinitialize?.();
+
+      if (previousOverride) {
+        const previousProvider = this.providers.get(previousOverride.type);
+        try {
+          if (!previousProvider) {
+            throw new Error('Previous bundle provider is unavailable.');
+          }
+          previousProvider.reinitialize?.();
+          await previousProvider.initialize(previousOverride.config);
+          this.bundleProviderOverride = previousOverride;
+        } catch {
+          this.bundleProviderOverride = null;
+        }
+      }
+
+      throw new Error('無法啟用隨附服務商設定。');
+    }
+  }
+
+  getBundleProviderOverrideSource(): BundleProviderOverrideSource | null {
+    return this.bundleProviderOverride ? { ...this.bundleProviderOverride.source } : null;
+  }
+
+  matchesBundleProviderOverride(source: BundleProviderOverrideSource): boolean {
+    return (
+      source.kind === 'bundle' &&
+      this.bundleProviderOverride?.source.bundleId === source.bundleId &&
+      this.bundleProviderOverride.source.credentialFingerprint === source.credentialFingerprint
+    );
+  }
+
+  async clearBundleProviderConfig(source: BundleProviderOverrideSource): Promise<boolean> {
+    if (!this.matchesBundleProviderOverride(source)) {
+      return false;
+    }
+
+    const bundleProviderType = this.bundleProviderOverride!.type;
+    this.bundleProviderOverride = null;
+
+    const activeProviderType = this.sessionProviderOverride?.type ?? this.settings.activeProvider;
+    const configFor = (type: ProviderType): ProviderConfig =>
+      type === this.sessionProviderOverride?.type
+        ? this.sessionProviderOverride.config
+        : sanitizeProviderConfig(
+            DEFAULT_PROVIDER_SETTINGS.providers[type].config,
+            this.settings.providers[type]?.config,
+          );
+    const resetProvider = async (type: ProviderType) => {
+      const provider = this.providers.get(type);
+      if (!provider) {
+        return;
+      }
+
+      provider.reinitialize?.();
+      await provider.initialize(configFor(type));
+    };
+
+    try {
+      await resetProvider(bundleProviderType);
+    } catch {
+      // reinitialize above has already removed the bundle credential; continue restoring the active provider.
+    }
+
+    if (activeProviderType !== bundleProviderType) {
+      try {
+        await resetProvider(activeProviderType);
+      } catch {
+        // Cleanup must not reactivate the encrypted bundle credential when a fallback provider is unavailable.
+      }
+    }
+
+    return true;
+  }
+
   getSessionProviderConfig(): SessionProviderOverride | null {
     return this.sessionProviderOverride
       ? { ...this.sessionProviderOverride, config: { ...this.sessionProviderOverride.config } }
@@ -366,7 +485,11 @@ export class ProviderManager {
   }
 
   getActiveProvider(): LLMProvider | null {
-    return this.getProvider(this.sessionProviderOverride?.type ?? this.settings.activeProvider);
+    return this.getProvider(
+      this.bundleProviderOverride?.type ??
+        this.sessionProviderOverride?.type ??
+        this.settings.activeProvider,
+    );
   }
 
   setActiveProvider(type: ProviderType): void {
@@ -417,7 +540,10 @@ export class ProviderManager {
 
   isProviderEnabled(type: ProviderType): boolean {
     return (
-      this.sessionProviderOverride?.type === type || this.settings.providers[type]?.enabled || false
+      this.bundleProviderOverride?.type === type ||
+      this.sessionProviderOverride?.type === type ||
+      this.settings.providers[type]?.enabled ||
+      false
     );
   }
 

@@ -293,6 +293,12 @@ const BundleImportPage: React.FC<BundleImportPageProps> = ({ onClose, onOpenBund
                 協作包體積較大，手機貼上匯入可能不便，建議以檔案傳輸。
               </p>
             )}
+            {preview.bundle.manifest.schemaVersion === 2 && (
+              <p className='mb-4 rounded-lg border border-fuchsia-700/50 bg-fuchsia-900/20 p-3 text-xs text-fuchsia-100'>
+                此協作包包含受密碼保護的 AI
+                服務商設定。匯入後必須解鎖並確認使用，或明確選擇自己的服務商；此處不會顯示任何金鑰。
+              </p>
+            )}
             <div className='mb-4 space-y-2'>
               <h4 className='text-xs font-semibold uppercase tracking-wide text-gray-400'>
                 包內助理

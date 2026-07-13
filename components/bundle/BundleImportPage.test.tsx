@@ -173,6 +173,28 @@ describe('BundleImportPage', () => {
     expect(preview).not.toHaveTextContent('SECRET-PROMPT-MATH');
   });
 
+  it('shows only protected-state messaging for a v2 bundle without prompting for credentials', async () => {
+    const encryptedBundle: AgentBundle = {
+      ...validBundle(),
+      manifest: { ...validBundle().manifest, schemaVersion: 2 },
+      encryptedProviderSettings: {
+        v: 1,
+        algorithm: 'AES-GCM',
+        kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: 100000 },
+        salt: 'abcdefghijklmnopqrstuv',
+        iv: 'abcdefghijklmnop',
+        ciphertext: 'encrypted-settings',
+      },
+    };
+    bundleService.parseBundleText.mockReturnValue(resultWith(encryptedBundle, []));
+
+    render(<BundleImportPage onClose={() => undefined} onOpenBundle={() => undefined} />);
+    await pasteAndParse('protected');
+
+    expect(screen.getByText(/包含受密碼保護的 AI 服務商設定/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('協作包密碼')).not.toBeInTheDocument();
+  });
+
   it('activates a validated bundle by saving a namespaced record and navigating to ?bundle=', async () => {
     bundleService.parseBundleText.mockReturnValue(resultWith(validBundle(), []));
     const record: BundleRecord = {

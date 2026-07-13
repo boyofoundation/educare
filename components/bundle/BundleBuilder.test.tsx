@@ -1,19 +1,23 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import BundleBuilder from './BundleBuilder';
 import type { AgentBundle, Assistant } from '../../types';
 
-const { bundleService } = vi.hoisted(() => ({
+const { bundleService, credentials, providerManager } = vi.hoisted(() => ({
   bundleService: {
     buildAgentBundle: vi.fn(),
     validateBundle: vi.fn(),
     estimateBundleSize: vi.fn(() => 1024),
-    downloadBundleJson: vi.fn(() => 'name.educare-bundle.json'),
+    downloadBundleJson: vi.fn<(bundle: AgentBundle) => string>(() => 'name.educare-bundle.json'),
     AGENT_BUNDLE_LARGE_FILE_BYTES: 2 * 1024 * 1024,
   },
+  credentials: { encryptBundleProviderCredentials: vi.fn() },
+  providerManager: { getAvailableProviders: vi.fn(), getSettings: vi.fn() },
 }));
 
 vi.mock('../../services/agentBundleService', () => bundleService);
+vi.mock('../../services/bundleProviderCredentialsService', () => credentials);
+vi.mock('../../services/providerRegistry', () => ({ providerManager }));
 
 const makeAssistant = (overrides: Partial<Assistant> = {}): Assistant => ({
   id: overrides.id ?? 'a1',
@@ -75,6 +79,16 @@ describe('BundleBuilder', () => {
     vi.clearAllMocks();
     bundleService.estimateBundleSize.mockReturnValue(1024);
     bundleService.buildAgentBundle.mockReturnValue(bundleFixture());
+    providerManager.getAvailableProviders.mockReturnValue([{ type: 'gemini' }]);
+    providerManager.getSettings.mockReturnValue({ providers: {} });
+    credentials.encryptBundleProviderCredentials.mockResolvedValue({
+      v: 1,
+      algorithm: 'AES-GCM',
+      kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: 100000 },
+      salt: 'abcdefghijklmnopqrstuv',
+      iv: 'abcdefghijklmnop',
+      ciphertext: 'encrypted-settings',
+    });
   });
 
   it('requires at least two assistants before leaving the selection step', () => {
@@ -137,7 +151,7 @@ describe('BundleBuilder', () => {
     expect(screen.getByRole('button', { name: '匯出 JSON' })).toBeEnabled();
   });
 
-  it('downloads the bundle when export is ready', async () => {
+  it('keeps the default export at v1 without provider credentials', async () => {
     bundleService.validateBundle.mockReturnValue({
       bundle: bundleFixture(),
       errors: [],
@@ -157,7 +171,48 @@ describe('BundleBuilder', () => {
       fireEvent.click(screen.getByRole('button', { name: '匯出 JSON' }));
     });
 
-    expect(bundleService.downloadBundleJson).toHaveBeenCalledWith(bundleFixture());
+    expect(credentials.encryptBundleProviderCredentials).not.toHaveBeenCalled();
+    const [exportedBundle] = bundleService.downloadBundleJson.mock.calls[0];
+    expect(exportedBundle.manifest.schemaVersion).toBe(1);
+    expect(exportedBundle).not.toHaveProperty('encryptedProviderSettings');
+  });
+
+  it('keeps v1 as the default export and emits only encrypted provider settings when opted in', async () => {
+    bundleService.validateBundle.mockReturnValue({
+      bundle: bundleFixture(),
+      errors: [],
+      warnings: [],
+    });
+    const assistants = [
+      makeAssistant({ id: 'a1', name: '甲' }),
+      makeAssistant({ id: 'a2', name: '乙' }),
+    ];
+
+    await reachStep3(assistants);
+    fireEvent.change(screen.getByLabelText('協作包名稱'), { target: { value: '我的協作包' } });
+    fireEvent.click(screen.getByLabelText('隨附目前已設定 AI 服務商的加密設定'));
+    fireEvent.change(screen.getByLabelText('要隨附的已設定 AI 服務商'), {
+      target: { value: 'gemini' },
+    });
+    fireEvent.change(screen.getByLabelText('保護密碼'), { target: { value: 'a-shared-password' } });
+    fireEvent.change(screen.getByLabelText('確認密碼'), { target: { value: 'a-shared-password' } });
+    fireEvent.click(
+      screen.getByLabelText('我知道密碼必須另行安全傳送，且收件者可改用自己的 AI 服務商。'),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '匯出 JSON' }));
+    });
+
+    await waitFor(() =>
+      expect(credentials.encryptBundleProviderCredentials).toHaveBeenCalledOnce(),
+    );
+    expect(bundleService.downloadBundleJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        manifest: expect.objectContaining({ schemaVersion: 2 }),
+        encryptedProviderSettings: expect.objectContaining({ ciphertext: 'encrypted-settings' }),
+      }),
+    );
   });
 
   it('passes the in-memory bundle to preview without invoking download', async () => {
