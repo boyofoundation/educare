@@ -1,5 +1,6 @@
 import {
   ChatMessage,
+  MessageAttachment,
   RagChunk,
   type FinishReason,
   type HtmlProjectAgentTelemetryEvent,
@@ -56,6 +57,8 @@ export interface StreamChatParams {
   ragContext?: string;
   history: ChatMessage[];
   message: string;
+  /** 本回合使用者訊息附加的圖片(僅多模態模型)。 */
+  attachments?: MessageAttachment[];
   assistantId: string;
   sessionId?: string | null;
   activeProjectId?: string | null;
@@ -240,6 +243,7 @@ export const streamChat = async (params: StreamChatParams) => {
     ragContext,
     history,
     message,
+    attachments,
     assistantId,
     sessionId,
     activeProjectId,
@@ -651,6 +655,7 @@ export const streamChat = async (params: StreamChatParams) => {
       ragContext,
       history,
       message,
+      attachments,
       tools: tools.length > 0 ? tools : undefined,
       executeTool: tools.length > 0 ? executeTool : undefined,
       signal,

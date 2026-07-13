@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-/* global FileReader, ProgressEvent, HTMLSelectElement, Blob */
+/* global ProgressEvent, HTMLSelectElement, Blob */
 import { Assistant, RagChunk } from '../../../types';
 import { vi } from 'vitest';
 import React from 'react';

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import {
   ChatMessage,
   ChatSession,
+  MessageAttachment,
   RagChunk,
   RouteProposal,
   SubagentRunRecord,
@@ -38,6 +39,14 @@ export interface ChatInputProps {
   isRunning?: boolean;
   /** G5: 使用者按下「停止」鈕的回呼 (會 abort 進行中的 controller)。 */
   onStop?: () => void;
+  /** 多模態:作用中模型支援圖片輸入時為 true,顯示上傳入口並啟用貼上圖片。 */
+  imageInputEnabled?: boolean;
+  /** 多模態:待送出的圖片附件(由父層持有 state)。 */
+  attachments?: MessageAttachment[];
+  /** 多模態:使用者選擇/貼上圖片檔時的回呼。 */
+  onAddAttachmentFiles?: (files: File[]) => void;
+  /** 多模態:移除待送出附件。 */
+  onRemoveAttachment?: (index: number) => void;
 }
 
 export interface ChatContainerProps {

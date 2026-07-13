@@ -4,9 +4,31 @@ import { UserIcon, GeminiIcon } from '../ui/Icons';
 import AgentActivityTimeline from './AgentActivityTimeline';
 import MarkdownContent from './MarkdownContent';
 import { AppContext } from '../core/useAppContext';
-import type { RouteProposal } from '../../types';
+import { attachmentToDataUrl } from '../../services/imageAttachmentService';
+import type { MessageAttachment, RouteProposal } from '../../types';
 
 const EMPTY_MESSAGE_FALLBACK = '（本次回覆沒有內容）';
+
+const AttachmentImageGrid: React.FC<{ attachments: MessageAttachment[] }> = ({ attachments }) => {
+  const images = attachments.filter(attachment => attachment.kind === 'image');
+  if (images.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className='mb-3 flex flex-wrap gap-2' aria-label='訊息附加圖片'>
+      {images.map((attachment, index) => (
+        <img
+          key={`${attachment.name ?? 'image'}-${index}`}
+          src={attachmentToDataUrl(attachment)}
+          alt={attachment.name ?? `附加圖片 ${index + 1}`}
+          loading='lazy'
+          className='max-h-48 max-w-full rounded-xl border border-white/20 object-contain'
+        />
+      ))}
+    </div>
+  );
+};
 
 const formatTimestamp = (timestamp?: number): string | null => {
   if (typeof timestamp !== 'number') {
@@ -220,9 +242,12 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
           </div>
           <div className='group flex min-w-0 flex-col items-end'>
             <div className='w-full max-w-[90%] rounded-2xl rounded-br-md bg-gradient-to-br from-cyan-500 to-blue-600 px-5 py-4 text-white shadow-lg md:max-w-[70ch] md:px-6'>
-              <div className='text-base leading-7'>
-                <MarkdownContent content={displayContent} />
-              </div>
+              {message.attachments && <AttachmentImageGrid attachments={message.attachments} />}
+              {(message.content.trim() !== '' || !message.attachments?.length) && (
+                <div className='text-base leading-7'>
+                  <MarkdownContent content={displayContent} />
+                </div>
+              )}
             </div>
             {actionRow}
           </div>

@@ -289,9 +289,39 @@ export class GeminiProvider implements LLMProvider {
       config: this.buildChatConfig(params, finalSystemPrompt),
       history: truncatedHistory.map(msg => ({
         role: msg.role,
-        parts: [{ text: msg.content }],
+        parts: [
+          { text: msg.content },
+          ...(msg.attachments ?? [])
+            .filter(attachment => attachment.kind === 'image')
+            .map(attachment => ({
+              inlineData: {
+                mimeType: attachment.mimeType,
+                data: attachment.data,
+              },
+            })),
+        ],
       })),
     });
+  }
+
+  /** 本回合使用者訊息:有圖片附件時組成 multi-part(文字 + inlineData 圖片)。 */
+  private buildUserMessage(params: ChatParams): string | Part[] {
+    const imageAttachments = (params.attachments ?? []).filter(
+      attachment => attachment.kind === 'image',
+    );
+    if (imageAttachments.length === 0) {
+      return params.message;
+    }
+
+    return [
+      { text: params.message },
+      ...imageAttachments.map(attachment => ({
+        inlineData: {
+          mimeType: attachment.mimeType,
+          data: attachment.data,
+        },
+      })),
+    ];
   }
 
   private getResponseParts(response: GenerateContentResponse): Part[] {
@@ -375,7 +405,7 @@ export class GeminiProvider implements LLMProvider {
 
       if (params.tools?.length && params.executeTool) {
         let response = await chat.sendMessage({
-          message: params.message,
+          message: this.buildUserMessage(params),
           config: this.buildChatConfig(params, finalSystemPrompt),
         });
         let toolRoundCount = 0;
@@ -575,7 +605,7 @@ export class GeminiProvider implements LLMProvider {
       }
 
       const stream = await chat.sendMessageStream({
-        message: params.message,
+        message: this.buildUserMessage(params),
         config: this.buildChatConfig(params, finalSystemPrompt),
       });
       let aggregatedResponse: GenerateContentResponse | null = null;

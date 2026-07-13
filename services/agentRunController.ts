@@ -10,6 +10,7 @@ import {
   type HtmlProjectTodoSummary,
   type HtmlProjectToolPackName,
   type HtmlProjectWorkspaceUpdate,
+  type MessageAttachment,
   type MessageCitation,
   type RagChunk,
   type SubagentActivityUpdate,
@@ -123,6 +124,8 @@ export interface AgentRunControllerOptions {
   systemPrompt: string;
   history: ChatMessage[];
   message: string;
+  /** 首回合使用者訊息附加的圖片(僅多模態模型;續跑回合不重送)。 */
+  attachments?: MessageAttachment[];
   ragContext?: string;
   knowledgeChunks?: RagChunk[];
   /** G9 feature flag — when false, run EXACTLY ONE turn (legacy single-turn behavior). */
@@ -505,6 +508,7 @@ export class AgentRunController {
             ragContext: gatheredContext?.ragContext ?? options.ragContext,
             history,
             message: messageForTurn,
+            attachments: isContinuation ? undefined : options.attachments,
             assistantId: options.assistantId,
             sessionId: options.sessionId,
             activeProjectId: effectiveProjectId,

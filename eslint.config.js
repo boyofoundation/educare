@@ -59,6 +59,10 @@ export default [
         URLSearchParams: 'readonly',
         URL: 'readonly',
         File: 'readonly',
+        // 圖片附件處理 (imageAttachmentService)
+        FileReader: 'readonly',
+        Image: 'readonly',
+        HTMLImageElement: 'readonly',
         HTMLInputElement: 'readonly',
         HTMLDivElement: 'readonly',
         HTMLTextAreaElement: 'readonly',

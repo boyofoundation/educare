@@ -22,9 +22,13 @@ interface OpenAICompatibleToolCall {
   };
 }
 
+type OpenAICompatibleContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 interface OpenAICompatibleMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | OpenAICompatibleContentPart[] | null;
   tool_calls?: OpenAICompatibleToolCall[];
   tool_call_id?: string;
 }
@@ -131,6 +135,24 @@ const buildFinalSystemPrompt = (params: ChatParams): string => {
   return ragPreamble ? `${params.systemPrompt}\n\n${ragPreamble}` : params.systemPrompt;
 };
 
+const buildUserContent = (
+  text: string,
+  attachments: ChatParams['attachments'],
+): string | OpenAICompatibleContentPart[] => {
+  const imageParts = (attachments ?? [])
+    .filter(attachment => attachment.kind === 'image')
+    .map(attachment => ({
+      type: 'image_url' as const,
+      image_url: { url: `data:${attachment.mimeType};base64,${attachment.data}` },
+    }));
+
+  if (imageParts.length === 0) {
+    return text;
+  }
+
+  return [...(text ? [{ type: 'text' as const, text }] : []), ...imageParts];
+};
+
 const buildMessages = (params: ChatParams, systemPrompt: string): OpenAICompatibleMessage[] => {
   const MAX_HISTORY_MESSAGES = 20;
   const truncatedHistory =
@@ -142,9 +164,9 @@ const buildMessages = (params: ChatParams, systemPrompt: string): OpenAICompatib
     { role: 'system', content: systemPrompt },
     ...truncatedHistory.map(msg => ({
       role: msg.role === 'model' ? ('assistant' as const) : ('user' as const),
-      content: msg.content,
+      content: msg.role === 'user' ? buildUserContent(msg.content, msg.attachments) : msg.content,
     })),
-    { role: 'user', content: params.message },
+    { role: 'user', content: buildUserContent(params.message, params.attachments) },
   ];
 };
 
@@ -497,10 +519,14 @@ export async function* streamOpenAICompatibleChat(
         };
       }
 
+      // API 回應的 assistant content 一律是字串;multi-part 只出現在送出的 user 訊息。
+      const assistantText =
+        typeof assistantMessage?.content === 'string' ? assistantMessage.content : '';
+
       if (!assistantMessage?.tool_calls?.length) {
-        if (assistantMessage?.content) {
+        if (assistantText) {
           yield {
-            text: assistantMessage.content,
+            text: assistantText,
             isComplete: false,
             metadata: {
               model,
@@ -529,9 +555,9 @@ export async function* streamOpenAICompatibleChat(
       // ③ Incremental content yield: if the assistant message has both content
       // and tool_calls, yield the text immediately so the user sees partial
       // progress before the tool round blocks on execution.
-      if (assistantMessage.content) {
+      if (assistantText) {
         yield {
-          text: assistantMessage.content,
+          text: assistantText,
           isComplete: false,
           metadata: {
             model,

@@ -97,14 +97,21 @@ export class OllamaNativeProvider implements LLMProvider {
 
     const model = params.model || this.config.model || 'llama3.2:latest';
 
-    // Build Ollama messages format
+    // Build Ollama messages format (vision models take base64 images via `images`)
+    const toImages = (attachments?: { kind: string; data: string }[]): string[] | undefined => {
+      const images = (attachments ?? [])
+        .filter(attachment => attachment.kind === 'image')
+        .map(attachment => attachment.data);
+      return images.length > 0 ? images : undefined;
+    };
     const messages = [
       { role: 'system', content: finalSystemPrompt },
       ...truncatedHistory.map(msg => ({
         role: msg.role === 'model' ? 'assistant' : msg.role,
         content: msg.content,
+        images: msg.role === 'user' ? toImages(msg.attachments) : undefined,
       })),
-      { role: 'user', content: params.message },
+      { role: 'user', content: params.message, images: toImages(params.attachments) },
     ];
 
     try {

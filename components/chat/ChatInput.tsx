@@ -1,5 +1,6 @@
 import React from 'react';
 import { ChatInputProps } from './types';
+import { attachmentToDataUrl } from '../../services/imageAttachmentService';
 
 const MAX_TEXTAREA_HEIGHT_PX = 128;
 const MIN_TEXTAREA_HEIGHT_PX = 48;
@@ -15,9 +16,38 @@ const ChatInput: React.FC<ChatInputProps> = ({
   isWorkspaceOpen: _isWorkspaceOpen = false,
   isRunning = false,
   onStop,
+  imageInputEnabled = false,
+  attachments = [],
+  onAddAttachmentFiles,
+  onRemoveAttachment,
 }) => {
   const [isComposing, setIsComposing] = React.useState(false);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const inputLocked = isLoading || disabled || isRunning;
+  const canSend = !inputLocked && (value.trim() !== '' || attachments.length > 0);
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!imageInputEnabled || inputLocked || !onAddAttachmentFiles) {
+      return;
+    }
+    const imageFiles = Array.from(e.clipboardData.files).filter(file =>
+      file.type.startsWith('image/'),
+    );
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      onAddAttachmentFiles(imageFiles);
+    }
+  };
+
+  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length > 0) {
+      onAddAttachmentFiles?.(files);
+    }
+    // 允許重複選同一個檔案。
+    e.target.value = '';
+  };
 
   const syncTextareaHeight = React.useCallback(() => {
     const textarea = textareaRef.current;
@@ -55,13 +85,75 @@ const ChatInput: React.FC<ChatInputProps> = ({
   return (
     <div className='border-t border-gray-700/30 bg-gradient-to-r from-gray-800/90 to-gray-850/90 px-4 py-4 backdrop-blur-sm md:px-6 md:py-5'>
       <div className='mx-auto max-w-4xl'>
+        {attachments.length > 0 && (
+          <div className='mb-3 flex flex-wrap gap-2' aria-label='待送出的圖片附件'>
+            {attachments.map((attachment, index) => (
+              <div
+                key={`${attachment.name ?? 'image'}-${index}`}
+                className='group relative h-16 w-16 overflow-hidden rounded-xl border border-gray-600/50 bg-gray-700/40'
+              >
+                <img
+                  src={attachmentToDataUrl(attachment)}
+                  alt={attachment.name ?? `附件圖片 ${index + 1}`}
+                  className='h-full w-full object-cover'
+                />
+                <button
+                  type='button'
+                  onClick={() => onRemoveAttachment?.(index)}
+                  disabled={inputLocked}
+                  className='absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-gray-900/80 text-xs text-gray-200 transition hover:bg-rose-600 hover:text-white focus:outline-none focus:ring-2 focus:ring-rose-400'
+                  aria-label={`移除圖片 ${attachment.name ?? index + 1}`}
+                  title='移除圖片'
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className='flex items-end gap-3 md:gap-4'>
+          {imageInputEnabled && (
+            <>
+              <input
+                ref={fileInputRef}
+                type='file'
+                accept='image/png,image/jpeg,image/webp,image/gif'
+                multiple
+                className='hidden'
+                onChange={handleFilePick}
+                aria-hidden='true'
+                tabIndex={-1}
+              />
+              <button
+                type='button'
+                onClick={() => fileInputRef.current?.click()}
+                disabled={inputLocked}
+                className={`flex min-h-12 min-w-12 items-center justify-center rounded-2xl border-2 px-3 py-3 text-gray-300 shadow-lg transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+                  inputLocked
+                    ? 'cursor-not-allowed border-gray-600/30 bg-gray-600/40 opacity-60'
+                    : 'border-gray-600/40 bg-gray-700/60 hover:border-cyan-500/60 hover:text-cyan-300'
+                }`}
+                aria-label='上傳圖片'
+                title='上傳圖片(也可直接貼上)'
+              >
+                <svg className='h-5 w-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                  <path
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    strokeWidth={2}
+                    d='M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z'
+                  />
+                </svg>
+              </button>
+            </>
+          )}
           <div className='relative flex-1'>
             <textarea
               ref={textareaRef}
               value={value}
               onChange={e => onChange(e.target.value)}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
               placeholder='輸入您的訊息...'
@@ -87,9 +179,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
           </div>
           <button
             onClick={onSend}
-            disabled={isLoading || !value.trim() || disabled || isRunning}
+            disabled={!canSend}
             className={`relative flex min-h-12 min-w-12 items-center justify-center rounded-2xl border px-4 py-3 text-base font-semibold text-white shadow-lg transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 focus:ring-offset-gray-800 md:min-w-[108px] md:px-7 ${
-              isLoading || !value.trim() || disabled || isRunning
+              !canSend
                 ? 'cursor-not-allowed border-gray-600/30 bg-gray-600/50'
                 : 'border-cyan-500/40 bg-cyan-600 hover:bg-cyan-500'
             } ${isRunning ? 'hidden' : ''}`}

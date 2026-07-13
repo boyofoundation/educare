@@ -19,6 +19,16 @@ import { htmlProjectStore } from '../../services/htmlProjectStore';
 import { applyTokenUsageToSession } from '../../services/sessionTokenUsage';
 import { isErrorMessage, isSyntheticMessage } from '../../services/conversationUtils';
 import { classifyChatError } from '../../services/chatErrorService';
+import {
+  activeModelSupportsImageInput,
+  resolveActiveModelImageSupport,
+} from '../../services/modelCapabilities';
+import {
+  fileToImageAttachment,
+  ImageAttachmentError,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from '../../services/imageAttachmentService';
+import { PROVIDER_SETTINGS_CHANGED_EVENT } from '../../services/llmAdapter';
 import { bundleStrings } from '../bundle/bundleStrings';
 import { useStickToBottom } from '../../hooks/useStickToBottom';
 import type {
@@ -26,6 +36,7 @@ import type {
   AgentRunState,
   ChatMessage,
   ChatSession,
+  MessageAttachment,
   SubagentRunRecord,
   ToolCallRecord,
   RouteProposal,
@@ -114,6 +125,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const actions = appContext?.actions ?? null;
   const setAgentRunState = actions?.setAgentRunState;
   const [input, setInput] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [imageInputSupported, setImageInputSupported] = useState(() =>
+    activeModelSupportsImageInput(),
+  );
   const [streamingResponse, setStreamingResponse] = useState('');
   const [pendingEmptyResponseNotice, setPendingEmptyResponseNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -153,6 +169,66 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   useEffect(() => {
     isThinkingRef.current = isThinking;
   }, [isThinking]);
+
+  // 多模態:作用中 provider/model 支援圖片輸入時,自動開啟上傳入口;
+  // 設定變更(切換 provider 或 model)後即時重新偵測。先以同步 pattern
+  // 近似值立即更新,再以 provider API 實查結果覆寫(OpenRouter/Ollama/
+  // LM Studio 可實查;其餘 provider 官方端點無能力欄位,維持 pattern)。
+  useEffect(() => {
+    let disposed = false;
+    let refreshSeq = 0;
+    const refreshImageInputSupport = () => {
+      const seq = ++refreshSeq;
+      setImageInputSupported(activeModelSupportsImageInput());
+      void resolveActiveModelImageSupport().then(supported => {
+        // 只採納最新一次 refresh 的結果,避免快慢查詢交錯覆寫。
+        if (!disposed && seq === refreshSeq) {
+          setImageInputSupported(supported);
+        }
+      });
+    };
+    refreshImageInputSupport();
+    window.addEventListener(PROVIDER_SETTINGS_CHANGED_EVENT, refreshImageInputSupport);
+    return () => {
+      disposed = true;
+      window.removeEventListener(PROVIDER_SETTINGS_CHANGED_EVENT, refreshImageInputSupport);
+    };
+  }, []);
+
+  const handleAddAttachmentFiles = async (files: File[]) => {
+    setAttachmentError(null);
+    const availableSlots = MAX_ATTACHMENTS_PER_MESSAGE - pendingAttachments.length;
+    if (availableSlots <= 0) {
+      setAttachmentError(`一則訊息最多附加 ${MAX_ATTACHMENTS_PER_MESSAGE} 張圖片。`);
+      return;
+    }
+
+    const selectedFiles = files.slice(0, availableSlots);
+    const converted: MessageAttachment[] = [];
+    let conversionError: string | null =
+      files.length > availableSlots
+        ? `一則訊息最多附加 ${MAX_ATTACHMENTS_PER_MESSAGE} 張圖片，已略過多餘的檔案。`
+        : null;
+
+    for (const file of selectedFiles) {
+      try {
+        converted.push(await fileToImageAttachment(file));
+      } catch (error) {
+        conversionError =
+          error instanceof ImageAttachmentError ? error.message : '圖片處理失敗，請改用其他圖片。';
+      }
+    }
+
+    if (converted.length > 0) {
+      setPendingAttachments(prev => [...prev, ...converted].slice(0, MAX_ATTACHMENTS_PER_MESSAGE));
+    }
+    setAttachmentError(conversionError);
+  };
+
+  const handleRemoveAttachment = (index: number) => {
+    setPendingAttachments(prev => prev.filter((_, itemIndex) => itemIndex !== index));
+    setAttachmentError(null);
+  };
 
   const flushStreamingBuffer = useCallback(() => {
     if (streamingFlushFrameRef.current !== null) {
@@ -477,11 +553,13 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
   const executeRun = async ({
     message,
+    attachments,
     displaySession,
     historyMessages,
     resumeCheckpoint,
   }: {
     message: string;
+    attachments?: MessageAttachment[];
     displaySession: typeof currentSession;
     historyMessages: ChatMessage[];
     resumeCheckpoint?: AgentRunCheckpoint;
@@ -549,6 +627,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         systemPrompt: enhancedSystemPrompt,
         history: chatHistory,
         message,
+        attachments,
         knowledgeChunks: ragChunks,
         agentHarnessEnabled: resumeCheckpoint?.agentHarnessEnabled ?? projectEditingActive,
         subagentDelegationEnabled:
@@ -780,6 +859,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       );
       // Retain the unsent user input so the recipient can edit and retry.
       setInput(message);
+      if (attachments?.length) {
+        setPendingAttachments(attachments);
+      }
       const finalSession = {
         ...baseSession,
         messages: [...baseSession.messages, errorMessage],
@@ -801,12 +883,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading) {
+    const attachments = imageInputSupported ? pendingAttachments : [];
+    if ((!input.trim() && attachments.length === 0) || isLoading) {
       return;
     }
 
     const userMessage = input.trim();
     setInput('');
+    setPendingAttachments([]);
+    setAttachmentError(null);
     setPendingEmptyResponseNotice(null);
 
     if (interruptedCheckpoint) {
@@ -820,6 +905,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       role: 'user',
       content: userMessage,
       timestamp: Date.now(),
+      ...(attachments.length > 0 ? { attachments } : {}),
     };
     const updatedSession = {
       ...baseSession,
@@ -828,6 +914,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
     await executeRun({
       message: userMessage,
+      attachments: attachments.length > 0 ? attachments : undefined,
       displaySession: updatedSession,
       historyMessages: baseSession.messages.filter(messageItem => !isSyntheticMessage(messageItem)),
     });
@@ -1156,6 +1243,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         </button>
       )}
 
+      {attachmentError && (
+        <div
+          className='border-t border-amber-500/20 bg-amber-500/10 px-4 py-2 text-sm text-amber-200 md:px-6'
+          role='alert'
+        >
+          {attachmentError}
+        </div>
+      )}
+
       <ChatInput
         value={input}
         onChange={setInput}
@@ -1165,6 +1261,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         isWorkspaceOpen={_isWorkspaceOpen}
         isRunning={isRunning}
         onStop={handleStop}
+        imageInputEnabled={imageInputSupported}
+        attachments={pendingAttachments}
+        onAddAttachmentFiles={files => void handleAddAttachmentFiles(files)}
+        onRemoveAttachment={handleRemoveAttachment}
       />
     </div>
   );

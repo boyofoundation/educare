@@ -1,4 +1,4 @@
-import { ChatMessage, FinishReason } from '../types';
+import { ChatMessage, FinishReason, MessageAttachment } from '../types';
 
 export interface ProviderUsageMetadata {
   source: 'api' | 'unavailable';
@@ -64,6 +64,12 @@ export interface ChatParams {
   ragContext?: string;
   history: ChatMessage[];
   message: string;
+  /**
+   * 本回合使用者訊息附加的圖片。僅在作用中模型支援多模態時由 UI 傳入;
+   * 各 provider 將其轉為對應 API 的圖片內容格式。歷史訊息中的圖片
+   * 由 history 內各 ChatMessage 的 attachments 欄位攜帶。
+   */
+  attachments?: MessageAttachment[];
   model?: string;
   temperature?: number;
   maxTokens?: number;
@@ -245,6 +251,15 @@ interface BundleProviderOverride extends SessionProviderOverride {
 
 export const BUNDLE_SESSION_PROVIDER_STORAGE_KEY = 'educare_bundle_session_provider';
 
+/** Provider 設定(active provider / model / config)變更時發出的 window 事件。 */
+export const PROVIDER_SETTINGS_CHANGED_EVENT = 'educare:provider-settings-changed';
+
+const emitProviderSettingsChanged = (): void => {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(PROVIDER_SETTINGS_CHANGED_EVENT));
+  }
+};
+
 export class ProviderManager {
   private static instance: ProviderManager;
   private providers: Map<ProviderType, LLMProvider> = new Map();
@@ -348,6 +363,7 @@ export class ProviderManager {
       provider.reinitialize();
     }
     await provider.initialize(configured);
+    emitProviderSettingsChanged();
   }
 
   clearSessionProviderConfig(): void {
@@ -355,6 +371,7 @@ export class ProviderManager {
     if (typeof sessionStorage !== 'undefined') {
       sessionStorage.removeItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY);
     }
+    emitProviderSettingsChanged();
   }
 
   async setBundleProviderConfig(
@@ -388,6 +405,7 @@ export class ProviderManager {
         provider.reinitialize();
       }
       await provider.initialize(configured);
+      emitProviderSettingsChanged();
     } catch {
       this.bundleProviderOverride = null;
       provider.reinitialize?.();
@@ -462,6 +480,7 @@ export class ProviderManager {
       }
     }
 
+    emitProviderSettingsChanged();
     return true;
   }
 
@@ -473,6 +492,24 @@ export class ProviderManager {
 
   saveSettings(): void {
     localStorage.setItem('providerSettings', JSON.stringify(this.settings));
+    emitProviderSettingsChanged();
+  }
+
+  /**
+   * 目前作用中的 provider、model 與 config(依 bundle override → session
+   * override → 全域設定的優先序解析)。用於模型能力偵測(如多模態圖片輸入):
+   * config 提供本地 provider 能力查詢所需的 baseUrl。
+   */
+  getActiveModelInfo(): { provider: ProviderType; model: string; config: ProviderConfig } | null {
+    const activeOverride = this.bundleProviderOverride ?? this.sessionProviderOverride;
+    const providerType = activeOverride?.type ?? this.settings.activeProvider;
+    const config = activeOverride?.config ?? this.settings.providers[providerType]?.config;
+    const model =
+      typeof config?.model === 'string' && config.model
+        ? config.model
+        : (DEFAULT_PROVIDER_SETTINGS.providers[providerType]?.config.model ?? '');
+
+    return model ? { provider: providerType, model, config: { ...config } } : null;
   }
 
   registerProvider(type: ProviderType, provider: LLMProvider): void {

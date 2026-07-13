@@ -210,9 +210,26 @@ export interface ToolCallRecord {
   startedAt: number;
 }
 
+/**
+ * 多模態訊息附件。目前僅支援圖片；data 為不含 data: 前綴的 base64 字串,
+ * 隨 ChatMessage 一併存入 IndexedDB(上傳時已在前端縮圖壓縮)。
+ */
+export interface MessageAttachment {
+  kind: 'image';
+  mimeType: string;
+  /** base64 編碼內容(不含 `data:...;base64,` 前綴)。 */
+  data: string;
+  name?: string;
+}
+
 export interface ChatMessage {
   role: 'user' | 'model';
   content: string;
+  /**
+   * 使用者附加的圖片(僅在 provider 模型支援多模態時可上傳)。
+   * 舊資料沒有此欄位，UI 與 provider 需優雅退化。
+   */
+  attachments?: MessageAttachment[];
   /**
    * 訊息建立時間 (epoch ms)。舊資料可能沒有此欄位，UI 需優雅退化。
    */

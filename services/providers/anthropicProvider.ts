@@ -38,16 +38,38 @@ interface AnthropicMessageResponse {
   stop_reason?: string | null;
 }
 
+interface AnthropicImageBlock {
+  type: 'image';
+  source: {
+    type: 'base64';
+    media_type: string;
+    data: string;
+  };
+}
+
 interface AnthropicRequestMessage {
   role: 'user' | 'assistant';
   content:
     | string
     | Array<
         | { type: 'text'; text: string }
+        | AnthropicImageBlock
         | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
         | { type: 'tool_result'; tool_use_id: string; content: string }
       >;
 }
+
+const buildAnthropicImageBlocks = (attachments: ChatParams['attachments']): AnthropicImageBlock[] =>
+  (attachments ?? [])
+    .filter(attachment => attachment.kind === 'image')
+    .map(attachment => ({
+      type: 'image' as const,
+      source: {
+        type: 'base64' as const,
+        media_type: attachment.mimeType,
+        data: attachment.data,
+      },
+    }));
 
 interface RepeatedRecoverableErrorEntry {
   toolName: string;
@@ -122,12 +144,26 @@ export class AnthropicProvider implements LLMProvider {
         ? params.history.slice(-MAX_HISTORY_MESSAGES)
         : params.history;
 
+    const toContent = (
+      text: string,
+      attachments: ChatParams['attachments'],
+    ): AnthropicRequestMessage['content'] => {
+      const imageBlocks = buildAnthropicImageBlocks(attachments);
+      if (imageBlocks.length === 0) {
+        return text;
+      }
+      return [...imageBlocks, ...(text ? [{ type: 'text' as const, text }] : [])];
+    };
+
     return [
       ...truncatedHistory.map(message => ({
         role: message.role === 'model' ? ('assistant' as const) : ('user' as const),
-        content: message.content,
+        content:
+          message.role === 'user'
+            ? toContent(message.content, message.attachments)
+            : message.content,
       })),
-      { role: 'user', content: params.message },
+      { role: 'user', content: toContent(params.message, params.attachments) },
     ];
   }
 
