@@ -48,6 +48,7 @@ const getMath = (): Promise<MathJsStatic> => {
     mathPromise = import('mathjs').then(({ all, create }) => {
       const math = create(all, {});
       const safeEvaluate = math.evaluate.bind(math);
+      const safeParse = math.parse.bind(math);
       const blocked = (name: string): never => {
         throw new Error(`${name} is disabled in the compute sandbox.`);
       };
@@ -64,7 +65,7 @@ const getMath = (): Promise<MathJsStatic> => {
       );
 
       // Retain the private evaluator captured before public escape hatches were disabled.
-      return Object.assign(math, { __safeEvaluate: safeEvaluate });
+      return Object.assign(math, { __safeEvaluate: safeEvaluate, __safeParse: safeParse });
     });
   }
 
@@ -73,6 +74,7 @@ const getMath = (): Promise<MathJsStatic> => {
 
 type SandboxedMath = MathJsStatic & {
   __safeEvaluate(expression: string, scope?: Record<string, number>): unknown;
+  __safeParse(expression: string): unknown;
 };
 
 const invalidInput = (error: string): Extract<ComputeResult, { ok: false }> => ({
@@ -109,21 +111,28 @@ const validateScope = (
   return numericScope;
 };
 
+const hasImplicitMultiplication = (value: unknown, seen = new WeakSet<object>()): boolean => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+
+  const node = value as { type?: unknown; implicit?: unknown };
+  if (node.type === 'OperatorNode' && node.implicit === true) {
+    return true;
+  }
+
+  return Object.values(value as Record<string, unknown>).some(child =>
+    hasImplicitMultiplication(child, seen),
+  );
+};
+
 export const executeCompute = async (args: ComputeArgs): Promise<ComputeResult> => {
   if (typeof args.expr !== 'string' || args.expr.trim().length === 0) {
     return invalidInput('expr must be a non-empty string.');
-  }
-
-  // math.js accepts implicit multiplication, but the tool contract intentionally
-  // requires explicit `*` so tool callers receive predictable syntax feedback.
-  if (/\d\s*(?:[A-DF-Za-df-z_]|[eE](?![+-]?\d)|\()/.test(args.expr)) {
-    return {
-      ok: false,
-      recoverable: true,
-      code: 'compute-evaluation-failed',
-      error: 'Implicit multiplication is not supported; use * explicitly (for example, 2*x).',
-      summary: 'Implicit multiplication is not supported; use * explicitly (for example, 2*x).',
-    };
   }
 
   const scope = validateScope(args.scope);
@@ -133,6 +142,16 @@ export const executeCompute = async (args: ComputeArgs): Promise<ComputeResult> 
 
   try {
     const math = (await getMath()) as SandboxedMath;
+    if (hasImplicitMultiplication(math.__safeParse(args.expr))) {
+      return {
+        ok: false,
+        recoverable: true,
+        code: 'compute-evaluation-failed',
+        error: 'Implicit multiplication is not supported; use * explicitly (for example, 2*x).',
+        summary: 'Implicit multiplication is not supported; use * explicitly (for example, 2*x).',
+      };
+    }
+
     const result = math.__safeEvaluate(args.expr, scope);
     const formatted = math.format(result, { precision: 14 });
 

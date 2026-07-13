@@ -98,6 +98,14 @@ vi.mock('../../../services/htmlProjectStore', () => ({
   },
 }));
 
+vi.mock('../../../services/geometryRenderer', () => ({
+  renderGeometryDoc: vi.fn().mockResolvedValue({
+    destroy: vi.fn(),
+    errors: [],
+    warnings: [],
+  }),
+}));
+
 vi.mock('../../../services/ragCacheManagerV2', () => ({
   ragCacheManagerV2: {
     performCachedRagQuery: mockPerformCachedRagQuery,
@@ -215,6 +223,7 @@ const buildRunResult = (
   finalHistory: [],
   historyDelta: [],
   citations: overrides.citations,
+  geometryBoards: overrides.geometryBoards,
   tokenInfo: {
     promptTokenCount: 10,
     candidatesTokenCount: 15,
@@ -1162,6 +1171,47 @@ describe('ChatContainer', () => {
       '',
       expect.anything(),
     );
+  });
+
+  it('persists a model message when an empty response includes geometry boards', async () => {
+    // Arrange
+    const onNewMessage = vi.fn().mockResolvedValue(undefined);
+    const geometryBoards = [
+      {
+        id: 'geometry-1',
+        title: 'Unit circle',
+        doc: {
+          title: 'Unit circle',
+          boundingbox: [-2, 2, 2, -2] as [number, number, number, number],
+          objects: [],
+        },
+        computedPoints: [],
+      },
+    ];
+    mockControllerRun.mockResolvedValueOnce(buildRunResult('', { geometryBoards }));
+
+    render(<ChatContainer {...defaultProps} onNewMessage={onNewMessage} />);
+
+    // Act
+    await sendMessage('Draw a unit circle');
+
+    // Assert
+    await waitFor(() => {
+      expect(onNewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'model',
+              content: '',
+              geometryBoards,
+            }),
+          ]),
+        }),
+        'Draw a unit circle',
+        '',
+        expect.anything(),
+      );
+    });
   });
 
   it('keeps the checkpoint when final session persistence fails after a completed run', async () => {

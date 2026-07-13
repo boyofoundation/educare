@@ -93,6 +93,7 @@ export const migrateIndexedDBToTurso = async (
               routableAssistantIds: assistant.routableAssistantIds,
               starterPrompts: assistant.starterPrompts,
               subagentDelegationEnabled: assistant.subagentDelegationEnabled,
+              mathToolsEnabled: assistant.mathToolsEnabled,
             });
             migratedAssistants++;
           } catch (error) {

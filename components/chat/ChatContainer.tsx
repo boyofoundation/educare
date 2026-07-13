@@ -740,11 +740,27 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         }
 
         if (fullModelResponse === '') {
-          const finalSession = applyTokenUsageToSession(baseSession, result.tokenInfo);
+          const artifactMessage =
+            result.geometryBoards && result.geometryBoards.length > 0
+              ? buildAssistantMessage('', {
+                  citations: result.citations,
+                  geometryBoards: result.geometryBoards,
+                  routeProposal: routeProposalRef.current,
+                })
+              : undefined;
+          const finalSession = applyTokenUsageToSession(
+            {
+              ...baseSession,
+              messages: artifactMessage
+                ? [...baseSession.messages, artifactMessage]
+                : baseSession.messages,
+            },
+            result.tokenInfo,
+          );
           if (runDisplayed) {
             sessionRef.current = finalSession;
             setCurrentSession(finalSession);
-            setPendingEmptyResponseNotice(EMPTY_RESPONSE_NOTICE);
+            setPendingEmptyResponseNotice(artifactMessage ? null : EMPTY_RESPONSE_NOTICE);
           }
           setSubagentBatches({});
           setToolCallRecords([]);

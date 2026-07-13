@@ -49,17 +49,36 @@ describe('mathComputeService', () => {
     expect(result).toMatchObject({ ok: true, result: '10' });
   });
 
-  it('returns a recoverable error instead of accepting implicit multiplication', async () => {
-    // Arrange
-    const args = { expr: '2x + 1', scope: { x: 3 } };
-
+  it('accepts scientific notation without treating it as implicit multiplication', async () => {
     // Act
-    const result = await executeCompute(args);
+    const result = await executeCompute({ expr: '2e3' });
 
     // Assert
-    expect(result).toMatchObject({ ok: false, recoverable: true });
-    expect(result).toHaveProperty('error', expect.any(String));
+    expect(result).toMatchObject({ ok: true, result: '2000' });
   });
+
+  it.each([
+    ['2x + 1', { x: 3 }],
+    ['sqrt(4)x', { x: 3 }],
+    ['(x + 1)(x - 1)', { x: 3 }],
+    ['sin(x) cos(x)', { x: 1 }],
+    ['x 2', { x: 3 }],
+    ['(x + 1)2', { x: 3 }],
+  ])(
+    'returns a recoverable error instead of accepting implicit multiplication: %s',
+    async (expr, scope) => {
+      // Act
+      const result = await executeCompute({ expr, scope });
+
+      // Assert
+      expect(result).toMatchObject({
+        ok: false,
+        recoverable: true,
+        code: 'compute-evaluation-failed',
+      });
+      expect(result).toHaveProperty('error', expect.stringContaining('use * explicitly'));
+    },
+  );
 
   it.each([
     ['an empty expression', { expr: '' }],
