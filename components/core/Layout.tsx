@@ -480,28 +480,30 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           </button>
         </div>
 
-        {state.currentAssistant && state.currentSession && (
-          <ProjectPicker
-            assistantId={state.currentAssistant.id}
-            activeProjectId={state.activeProjectId}
-            onCreateProject={async () => {
-              await actions.createProjectForCurrentSession();
-              closeDrawerIfMobile();
-            }}
-            onOpenProject={async projectId => {
-              await actions.openProjectForCurrentSession(projectId);
-              closeDrawerIfMobile();
-            }}
-            onRenameProject={actions.renameProjectForCurrentSession}
-            onUploadProjectFiles={actions.uploadFilesToProjectForCurrentSession}
-            onImportProjectZip={async file => {
-              await actions.importProjectZipForCurrentSession(file);
-              closeDrawerIfMobile();
-            }}
-            onDeleteProject={actions.deleteProjectForCurrentSession}
-            variant={collapsed ? 'sidebar-collapsed' : 'sidebar'}
-          />
-        )}
+        {state.currentAssistant &&
+          state.currentSession &&
+          !state.currentAssistant.mathToolsEnabled && (
+            <ProjectPicker
+              assistantId={state.currentAssistant.id}
+              activeProjectId={state.activeProjectId}
+              onCreateProject={async () => {
+                await actions.createProjectForCurrentSession();
+                closeDrawerIfMobile();
+              }}
+              onOpenProject={async projectId => {
+                await actions.openProjectForCurrentSession(projectId);
+                closeDrawerIfMobile();
+              }}
+              onRenameProject={actions.renameProjectForCurrentSession}
+              onUploadProjectFiles={actions.uploadFilesToProjectForCurrentSession}
+              onImportProjectZip={async file => {
+                await actions.importProjectZipForCurrentSession(file);
+                closeDrawerIfMobile();
+              }}
+              onDeleteProject={actions.deleteProjectForCurrentSession}
+              variant={collapsed ? 'sidebar-collapsed' : 'sidebar'}
+            />
+          )}
 
         {/* Session List */}
         {state.currentAssistant &&

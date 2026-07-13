@@ -249,6 +249,7 @@ const buildOptions = (
 describe('AgentRunController', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockStreamChat.mockReset();
     mockCreateSnapshot.mockResolvedValue({ projectId: 'project-1', version: 7 });
     mockWaitForRuntimeDiagnostics.mockResolvedValue({
       projectId: 'project-1',
@@ -1149,6 +1150,90 @@ describe('AgentRunController', () => {
     );
   });
 
+  it('disables HTML project access for a math checkpoint with an active project', async () => {
+    // Arrange
+    const resumeFrom = buildCheckpoint({
+      mathToolsEnabled: true,
+      htmlProjectEnabled: true,
+      projectBootstrapEnabled: true,
+      projectId: 'canvas-project-1',
+    });
+    const invocations = installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        projectSummary: completeProjectSummary,
+        toolSequence: ['reportTurnOutcome'],
+      }),
+    ]);
+    const controller = new AgentRunController(
+      buildOptions({
+        resumeFrom,
+        activeProjectId: 'ignored-active-project',
+        htmlProjectEnabled: true,
+        projectBootstrapEnabled: true,
+      }),
+    );
+
+    // Act
+    await controller.run();
+
+    // Assert
+    expect(invocations[0]?.params).toMatchObject({
+      mathToolsEnabled: true,
+      activeProjectId: null,
+      htmlProjectEnabled: false,
+      projectBootstrapEnabled: false,
+    });
+    expect(mockCreateSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('forwards a live geometry preview before the turn completes', async () => {
+    // Arrange
+    const document = {
+      title: 'Live triangle preview',
+      boundingbox: [-2, 2, 2, -2] as [number, number, number, number],
+      objects: [],
+    };
+    const callOrder: string[] = [];
+    const onGeometryBoardPreview = vi.fn(() => {
+      callOrder.push('preview');
+    });
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      (
+        params.onGeometryBoardPreview as (preview: {
+          toolCallId: string;
+          document: typeof document;
+        }) => void
+      )({ toolCallId: 'draw_geometry-1', document });
+      callOrder.push('complete');
+      (params.onComplete as (meta: unknown, fullText: string) => void)(
+        {
+          promptTokenCount: 1,
+          candidatesTokenCount: 1,
+          finishReason: 'complete',
+          projectSummary: completeProjectSummary,
+          toolSequence: ['draw_geometry'],
+        },
+        'I am drawing the triangle.',
+      );
+    });
+    const callbacks = {
+      ...buildOptions().callbacks,
+      onGeometryBoardPreview,
+    };
+    const controller = new AgentRunController(buildOptions({ callbacks }));
+
+    // Act
+    await controller.run();
+
+    // Assert
+    expect(onGeometryBoardPreview).toHaveBeenCalledWith({
+      toolCallId: 'draw_geometry-1',
+      document,
+    });
+    expect(callOrder).toEqual(['preview', 'complete']);
+  });
+
   it('persists completed geometry boards in the run result and model history', async () => {
     const geometryBoards = [
       {
@@ -1195,7 +1280,7 @@ describe('AgentRunController', () => {
       },
     ];
     expect(result.geometryBoards).toEqual(expectedGeometryBoards);
-    expect(result.historyDelta.at(-1)).toEqual(
+    expect(result.historyDelta).toContainEqual(
       expect.objectContaining({ geometryBoards: expectedGeometryBoards }),
     );
   });

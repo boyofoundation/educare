@@ -10,6 +10,7 @@ const {
   mockRunSubagentBatch,
   mockExecuteCompute,
   mockExecuteDrawGeometry,
+  mockNormalizeGeometryDoc,
 } = vi.hoisted(() => ({
   mockInitializeProviders: vi.fn(),
   mockGetActiveProvider: vi.fn(),
@@ -20,6 +21,7 @@ const {
   mockRunSubagentBatch: vi.fn(),
   mockExecuteCompute: vi.fn(),
   mockExecuteDrawGeometry: vi.fn(),
+  mockNormalizeGeometryDoc: vi.fn(),
 }));
 
 vi.mock('./providerRegistry', () => ({
@@ -78,9 +80,13 @@ vi.mock('./mathComputeService', () => ({
   MATH_TOOLS_SYSTEM_PROMPT: 'Math tools prompt',
 }));
 
+vi.mock('./markdownPrompting', () => ({
+  MARKDOWN_MATH_SYSTEM_PROMPT: 'Markdown math prompt',
+}));
+
 vi.mock('./geometryToolService', () => ({
   executeDrawGeometry: mockExecuteDrawGeometry,
-  normalizeGeometryDoc: (document: unknown) => document,
+  normalizeGeometryDoc: mockNormalizeGeometryDoc,
   DRAW_GEOMETRY_TOOL_NAME: 'draw_geometry',
   DRAW_GEOMETRY_TOOL_DESCRIPTION: 'Draw a geometry diagram.',
   DRAW_GEOMETRY_TOOL_SCHEMA: {
@@ -98,6 +104,8 @@ describe('streamChat', () => {
     vi.clearAllMocks();
     mockExecuteCompute.mockReset();
     mockExecuteDrawGeometry.mockReset();
+    mockNormalizeGeometryDoc.mockReset();
+    mockNormalizeGeometryDoc.mockImplementation(document => document);
     mockInitializeProviders.mockResolvedValue(undefined);
     mockHasKnowledgeChunks.mockReturnValue(false);
     mockBuildKnowledgeSearchResponse.mockReturnValue({ matches: [] });
@@ -121,7 +129,7 @@ describe('streamChat', () => {
     });
   });
 
-  it('hides math tools and their prompt when mathToolsEnabled is disabled', async () => {
+  it('adds the KaTeX prompt before optional feature prompts when mathToolsEnabled is disabled', async () => {
     const observedChatParams: Array<Record<string, unknown>> = [];
     const provider = {
       name: 'gemini',
@@ -157,13 +165,19 @@ describe('streamChat', () => {
       onComplete: vi.fn(),
     });
 
+    const systemPrompt = String(observedChatParams[0]?.systemPrompt);
     expect(observedChatParams[0]?.tools).toBeUndefined();
-    expect(observedChatParams[0]?.systemPrompt).not.toContain('Math tools prompt');
+    expect(systemPrompt).toContain('You are helpful.');
+    expect(systemPrompt).toContain('Markdown math prompt');
+    expect(systemPrompt).not.toContain('Math tools prompt');
+    expect(systemPrompt.indexOf('You are helpful.')).toBeLessThan(
+      systemPrompt.indexOf('Markdown math prompt'),
+    );
     expect(mockExecuteCompute).not.toHaveBeenCalled();
     expect(mockExecuteDrawGeometry).not.toHaveBeenCalled();
   });
 
-  it('exposes math tools and dispatches compute when mathToolsEnabled is enabled', async () => {
+  it('keeps the KaTeX prompt before math-tool guidance when mathToolsEnabled is enabled', async () => {
     const observedChatParams: Array<Record<string, unknown>> = [];
     mockExecuteCompute.mockResolvedValue({
       ok: true,
@@ -210,26 +224,101 @@ describe('streamChat', () => {
       onComplete: vi.fn(),
     });
 
+    const systemPrompt = String(observedChatParams[0]?.systemPrompt);
+    const katexIndex = systemPrompt.indexOf('Markdown math prompt');
+    const mathToolsIndex = systemPrompt.indexOf('Math tools prompt');
     const toolNames = (observedChatParams[0]?.tools as Array<{ name: string }>).map(
       tool => tool.name,
     );
     expect(toolNames).toEqual(expect.arrayContaining(['compute', 'draw_geometry']));
-    expect(observedChatParams[0]?.systemPrompt).toContain('Math tools prompt');
+    expect(systemPrompt).toContain('You are helpful.');
+    expect(systemPrompt).toContain('Markdown math prompt');
+    expect(systemPrompt).toContain('Math tools prompt');
+    expect(systemPrompt.indexOf('You are helpful.')).toBeLessThan(katexIndex);
+    expect(katexIndex).toBeLessThan(mathToolsIndex);
     expect(mockExecuteCompute).toHaveBeenCalledWith({ expr: '2 + 2' });
   });
 
-  it('records successful draw geometry completion metadata when math tools are enabled', async () => {
+  it('hides HTML project tools and bootstrap when math tools are enabled', async () => {
+    // Arrange
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 0,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+
+    // Act
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Update the active project and draw a triangle.',
+      assistantId: 'assistant-1',
+      activeProjectId: 'project-123',
+      mathToolsEnabled: true,
+      htmlProjectEnabled: true,
+      projectBootstrapEnabled: true,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    // Assert
+    expect(
+      (observedChatParams[0]?.tools as Array<{ name: string }>).map(tool => tool.name),
+    ).toEqual(['compute', 'draw_geometry']);
+    expect(observedChatParams[0]?.toolChoice).toBeUndefined();
+    expect(mockExecuteHtmlProjectToolCall).not.toHaveBeenCalled();
+  });
+
+  it('previews a normalized geometry document before draw completion and persists it', async () => {
+    // Arrange
     const geometryDocument = {
       title: 'Triangle ABC',
       boundingbox: [-5, 5, 5, -5],
       objects: [],
     };
-    mockExecuteDrawGeometry.mockResolvedValue({
-      ok: true,
-      errors: [],
-      warnings: [],
-      computed_points: [{ id: 'A', x: 0, y: 0 }],
-      summary: 'Geometry drawn successfully.',
+    const normalizedGeometryDocument = {
+      ...geometryDocument,
+      title: 'Normalized triangle ABC',
+    };
+    const callOrder: string[] = [];
+    const onGeometryBoardPreview = vi.fn(() => {
+      callOrder.push('preview');
+    });
+    mockNormalizeGeometryDoc.mockReturnValue(normalizedGeometryDocument);
+    mockExecuteDrawGeometry.mockImplementation(async document => {
+      callOrder.push('execute');
+      expect(onGeometryBoardPreview).toHaveBeenCalledWith({
+        toolCallId: expect.stringMatching(/^draw_geometry-1-\d+$/),
+        document: normalizedGeometryDocument,
+      });
+      expect(document).toBe(normalizedGeometryDocument);
+      return {
+        ok: true,
+        errors: [],
+        warnings: [],
+        computed_points: [{ id: 'A', x: 0, y: 0 }],
+        summary: 'Geometry drawn successfully.',
+      };
     });
     const provider = {
       name: 'gemini',
@@ -260,6 +349,8 @@ describe('streamChat', () => {
 
     const { streamChat } = await import('./llmService');
     const onComplete = vi.fn();
+
+    // Act
     await streamChat({
       systemPrompt: 'You are helpful.',
       history: [],
@@ -267,15 +358,18 @@ describe('streamChat', () => {
       assistantId: 'assistant-1',
       mathToolsEnabled: true,
       onChunk: vi.fn(),
+      onGeometryBoardPreview,
       onComplete,
     });
 
-    expect(mockExecuteDrawGeometry).toHaveBeenCalledWith(geometryDocument);
+    // Assert
+    expect(callOrder).toEqual(['preview', 'execute']);
+    expect(mockExecuteDrawGeometry).toHaveBeenCalledWith(normalizedGeometryDocument);
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({
         geometryBoards: [
           expect.objectContaining({
-            document: geometryDocument,
+            document: normalizedGeometryDocument,
             result: expect.objectContaining({
               ok: true,
               computed_points: [{ id: 'A', x: 0, y: 0 }],
@@ -1497,7 +1591,8 @@ describe('streamChat', () => {
       expect(observedChatParams).toHaveLength(2);
       for (const params of observedChatParams) {
         expect(params.tools).toBeUndefined();
-        expect(params.systemPrompt).toBe('You are helpful.');
+        expect(params.systemPrompt).toContain('You are helpful.');
+        expect(params.systemPrompt).toContain('Markdown math prompt');
         expect(params.systemPrompt as string).not.toContain('routeToAssistant');
       }
     });

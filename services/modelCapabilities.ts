@@ -105,7 +105,12 @@ export const supportsImageInput = (provider: string, model: string): boolean => 
     case 'groq':
     case 'ollama':
     case 'lmstudio':
-      return matchesAny(normalizedModel, OPEN_MODEL_VISION_PATTERNS);
+      return (
+        matchesAny(normalizedModel, GEMINI_VISION_PATTERNS) ||
+        matchesAny(normalizedModel, ANTHROPIC_VISION_PATTERNS) ||
+        matchesAny(normalizedModel, OPENAI_VISION_PATTERNS) ||
+        matchesAny(normalizedModel, OPEN_MODEL_VISION_PATTERNS)
+      );
     default:
       return false;
   }

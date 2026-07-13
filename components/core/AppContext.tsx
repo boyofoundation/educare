@@ -230,6 +230,7 @@ interface AppProviderProps {
 
 export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   const [state, dispatch] = useReducer(appReducer, initialState);
+  const currentAssistantUsesMathTools = state.currentAssistant?.mathToolsEnabled === true;
 
   // Create new session
   const createNewSession = useCallback(
@@ -814,7 +815,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   }, [clearCurrentSessionProject, clearProjectWorkspace, state.currentSession]);
 
   const createProjectForCurrentSession = useCallback(async () => {
-    if (!state.currentSession) {
+    if (!state.currentSession || currentAssistantUsesMathTools) {
       return;
     }
 
@@ -833,11 +834,11 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       project.name,
       '已建立新的 HTML 專案',
     );
-  }, [attachProjectToCurrentSession, state.currentSession]);
+  }, [attachProjectToCurrentSession, currentAssistantUsesMathTools, state.currentSession]);
 
   const openProjectForCurrentSession = useCallback(
     async (projectId: string) => {
-      if (!state.currentSession) {
+      if (!state.currentSession || currentAssistantUsesMathTools) {
         return;
       }
 
@@ -852,7 +853,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         '已開啟既有 HTML 專案',
       );
     },
-    [attachProjectToCurrentSession, state.currentSession],
+    [attachProjectToCurrentSession, currentAssistantUsesMathTools, state.currentSession],
   );
 
   const renameProjectForCurrentSession = useCallback(
@@ -961,6 +962,11 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
 
   const syncProjectWorkspaceForSession = useCallback(
     async (session: ChatSession | null) => {
+      if (currentAssistantUsesMathTools) {
+        clearProjectWorkspace();
+        return;
+      }
+
       const projectId = session?.activeProjectId ?? null;
 
       if (!projectId || !session) {
@@ -987,7 +993,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         );
       }
     },
-    [clearCurrentSessionProject, clearProjectWorkspace],
+    [clearCurrentSessionProject, clearProjectWorkspace, currentAssistantUsesMathTools],
   );
 
   useEffect(() => {

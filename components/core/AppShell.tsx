@@ -20,6 +20,7 @@ import { getBundleMetrics } from '../../services/bundleMetricsService';
 function AppContent(): React.JSX.Element {
   const { state, actions } = useAppContext();
   const bundleMetrics = getBundleMetrics();
+  const htmlProjectAccessEnabled = !state.currentAssistant?.mathToolsEnabled;
 
   // Initialize compression service with default configuration
   const compressionService = new ChatCompactorService({
@@ -274,7 +275,7 @@ function AppContent(): React.JSX.Element {
       {state.viewMode === 'chat' && state.currentAssistant && state.currentSession && (
         <div className='flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden lg:flex-row'>
           <div
-            className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${state.isProjectWorkspaceOpen && state.activeProjectId ? 'lg:w-[55%]' : 'w-full'}`}
+            className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${htmlProjectAccessEnabled && state.isProjectWorkspaceOpen && state.activeProjectId ? 'lg:w-[55%]' : 'w-full'}`}
           >
             <div className='min-h-0 flex-1'>
               <ChatContainer
@@ -292,9 +293,12 @@ function AppContent(): React.JSX.Element {
                 }
                 mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
                 hideHeader={state.isMobile || state.isTablet}
-                isWorkspaceOpen={Boolean(state.isProjectWorkspaceOpen && state.activeProjectId)}
+                isWorkspaceOpen={Boolean(
+                  htmlProjectAccessEnabled && state.isProjectWorkspaceOpen && state.activeProjectId,
+                )}
                 headerActions={
-                  state.isMobile || state.isTablet ? undefined : !state.isProjectWorkspaceOpen &&
+                  state.isMobile || state.isTablet ? undefined : htmlProjectAccessEnabled &&
+                    !state.isProjectWorkspaceOpen &&
                     state.activeProjectId ? (
                     <button
                       type='button'
@@ -324,7 +328,7 @@ function AppContent(): React.JSX.Element {
               />
             </div>
           </div>
-          {state.isProjectWorkspaceOpen && state.activeProjectId && (
+          {htmlProjectAccessEnabled && state.isProjectWorkspaceOpen && state.activeProjectId && (
             <div className='min-h-0 overflow-hidden border-t border-gray-800 lg:h-full lg:w-[45%] lg:min-w-[360px] lg:max-w-[48%] lg:border-l lg:border-t-0'>
               <HtmlProjectWorkspace projectId={state.activeProjectId} />
             </div>

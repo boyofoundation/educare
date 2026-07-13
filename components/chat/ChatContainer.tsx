@@ -36,12 +36,14 @@ import type {
   AgentRunState,
   ChatMessage,
   ChatSession,
+  GeometryBoardRecord,
   MessageAttachment,
   SubagentRunRecord,
   ToolCallRecord,
   RouteProposal,
 } from '../../types';
 import { HtmlProjectWorkspaceUpdate } from '../../types';
+import { DRAW_GEOMETRY_TOOL_NAME, type GeometryDoc } from '../../services/geometryToolService';
 import {
   getCachedSharedRoutableTargets,
   resolveRoutableTargets,
@@ -140,6 +142,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const [runState, setRunState] = useState<AgentRunState | null>(null);
   const [subagentBatches, setSubagentBatches] = useState<Record<string, SubagentRunRecord[]>>({});
   const [toolCallRecords, setToolCallRecords] = useState<ToolCallRecord[]>([]);
+  const [streamingGeometryBoards, setStreamingGeometryBoards] = useState<GeometryBoardRecord[]>([]);
   const [interruptedCheckpoint, setInterruptedCheckpoint] = useState<AgentRunCheckpoint | null>(
     null,
   );
@@ -288,6 +291,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setStatusText('');
     setSubagentBatches({});
     setToolCallRecords([]);
+    setStreamingGeometryBoards([]);
     setPendingEmptyResponseNotice(null);
     setRunState(null);
     setAgentRunState?.(null);
@@ -499,6 +503,39 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       toolCallRecordsRef.current = next;
       return next;
     });
+
+    if (
+      record.name === DRAW_GEOMETRY_TOOL_NAME &&
+      (record.status === 'failed' || record.status === 'recoverable_error')
+    ) {
+      setStreamingGeometryBoards(previous => previous.filter(board => board.id !== record.id));
+    }
+  };
+
+  const handleGeometryBoardPreview = ({
+    toolCallId,
+    document,
+  }: {
+    toolCallId: string;
+    document: GeometryDoc;
+  }) => {
+    const board: GeometryBoardRecord = {
+      id: toolCallId,
+      title: document.title,
+      doc: document,
+      computedPoints: [],
+    };
+
+    setStreamingGeometryBoards(previous => {
+      const existingIndex = previous.findIndex(item => item.id === toolCallId);
+      if (existingIndex === -1) {
+        return [...previous, board];
+      }
+
+      const next = [...previous];
+      next[existingIndex] = board;
+      return next;
+    });
   };
 
   const buildAssistantMessage = (content: string, extras?: Partial<ChatMessage>): ChatMessage => ({
@@ -575,6 +612,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setRunState(null);
     setSubagentBatches({});
     setToolCallRecords([]);
+    setStreamingGeometryBoards([]);
     setResumeError(null);
     actions?.setAgentRunState?.(null);
 
@@ -605,11 +643,13 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         enhancedSystemPrompt = `${enhancedSystemPrompt}${compactedContextPrompt}`;
       }
 
-      // 「開啟 HTML 專案」= 此聊天回合綁定了 activeProjectId。
-      // HTML 專案工具與 agentic harness 皆據此自動推導,使用者無需在助理設定手動開關;
-      // resume 時則沿用 checkpoint 快照,維持與原回合一致的行為。
-      const effectiveProjectId =
-        resumeCheckpoint?.projectId ?? displaySession.activeProjectId ?? null;
+      // 數學／幾何工具模式完全停用 HTML 專案，避免兩套 function calling 工具互相干擾。
+      // resume checkpoint 的 math flag 代表原 run 的權威設定。
+      const effectiveMathToolsEnabled = resumeCheckpoint?.mathToolsEnabled ?? mathToolsEnabled;
+      const htmlProjectAccessEnabled = !effectiveMathToolsEnabled;
+      const effectiveProjectId = htmlProjectAccessEnabled
+        ? (resumeCheckpoint?.projectId ?? displaySession.activeProjectId ?? null)
+        : null;
       const projectEditingActive = Boolean(effectiveProjectId);
 
       const currentAssistant = appContext?.state?.currentAssistant;
@@ -630,16 +670,21 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         message,
         attachments,
         knowledgeChunks: ragChunks,
-        agentHarnessEnabled: resumeCheckpoint?.agentHarnessEnabled ?? projectEditingActive,
+        agentHarnessEnabled:
+          htmlProjectAccessEnabled &&
+          (resumeCheckpoint?.agentHarnessEnabled ?? projectEditingActive),
         subagentDelegationEnabled:
           resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
-        mathToolsEnabled: resumeCheckpoint?.mathToolsEnabled ?? mathToolsEnabled,
+        mathToolsEnabled: effectiveMathToolsEnabled,
         routableTargets: resumeCheckpoint?.routableTargets ?? routableTargets,
-        htmlProjectEnabled: resumeCheckpoint?.htmlProjectEnabled ?? projectEditingActive,
+        htmlProjectEnabled:
+          htmlProjectAccessEnabled &&
+          (resumeCheckpoint?.htmlProjectEnabled ?? projectEditingActive),
         // 未開啟專案時,提供 createProject bootstrap 工具讓模型自行建立專案;
-        // 已綁定專案或 shared 模式(無 canvas workspace)時停用,以現有專案為準。
+        // 數學模式、已綁定專案或 shared 模式(無 canvas workspace)時皆停用。
         projectBootstrapEnabled:
-          resumeCheckpoint?.projectBootstrapEnabled ?? (!projectEditingActive && !isSandboxMode),
+          htmlProjectAccessEnabled &&
+          (resumeCheckpoint?.projectBootstrapEnabled ?? (!projectEditingActive && !isSandboxMode)),
         sharedMode: resumeCheckpoint?.sharedMode ?? isSandboxMode,
         resumeFrom: resumeCheckpoint,
         callbacks: {
@@ -666,6 +711,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               return;
             }
             handleSubagentActivity(update);
+          },
+          onGeometryBoardPreview: preview => {
+            if (!isRunSessionDisplayed()) {
+              return;
+            }
+            handleGeometryBoardPreview(preview);
           },
           onToolCallActivity: record => {
             if (!isRunSessionDisplayed()) {
@@ -710,6 +761,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         setIsThinking(false);
         setStatusText('');
         setStreamingResponse('');
+        setStreamingGeometryBoards([]);
         const fullModelResponse = result.fullText.trim();
         const latestErrorMessage = latestErrorMessageRef.current;
         const shouldPersistError = Boolean(latestErrorMessage) || result.state.status === 'failed';
@@ -866,6 +918,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       setRunState(null);
       actions?.setAgentRunState?.(null);
       setStreamingResponse('');
+      setStreamingGeometryBoards([]);
       setSubagentBatches({});
       setToolCallRecords([]);
 
@@ -1045,7 +1098,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
   const isRunning = runState?.status === 'running';
   const hasLiveActivity =
-    toolCallRecords.length > 0 || Object.values(subagentBatches).some(runs => runs.length > 0);
+    toolCallRecords.length > 0 ||
+    streamingGeometryBoards.length > 0 ||
+    Object.values(subagentBatches).some(runs => runs.length > 0);
   const showStreamingResponse = streamingResponse !== '' || (isLoading && hasLiveActivity);
   const interruptedTurnLabel = interruptedCheckpoint
     ? `${Math.min(interruptedCheckpoint.turnIndex + 1, interruptedCheckpoint.maxTurns)}/${interruptedCheckpoint.maxTurns}`
@@ -1235,6 +1290,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                 assistantName={assistantName}
                 subagentBatches={subagentBatches}
                 toolCallLog={toolCallRecords}
+                geometryBoards={streamingGeometryBoards}
               />
             )}
 

@@ -43,6 +43,7 @@ describe('GeometryBoard', () => {
 
     // Assert
     const container = screen.getByLabelText('Triangle ABC 幾何圖');
+    expect(container).toHaveClass('aspect-[4/3]');
     expect(screen.getByRole('heading', { name: 'Triangle ABC' })).toBeInTheDocument();
     await waitFor(() => {
       expect(renderGeometryDocMock).toHaveBeenCalledWith(container, geometryBoard.doc);

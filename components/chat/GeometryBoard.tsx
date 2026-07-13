@@ -52,7 +52,7 @@ const GeometryBoard = ({ board }: GeometryBoardProps) => {
       <h3 className='mb-3 text-sm font-semibold text-cyan-100'>{board.title}</h3>
       <div
         ref={containerRef}
-        className='h-72 w-full overflow-hidden rounded-xl bg-white sm:h-80'
+        className='aspect-[4/3] w-full overflow-hidden rounded-xl bg-white'
         aria-label={`${board.title} 幾何圖`}
       />
       {diagnostics.length > 0 && (

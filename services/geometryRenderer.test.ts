@@ -61,7 +61,7 @@ describe('geometryRenderer: renderGeometryDoc', () => {
       axis: true,
       showCopyright: false,
       showNavigation: false,
-      keepaspectratio: false,
+      keepaspectratio: true,
     });
     expect(jsxGraph.board.create).toHaveBeenNthCalledWith(1, 'point', [2, 3], {
       name: 'A',
@@ -167,7 +167,7 @@ describe('geometryRenderer: renderGeometryDoc', () => {
       {
         index: 4,
         field: 'sources',
-        message: 'The requested intersection does not exist.',
+        message: '指定的交點不存在。',
       },
     ]);
   });
@@ -192,7 +192,7 @@ describe('geometryRenderer: renderGeometryDoc', () => {
       {
         index: 0,
         field: 'expr',
-        message: 'The function graph has no sampled point inside the bounding box.',
+        message: '函數圖形在目前視窗內沒有取樣點。',
       },
     ]);
   });

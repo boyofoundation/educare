@@ -233,6 +233,15 @@ function TestConsumer() {
       <button data-testid='check-screen-size' onClick={actions.checkScreenSize}>
         Check Screen Size
       </button>
+      <button data-testid='create-project' onClick={() => actions.createProjectForCurrentSession()}>
+        Create Project
+      </button>
+      <button
+        data-testid='open-project'
+        onClick={() => actions.openProjectForCurrentSession('test-project-1')}
+      >
+        Open Project
+      </button>
       <button
         data-testid='rename-project'
         onClick={() =>
@@ -938,6 +947,40 @@ describe('AppContext', () => {
           '已重新命名 HTML 專案為「Renamed Canvas」。',
         );
       });
+    });
+
+    it('blocks project creation and opening for a math assistant', async () => {
+      // Arrange
+      const mathAssistant = { ...TEST_ASSISTANTS.basic, mathToolsEnabled: true };
+      mockDb.getAssistant.mockResolvedValue(mathAssistant);
+      mockDb.getSessionsForAssistant.mockResolvedValue([TEST_SESSIONS.withMessages]);
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('is-loading')).toHaveTextContent('false');
+      });
+      await act(async () => {
+        screen.getByTestId('select-assistant').click();
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId('current-assistant')).toHaveTextContent(mathAssistant.name);
+      });
+      vi.mocked(htmlProjectStore.createProject).mockClear();
+      vi.mocked(htmlProjectStore.assertProjectOwnership).mockClear();
+
+      // Act
+      await act(async () => {
+        screen.getByTestId('create-project').click();
+        screen.getByTestId('open-project').click();
+      });
+
+      // Assert
+      expect(htmlProjectStore.createProject).not.toHaveBeenCalled();
+      expect(htmlProjectStore.assertProjectOwnership).not.toHaveBeenCalled();
+      expect(screen.getByTestId('active-project-id')).toHaveTextContent('none');
     });
 
     it('should upload files into the active current session project and refresh the preview', async () => {

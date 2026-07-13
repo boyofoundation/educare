@@ -59,6 +59,7 @@ import {
   MATH_TOOLS_SYSTEM_PROMPT,
   type ComputeArgs,
 } from './mathComputeService';
+import { MARKDOWN_MATH_SYSTEM_PROMPT } from './markdownPrompting';
 import {
   DRAW_GEOMETRY_TOOL_DESCRIPTION,
   DRAW_GEOMETRY_TOOL_NAME,
@@ -115,6 +116,8 @@ export interface StreamChatParams {
   onProjectToolActivity?: (update: HtmlProjectWorkspaceUpdate) => void;
   onSubagentActivity?: (update: SubagentActivityUpdate) => void;
   onToolCallActivity?: (record: ToolCallRecord) => void;
+  /** 已解析但尚未完成驗證的圖形，僅供串流 UI 暫態預覽。 */
+  onGeometryBoardPreview?: (preview: { toolCallId: string; document: GeometryDoc }) => void;
   onComplete: (
     metadata: {
       promptTokenCount: number;
@@ -281,9 +284,14 @@ export const streamChat = async (params: StreamChatParams) => {
     onProjectToolActivity,
     onSubagentActivity,
     onToolCallActivity,
+    onGeometryBoardPreview,
     onRouteProposal,
     onComplete,
   } = params;
+
+  const htmlProjectAccessEnabled = !mathToolsEnabled;
+  const effectiveHtmlProjectEnabled = htmlProjectAccessEnabled && htmlProjectEnabled;
+  const effectiveProjectBootstrapEnabled = htmlProjectAccessEnabled && projectBootstrapEnabled;
 
   await initializeProviders();
 
@@ -303,7 +311,7 @@ export const streamChat = async (params: StreamChatParams) => {
   let usage: ProviderUsageMetadata | undefined;
   let responseProvider = activeProvider.name;
   let responseModel = activeProvider.supportedModels[0];
-  let resolvedActiveProjectId = activeProjectId ?? null;
+  let resolvedActiveProjectId = htmlProjectAccessEnabled ? (activeProjectId ?? null) : null;
   let projectSummary: HtmlProjectSummary | null = null;
   let latestPreviewOutcome: HtmlProjectPreviewOutcome | undefined;
   let finishReason: FinishReason | undefined;
@@ -330,8 +338,9 @@ export const streamChat = async (params: StreamChatParams) => {
   };
 
   // G2: packSetOverride bypasses intent classification for continuation turns.
-  const hasPackSetOverride = htmlProjectEnabled && !!packSetOverride && packSetOverride.length > 0;
-  const initialIntentDecision: HtmlProjectIntentDecision = !htmlProjectEnabled
+  const hasPackSetOverride =
+    effectiveHtmlProjectEnabled && !!packSetOverride && packSetOverride.length > 0;
+  const initialIntentDecision: HtmlProjectIntentDecision = !effectiveHtmlProjectEnabled
     ? htmlProjectModeDisabledDecision
     : hasPackSetOverride
       ? {
@@ -349,7 +358,7 @@ export const streamChat = async (params: StreamChatParams) => {
   // 只暴露 createProject 讓模型自行決定是否建立專案(不走關鍵字分類)。
   // 使用者已開啟專案(activeProjectId 存在)時此模式不生效。
   const projectBootstrapToolEnabled =
-    !htmlProjectEnabled && projectBootstrapEnabled && !resolvedActiveProjectId;
+    !effectiveHtmlProjectEnabled && effectiveProjectBootstrapEnabled && !resolvedActiveProjectId;
   let bootstrapProjectCreated = false;
 
   const telemetryEvent: HtmlProjectAgentTelemetryEvent = {
@@ -451,6 +460,7 @@ export const streamChat = async (params: StreamChatParams) => {
 
     const finalSystemPrompt = [
       systemPrompt,
+      MARKDOWN_MATH_SYSTEM_PROMPT,
       knowledgeToolEnabled ? KNOWLEDGE_SEARCH_SYSTEM_PROMPT : '',
       mathToolsEnabled ? MATH_TOOLS_SYSTEM_PROMPT : '',
       htmlProjectToolEnabled
@@ -534,6 +544,10 @@ export const streamChat = async (params: StreamChatParams) => {
           }
         } else if (mathToolsEnabled && call.name === DRAW_GEOMETRY_TOOL_NAME) {
           const geometryDocument = normalizeGeometryDoc(call.args);
+          onGeometryBoardPreview?.({
+            toolCallId,
+            document: geometryDocument as GeometryDoc,
+          });
           const drawGeometryResult = await executeDrawGeometry(geometryDocument);
           if (drawGeometryResult.ok) {
             geometryBoards.push({

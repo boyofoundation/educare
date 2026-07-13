@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import {
   ChatMessage,
   ChatSession,
+  GeometryBoardRecord,
   MessageAttachment,
   RagChunk,
   RouteProposal,
@@ -99,4 +100,5 @@ export interface StreamingResponseProps {
   assistantName?: string;
   subagentBatches?: Record<string, SubagentRunRecord[]>;
   toolCallLog?: ToolCallRecord[];
+  geometryBoards?: GeometryBoardRecord[];
 }

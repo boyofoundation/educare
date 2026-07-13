@@ -3,11 +3,13 @@ import { StreamingResponseProps } from './types';
 import { GeminiIcon } from '../ui/Icons';
 import MarkdownContent from './MarkdownContent';
 import AgentActivityTimeline from './AgentActivityTimeline';
+import GeometryBoard from './GeometryBoard';
 
 const StreamingResponse: React.FC<StreamingResponseProps> = ({
   content,
   subagentBatches,
   toolCallLog,
+  geometryBoards,
 }) => {
   const subagentRuns = useMemo(
     () => Object.values(subagentBatches ?? {}).flat(),
@@ -27,6 +29,9 @@ const StreamingResponse: React.FC<StreamingResponseProps> = ({
           {hasActivity && (
             <AgentActivityTimeline toolCalls={toolCallLog} subagentRuns={subagentRuns} live />
           )}
+          {geometryBoards?.map(board => (
+            <GeometryBoard key={board.id} board={board} />
+          ))}
           {content !== '' && (
             <div className='relative w-full max-w-[90%] rounded-2xl rounded-bl-md border border-gray-700/50 bg-gray-800/80 px-5 py-4 text-gray-100 shadow-lg backdrop-blur-sm md:max-w-[70ch] md:px-6'>
               <div className='text-base leading-7'>

@@ -521,6 +521,37 @@ describe('AppShell', () => {
       });
     });
 
+    it('hides HTML project controls and workspace for a math assistant with an active project', async () => {
+      // Arrange
+      const mathAssistant = { ...TEST_ASSISTANTS.basic, mathToolsEnabled: true };
+      vi.mocked(dbMock.getAllAssistants).mockResolvedValue([mathAssistant]);
+      vi.mocked(dbMock.getAssistant).mockResolvedValue(mathAssistant);
+      vi.mocked(dbMock.getSessionsForAssistant).mockResolvedValue([
+        { ...TEST_SESSIONS.withMessages, activeProjectId: 'project-42' },
+      ]);
+      vi.mocked(htmlProjectStoreMock.htmlProjectStore.listProjectsByAssistant).mockResolvedValue([
+        {
+          id: 'project-42',
+          name: 'Existing Canvas',
+          assistantId: mathAssistant.id,
+          entryFile: '/index.html',
+          previewVersion: 1,
+          updatedAt: 1700000000000,
+        },
+      ] as never);
+
+      // Act
+      render(<AppShell />);
+
+      // Assert
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-container')).toBeInTheDocument();
+      });
+      expect(screen.queryByRole('button', { name: 'HTML Projects' })).not.toBeInTheDocument();
+      expect(screen.queryByTestId('html-project-picker')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('html-project-workspace')).not.toBeInTheDocument();
+    });
+
     it('should show the existing HTML project picker when the session has no active project and the assistant has saved HTML projects', async () => {
       vi.mocked(htmlProjectStoreMock.htmlProjectStore.listProjectsByAssistant).mockResolvedValue([
         {

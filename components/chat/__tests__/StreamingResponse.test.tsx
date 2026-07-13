@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { GeometryBoardRecord } from '../../../types';
 import StreamingResponse from '../StreamingResponse';
 import { setupTestEnvironment } from './test-utils';
 
@@ -15,6 +16,11 @@ vi.mock('react-markdown', () => {
 vi.mock('remark-gfm', () => ({ default: vi.fn() }));
 vi.mock('rehype-highlight', () => ({ default: vi.fn() }));
 vi.mock('highlight.js/styles/github-dark.css', () => ({}));
+vi.mock('../GeometryBoard', () => ({
+  default: ({ board }: { board: { title: string } }) => (
+    <div data-testid='geometry-board'>{board.title}</div>
+  ),
+}));
 vi.mock('../../ui/Icons', () => ({
   GeminiIcon: ({ className }: { className?: string }) => (
     <span data-testid='gemini-icon' className={className}>
@@ -49,6 +55,27 @@ describe('StreamingResponse', () => {
 
       // Assert
       expect(screen.getByTestId('markdown-content')).toHaveTextContent(content);
+    });
+
+    it('renders a supplied geometry board alongside the streaming response', () => {
+      // Arrange
+      const previewBoard: GeometryBoardRecord = {
+        id: 'preview-draw-geometry-1',
+        title: 'Live triangle preview',
+        doc: {
+          title: 'Live triangle preview',
+          boundingbox: [-2, 2, 2, -2],
+          objects: [],
+        },
+        computedPoints: [],
+      };
+
+      // Act
+      render(<StreamingResponse content='Creating the diagram…' geometryBoards={[previewBoard]} />);
+
+      // Assert
+      expect(screen.getByTestId('geometry-board')).toHaveTextContent('Live triangle preview');
+      expect(screen.getByTestId('markdown-content')).toHaveTextContent('Creating the diagram…');
     });
 
     it('should render with assistant-style layout', () => {

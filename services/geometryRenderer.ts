@@ -112,7 +112,7 @@ export const renderGeometryDoc = async (
     axis: true,
     showCopyright: false,
     showNavigation: false,
-    keepaspectratio: false,
+    keepaspectratio: true,
   });
   const elements = new Map<string, GeometryElement>();
   const errors: GeometryDiagnostic[] = [];
@@ -172,7 +172,7 @@ export const renderGeometryDoc = async (
             warnings.push({
               index,
               field: 'expr',
-              message: 'The function graph has no sampled point inside the bounding box.',
+              message: '函數圖形在目前視窗內沒有取樣點。',
             });
           }
           break;
@@ -189,7 +189,7 @@ export const renderGeometryDoc = async (
             warnings.push({
               index,
               field: 'expr',
-              message: 'F(x,y)=0 has no solution inside the bounding box.',
+              message: 'F(x,y)=0 在目前視窗內沒有解。',
             });
           }
           break;
@@ -216,7 +216,7 @@ export const renderGeometryDoc = async (
             warnings.push({
               index,
               field: 'sources',
-              message: 'The requested intersection does not exist.',
+              message: '指定的交點不存在。',
             });
           } else if (object.id) {
             computedPoints.push({ id: object.id, x, y });

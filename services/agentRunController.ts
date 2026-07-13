@@ -28,6 +28,7 @@ import { previewRuntimeDiagnostics } from './previewRuntimeDiagnostics';
 import { htmlProjectStore } from './htmlProjectStore';
 import { executeHtmlProjectToolCall } from './htmlProjectToolService';
 import { getProjectSummaryFromToolResult, streamChat } from './llmService';
+import type { GeometryDoc } from './geometryToolService';
 import { gatherKnowledge } from './knowledgeGatherService';
 
 /**
@@ -111,6 +112,7 @@ export interface AgentRunControllerCallbacks {
   onProjectToolActivity?: (update: HtmlProjectWorkspaceUpdate) => void;
   onSubagentActivity?: (update: SubagentActivityUpdate) => void;
   onToolCallActivity?: (record: ToolCallRecord) => void;
+  onGeometryBoardPreview?: (preview: { toolCallId: string; document: GeometryDoc }) => void;
   onRouteProposal?: (proposal: RouteProposal) => void;
   onTurnStart?: (turnIndex: number, maxTurns: number) => void;
   onTurnComplete?: (turnIndex: number, summary: AgentRunTurnSummary) => void;
@@ -254,12 +256,18 @@ export class AgentRunController {
       !(options.sharedMode ?? false);
     const effectiveMathToolsEnabled =
       resumeFrom?.mathToolsEnabled ?? options.mathToolsEnabled ?? false;
+    // 數學／幾何助理不使用 HTML Canvas，避免兩套 function calling 工具彼此干擾。
+    const htmlProjectAccessEnabled = !effectiveMathToolsEnabled;
     let effectiveHtmlProjectEnabled =
-      resumeFrom?.htmlProjectEnabled ?? options.htmlProjectEnabled ?? false;
+      htmlProjectAccessEnabled &&
+      (resumeFrom?.htmlProjectEnabled ?? options.htmlProjectEnabled ?? false);
     // Bootstrap 升級後這些值會在 run 中途改變;checkpoint 一律以 effective 值為準。
-    let effectiveProjectId = resumeFrom?.projectId ?? options.activeProjectId ?? null;
-    let effectiveAgentHarnessEnabled = options.agentHarnessEnabled;
+    let effectiveProjectId = htmlProjectAccessEnabled
+      ? (resumeFrom?.projectId ?? options.activeProjectId ?? null)
+      : null;
+    let effectiveAgentHarnessEnabled = htmlProjectAccessEnabled && options.agentHarnessEnabled;
     const projectBootstrapEnabled =
+      htmlProjectAccessEnabled &&
       (resumeFrom?.projectBootstrapEnabled ?? options.projectBootstrapEnabled ?? false) &&
       !(options.sharedMode ?? false);
     const checkpointHistory = resumeFrom?.committedHistoryDelta
@@ -537,6 +545,7 @@ export class AgentRunController {
             },
             onProjectToolActivity: callbacks.onProjectToolActivity,
             onSubagentActivity: callbacks.onSubagentActivity,
+            onGeometryBoardPreview: callbacks.onGeometryBoardPreview,
             onToolCallActivity: record => {
               // Live tool-trace:回合中的 function-call loop 內,每個工具首次 'running'
               // 時立即累積並 emit state,讓 canvas AgentRunPanel 即時看到工具軌跡與活動
@@ -725,7 +734,7 @@ export class AgentRunController {
         // Bootstrap 升級:模型本回合透過 createProject 建立了專案 →
         // 後續回合以完整專案模式續跑(帶入 projectId、開啟專案工具、
         // maxTurns 從單回合升到 harness 預算),讓同一次執行能繼續建置內容。
-        if (!effectiveProjectId && turn.activeProjectId) {
+        if (htmlProjectAccessEnabled && !effectiveProjectId && turn.activeProjectId) {
           effectiveProjectId = turn.activeProjectId;
           effectiveHtmlProjectEnabled = true;
           state.projectId = effectiveProjectId;

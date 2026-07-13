@@ -724,6 +724,97 @@ describe('ChatContainer', () => {
     });
   });
 
+  it('renders a live geometry preview, removes failed previews, and keeps only the persisted board after completion', async () => {
+    // Arrange
+    const previewDocument = {
+      title: 'Live triangle preview',
+      boundingbox: [-2, 2, 2, -2] as [number, number, number, number],
+      objects: [],
+    };
+    let resolveRun: (result: AgentRunResult) => void;
+    mockControllerRun.mockImplementationOnce(
+      () =>
+        new Promise<AgentRunResult>(resolve => {
+          resolveRun = resolve;
+        }),
+    );
+
+    render(<ChatContainer {...defaultProps} mathToolsEnabled />);
+    await sendMessage('Draw a triangle');
+    await waitFor(() => expect(mockAgentRunControllerCtor).toHaveBeenCalled());
+    const callbacks = (
+      mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+        callbacks: {
+          onGeometryBoardPreview: (preview: {
+            toolCallId: string;
+            document: typeof previewDocument;
+          }) => void;
+          onToolCallActivity: (record: {
+            id: string;
+            name: string;
+            startedAt: number;
+            status: 'recoverable_error' | 'failed';
+          }) => void;
+        };
+      }
+    ).callbacks;
+
+    // Act & Assert: a normalized preview is visible before the run resolves.
+    act(() => {
+      callbacks.onGeometryBoardPreview({ toolCallId: 'draw-1', document: previewDocument });
+    });
+    expect(screen.getByRole('heading', { name: 'Live triangle preview' })).toBeInTheDocument();
+
+    // A recoverable or terminal draw failure discards the corresponding preview.
+    act(() => {
+      callbacks.onToolCallActivity({
+        id: 'draw-1',
+        name: 'draw_geometry',
+        startedAt: 1,
+        status: 'recoverable_error',
+      });
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('heading', { name: 'Live triangle preview' }),
+      ).not.toBeInTheDocument();
+    });
+    act(() => {
+      callbacks.onGeometryBoardPreview({ toolCallId: 'draw-2', document: previewDocument });
+      callbacks.onToolCallActivity({
+        id: 'draw-2',
+        name: 'draw_geometry',
+        startedAt: 2,
+        status: 'failed',
+      });
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('heading', { name: 'Live triangle preview' }),
+      ).not.toBeInTheDocument();
+    });
+
+    // A successful persisted board replaces, rather than duplicates, the transient preview.
+    act(() => {
+      callbacks.onGeometryBoardPreview({ toolCallId: 'draw-3', document: previewDocument });
+      resolveRun!(
+        buildRunResult('Triangle created.', {
+          geometryBoards: [
+            {
+              id: 'geometry-0-0',
+              title: previewDocument.title,
+              doc: previewDocument,
+              computedPoints: [],
+            },
+          ],
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: 'Live triangle preview' })).toHaveLength(1);
+    });
+  });
+
   it('persists returned citations onto the final assistant message', async () => {
     mockControllerRun.mockResolvedValueOnce(
       buildRunResult('Final response text', {
