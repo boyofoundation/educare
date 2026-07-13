@@ -3,6 +3,11 @@ import { FunctionCallingConfigMode } from '@google/genai';
 import { GeminiProvider } from './geminiProvider';
 import { ApiKeyManager } from '../apiKeyManager';
 import { TOOL_LOOP_CONTRACT_CASES } from './toolLoopContract.cases';
+import {
+  DRAW_GEOMETRY_TOOL_DESCRIPTION,
+  DRAW_GEOMETRY_TOOL_NAME,
+  DRAW_GEOMETRY_TOOL_SCHEMA,
+} from '../geometryToolService';
 
 const TOOL_DEFINITIONS = [
   {
@@ -249,6 +254,55 @@ describe('GeminiProvider', () => {
     });
     expect(responses[0]?.text).toBe('hello');
     expect(responses.at(-1)?.isComplete).toBe(true);
+  });
+
+  it('normalizes draw_geometry schemas for Gemini while retaining each required kind constraint', async () => {
+    const provider = new GeminiProvider();
+    const { create } = await setupProvider(provider);
+
+    await collectResponses(provider, {
+      tools: [
+        {
+          name: DRAW_GEOMETRY_TOOL_NAME,
+          description: DRAW_GEOMETRY_TOOL_DESCRIPTION,
+          parameters: DRAW_GEOMETRY_TOOL_SCHEMA,
+        },
+      ],
+    });
+
+    const declaration = create.mock.calls[0]?.[0]?.config?.tools?.[0]?.functionDeclarations?.[0];
+    const variants = declaration?.parameters?.properties?.objects?.items?.anyOf;
+
+    expect(declaration).toMatchObject({
+      name: DRAW_GEOMETRY_TOOL_NAME,
+      parameters: {
+        properties: {
+          objects: {
+            items: {
+              anyOf: expect.any(Array),
+            },
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(declaration?.parameters)).not.toContain('"const"');
+    expect(JSON.stringify(declaration?.parameters)).not.toContain('"oneOf"');
+    expect(variants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          properties: { kind: { enum: ['point'] } },
+          required: expect.arrayContaining(['kind']),
+        }),
+        expect.objectContaining({
+          properties: { kind: { enum: ['line'] } },
+          required: expect.arrayContaining(['kind']),
+        }),
+      ]),
+    );
+    expect(variants).toHaveLength(9);
+    expect(
+      variants.every((variant: { required?: string[] }) => variant.required?.includes('kind')),
+    ).toBe(true);
   });
 
   it('keeps AUTO mode without allowedFunctionNames by default', async () => {

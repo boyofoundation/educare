@@ -75,6 +75,28 @@ const buildGeminiUsageMetadata = (
   };
 };
 
+const normalizeGeminiSchema = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(normalizeGeminiSchema);
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const schema = value as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(schema)) {
+    if (key === 'const') {
+      normalized.enum = [child];
+    } else if (key === 'oneOf') {
+      normalized.anyOf = normalizeGeminiSchema(child);
+    } else {
+      normalized[key] = normalizeGeminiSchema(child);
+    }
+  }
+  return normalized;
+};
+
 export class GeminiProvider implements LLMProvider {
   readonly name = 'gemini';
   readonly displayName = 'Google Gemini';
@@ -220,7 +242,7 @@ export class GeminiProvider implements LLMProvider {
     const functionDeclarations: FunctionDeclaration[] | undefined = visibleTools?.map(tool => ({
       name: tool.name,
       description: tool.prompt ? `${tool.description} ${tool.prompt}` : tool.description,
-      parameters: tool.parameters,
+      parameters: normalizeGeminiSchema(tool.parameters) as FunctionDeclaration['parameters'],
     }));
 
     const functionCallingConfig = (() => {
