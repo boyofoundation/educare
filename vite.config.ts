@@ -71,6 +71,14 @@ export default defineConfig(() => {
               return 'ai-libs';
             }
 
+            // Math and geometry runtimes are only loaded for completed math-tool calls.
+            if (id.includes('node_modules/mathjs')) {
+              return 'mathjs';
+            }
+            if (id.includes('node_modules/jsxgraph')) {
+              return 'jsxgraph';
+            }
+
             // 靜態驗證 parser — 隔離到獨立 chunk 延遲載入
             // (見 .omc/plans/static-validation-phase1-mvp.md 驗收 8)
             if (
