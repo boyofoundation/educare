@@ -44,6 +44,7 @@ const toAssistant = (
   ragChunks: agent.ragChunks,
   createdAt,
   subagentDelegationEnabled: false,
+  mathToolsEnabled: agent.mathToolsEnabled ?? false,
   routableAssistantIds: bundle.routes
     .filter(route => route.fromAgentId === agent.id)
     .map(route => route.toAgentId),
@@ -695,6 +696,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       assistantDescription={state.currentAssistant.description}
       starterPrompts={state.currentAssistant.starterPrompts ?? []}
       subagentDelegationEnabled={false}
+      mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
       routableTargetsOverride={
         bundle ? resolveBundleRoutableTargets(bundle, state.currentAssistant.id) : null
       }

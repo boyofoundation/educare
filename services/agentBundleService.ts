@@ -129,6 +129,7 @@ export const getBundleContentFingerprint = async (
       ragChunks: agent.ragChunks.map(({ fileName, content }) => ({ fileName, content })),
       ...(agent.icon === undefined ? {} : { icon: agent.icon }),
       ...(agent.modelParams === undefined ? {} : { modelParams: agent.modelParams }),
+      ...(agent.mathToolsEnabled === undefined ? {} : { mathToolsEnabled: agent.mathToolsEnabled }),
     })),
     routes: bundle.routes.map(route => ({
       fromAgentId: removeImportedBundleNamespace(route.fromAgentId, importedBundleId),
@@ -209,6 +210,7 @@ const parseAgent = (
   raw: unknown,
   index: number,
   errors: BundleIssue[],
+  warnings: BundleIssue[],
 ): AgentBundleAgent | null => {
   const label = `agents[${index}]`;
   if (!isRecord(raw)) {
@@ -287,6 +289,20 @@ const parseAgent = (
     }
   }
   const modelParams = validateModelParams(raw.modelParams, errors);
+  let mathToolsEnabled: boolean | undefined;
+  if (raw.mathToolsEnabled !== undefined) {
+    if (typeof raw.mathToolsEnabled === 'boolean') {
+      mathToolsEnabled = raw.mathToolsEnabled;
+    } else {
+      warnings.push(
+        issue(
+          'missing-field',
+          `${label}.mathToolsEnabled 必須是布林值，已忽略。`,
+          '請修正協作包後重新匯出。',
+        ),
+      );
+    }
+  }
 
   if (
     !validId ||
@@ -312,6 +328,7 @@ const parseAgent = (
     ),
     ...(icon === undefined ? {} : { icon }),
     ...(modelParams === undefined ? {} : { modelParams }),
+    ...(mathToolsEnabled === undefined ? {} : { mathToolsEnabled }),
   };
 };
 
@@ -420,7 +437,7 @@ export const validateBundle = (raw: unknown): BundleValidationResult => {
 
   const agents = Array.isArray(raw.agents)
     ? raw.agents
-        .map((agent, index) => parseAgent(agent, index, errors))
+        .map((agent, index) => parseAgent(agent, index, errors, warnings))
         .filter((agent): agent is AgentBundleAgent => agent !== null)
     : [];
 
@@ -542,6 +559,7 @@ export const buildAgentBundle = (
     systemPrompt: assistant.systemPrompt ?? '',
     starterPrompts: assistant.starterPrompts ?? [],
     ragChunks: (assistant.ragChunks ?? []).map(({ fileName, content }) => ({ fileName, content })),
+    ...(assistant.mathToolsEnabled === true ? { mathToolsEnabled: true } : {}),
   })),
   routes: routes.map(({ fromAgentId, toAgentId, condition }) => ({
     fromAgentId,
@@ -623,6 +641,7 @@ export const buildImportedBundle = (bundle: VersionedAgentBundle): BundleRecord 
       ragChunks: agent.ragChunks.map(({ fileName, content }) => ({ fileName, content })),
       ...(agent.icon === undefined ? {} : { icon: agent.icon }),
       ...(agent.modelParams === undefined ? {} : { modelParams: { ...agent.modelParams } }),
+      ...(agent.mathToolsEnabled === undefined ? {} : { mathToolsEnabled: agent.mathToolsEnabled }),
     })),
     routes: bundle.routes.map(route => ({
       fromAgentId: namespacedIds.get(route.fromAgentId)!,

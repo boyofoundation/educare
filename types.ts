@@ -1,3 +1,5 @@
+import type { GeometryDoc } from './services/geometryToolService';
+
 export interface RagChunk {
   fileName: string;
   content: string;
@@ -41,6 +43,7 @@ export interface Assistant {
    * 改由「聊天回合是否有開啟 HTML 專案 (session.activeProjectId)」於執行期自動推導。
    */
   subagentDelegationEnabled?: boolean;
+  mathToolsEnabled?: boolean;
   /** Assistant ids this assistant may propose as a user-confirmed handoff. */
   routableAssistantIds?: string[];
 }
@@ -64,6 +67,7 @@ export interface AgentBundleAgent {
   ragChunks: AgentBundleRagChunk[];
   icon?: string;
   modelParams?: AgentBundleModelParams;
+  mathToolsEnabled?: boolean;
 }
 
 export interface AgentBundleRoute {
@@ -222,6 +226,13 @@ export interface MessageAttachment {
   name?: string;
 }
 
+export interface GeometryBoardRecord {
+  id: string;
+  title: string;
+  doc: GeometryDoc;
+  computedPoints: Array<{ id: string; x: number; y: number }>;
+}
+
 export interface ChatMessage {
   role: 'user' | 'model';
   content: string;
@@ -260,6 +271,10 @@ export interface ChatMessage {
    * 回答引用的知識片段。舊資料可能沒有此欄位，UI 需優雅退化。
    */
   citations?: MessageCitation[];
+  /**
+   * 已完成的宣告式幾何圖。舊資料沒有此欄位時，UI 必須優雅退化。
+   */
+  geometryBoards?: GeometryBoardRecord[];
   routeProposal?: RouteProposal;
 }
 
@@ -795,6 +810,7 @@ export interface AgentRunCheckpoint {
   };
   agentHarnessEnabled: boolean;
   subagentDelegationEnabled?: boolean;
+  mathToolsEnabled?: boolean;
   routableTargets?: Array<{ id: string; name: string; description: string }>;
   /** HTML 專案模式開關快照,確保 resume 時維持與原回合一致的工具暴露。 */
   htmlProjectEnabled?: boolean;
@@ -852,6 +868,7 @@ export interface AssistantRevisionSnapshot {
   starterPrompts: string[];
   routableAssistantIds: string[];
   subagentDelegationEnabled: boolean;
+  mathToolsEnabled: boolean;
   providerRequirements: string[];
   safetyMetadata: Record<string, string>;
   knowledgeRevisionIds: string[];

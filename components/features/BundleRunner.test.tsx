@@ -265,6 +265,25 @@ describe('BundleRunner', () => {
     expect(screen.queryByText(/HTML Canvas/)).not.toBeInTheDocument();
   });
 
+  it('defaults missing math-tools settings to false for the chat runtime', async () => {
+    render(<Harness preview={bundle()} />);
+
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+
+    expect(chat).toHaveBeenLastCalledWith(expect.objectContaining({ mathToolsEnabled: false }));
+  });
+
+  it('forwards enabled bundle math-tools settings to the chat runtime', async () => {
+    const mathEnabledBundle = bundle();
+    mathEnabledBundle.agents[0].mathToolsEnabled = true;
+
+    render(<Harness preview={mathEnabledBundle} />);
+
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+
+    expect(chat).toHaveBeenLastCalledWith(expect.objectContaining({ mathToolsEnabled: true }));
+  });
+
   it('restores the newest persisted session without creating another', async () => {
     const newest: ChatSession = {
       id: 'newest',

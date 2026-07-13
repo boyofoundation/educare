@@ -108,6 +108,60 @@ describe('agentBundleService', () => {
     });
   });
 
+  it('round-trips an enabled math-tools setting through export and import', () => {
+    const bundle = buildAgentBundle(
+      [
+        createAssistant({ mathToolsEnabled: true }),
+        createAssistant({ id: 'science-tutor', name: 'Science Tutor' }),
+      ],
+      'math-tutor',
+      [],
+      {
+        name: 'STEM Team',
+        description: 'A pair of teaching assistants.',
+        version: '1.0.0',
+      },
+    );
+
+    const parsed = parseBundleText(serializeBundle(bundle));
+    const imported = buildImportedBundle(parsed.bundle!);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.bundle?.agents[0]).toMatchObject({ mathToolsEnabled: true });
+    expect(imported.bundle.agents[0]).toMatchObject({ mathToolsEnabled: true });
+  });
+
+  it('warns about a malformed math-tools field but retains the importable bundle', () => {
+    const malformed = createBundle({
+      agents: [createAssistantBundleAgent({ mathToolsEnabled: 'enabled' })],
+    });
+
+    const parsed = parseBundleText(JSON.stringify(malformed));
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'missing-field',
+          message: expect.stringContaining('agents[0].mathToolsEnabled'),
+        }),
+      ]),
+    );
+    expect(parsed.bundle).not.toBeNull();
+    expect(parsed.bundle?.agents[0]).not.toHaveProperty('mathToolsEnabled');
+    expect(buildImportedBundle(parsed.bundle!).bundle.agents[0]).not.toHaveProperty(
+      'mathToolsEnabled',
+    );
+  });
+
+  it('parses bundles without an optional math-tools field', () => {
+    const parsed = parseBundleText(JSON.stringify(createBundle()));
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.warnings).toEqual([]);
+    expect(parsed.bundle?.agents[0]).not.toHaveProperty('mathToolsEnabled');
+  });
+
   it('parses and preserves encrypted v2 provider settings during import', () => {
     const bundle = {
       ...createBundle(),

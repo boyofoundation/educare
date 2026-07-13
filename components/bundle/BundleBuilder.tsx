@@ -8,6 +8,7 @@ import {
 } from '../../services/agentBundleService';
 import { encryptBundleProviderCredentials } from '../../services/bundleProviderCredentialsService';
 import { providerManager } from '../../services/providerRegistry';
+import { bundleStrings } from './bundleStrings';
 import type { ProviderType } from '../../services/llmAdapter';
 import type { AgentBundle, AgentBundleRoute, AgentBundleV2, Assistant } from '../../types';
 
@@ -60,6 +61,7 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [routesSeeded, setRoutesSeeded] = useState(false);
   const [includeProviderCredentials, setIncludeProviderCredentials] = useState(false);
+  const [mathToolsEnabled, setMathToolsEnabled] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<ProviderType | ''>('');
   const [password, setPassword] = useState('');
   const [passwordConfirmation, setPasswordConfirmation] = useState('');
@@ -157,8 +159,13 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
     if (selectedAssistants.length < 2 || !entryAgentId) {
       return null;
     }
-    return buildAgentBundle(selectedAssistants, entryAgentId, routes, metadata);
-  }, [selectedAssistants, entryAgentId, routes, metadata]);
+    return buildAgentBundle(
+      selectedAssistants.map(assistant => ({ ...assistant, mathToolsEnabled })),
+      entryAgentId,
+      routes,
+      metadata,
+    );
+  }, [selectedAssistants, entryAgentId, routes, metadata, mathToolsEnabled]);
 
   const validation = useMemo(() => (bundle ? validateBundle(bundle) : null), [bundle]);
   const sizeBytes = useMemo(() => (bundle ? estimateBundleSize(bundle) : 0), [bundle]);
@@ -451,6 +458,24 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
                 />
               </label>
             </div>
+
+            <fieldset className='rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4'>
+              <label className='flex cursor-pointer items-start gap-2 text-sm text-gray-200'>
+                <input
+                  type='checkbox'
+                  checked={mathToolsEnabled}
+                  onChange={event => setMathToolsEnabled(event.target.checked)}
+                  aria-describedby='bundle-math-tools-help'
+                  className='mt-0.5'
+                />
+                <span className='flex flex-col'>
+                  <span>{bundleStrings.builder.mathToolsLabel}</span>
+                  <span id='bundle-math-tools-help' className='mt-1 text-xs text-gray-400'>
+                    {bundleStrings.builder.mathToolsHelp}
+                  </span>
+                </span>
+              </label>
+            </fieldset>
 
             <fieldset className='rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/5 p-4'>
               <legend className='px-1 text-sm font-semibold text-fuchsia-100'>

@@ -32,6 +32,8 @@ export const bundleStrings = {
     receptionistTitle: '接待入口（單選）',
     receptionistLabel: (name: string) => `設為接待入口：${name}`,
     matrixTitle: '路由矩陣',
+    mathToolsLabel: '啟用數學計算與幾何繪圖工具',
+    mathToolsHelp: '需支援工具呼叫的模型；Ollama 目前不支援。',
     next: '下一步',
     prev: '上一步',
     export: '匯出 JSON',
