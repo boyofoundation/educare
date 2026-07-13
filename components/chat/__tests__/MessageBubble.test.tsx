@@ -239,7 +239,8 @@ describe('MessageBubble', () => {
       expect(screen.getByText('lint-path-not-found')).toBeInTheDocument();
     });
 
-    it('renders citations and expands stored source content', () => {
+    it('keeps citations closed until the reference list and source are expanded', () => {
+      // Arrange
       const assistantMessage = createMockChatMessage({
         role: 'model',
         content: '請參考下列資料。',
@@ -254,6 +255,7 @@ describe('MessageBubble', () => {
         ],
       });
 
+      // Act
       render(
         <MessageBubble
           message={assistantMessage}
@@ -262,12 +264,29 @@ describe('MessageBubble', () => {
         />,
       );
 
-      expect(screen.getByText('📚 參考資料')).toBeInTheDocument();
+      // Assert - the reference list starts collapsed
+      const citationList = screen.getByTestId('citation-list');
+      const citationSummary = screen.getByText('📚 參考資料').closest('summary');
+      const sourceSummary = screen.getByText('員工手冊.pdf · 段落 1').closest('summary');
+      const sourceDetails = sourceSummary?.closest('details');
+
+      expect(citationList).not.toHaveAttribute('open');
+      expect(citationSummary).toBeInTheDocument();
+      expect(sourceDetails).not.toHaveAttribute('open');
       expect(screen.getByText('[1]')).toBeInTheDocument();
-      expect(screen.getByText('員工手冊.pdf · 段落 1')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByText('員工手冊.pdf · 段落 1'));
+      // Act - expand the reference list
+      fireEvent.click(citationSummary!);
 
+      // Assert - source items remain collapsed
+      expect(citationList).toHaveAttribute('open');
+      expect(sourceDetails).not.toHaveAttribute('open');
+
+      // Act - expand the individual source
+      fireEvent.click(sourceSummary!);
+
+      // Assert - the complete stored content is displayed
+      expect(sourceDetails).toHaveAttribute('open');
       expect(screen.getByText('完整段落內容')).toBeInTheDocument();
       expect(
         screen.queryByText('來源檔案已更新或移除，以下顯示儲存時的摘錄。'),
@@ -291,7 +310,8 @@ describe('MessageBubble', () => {
 
       render(<MessageBubble message={assistantMessage} index={0} citationContentsById={{}} />);
 
-      fireEvent.click(screen.getByText('舊版資料.md · 段落 3'));
+      fireEvent.click(screen.getByText('📚 參考資料').closest('summary')!);
+      fireEvent.click(screen.getByText('舊版資料.md · 段落 3').closest('summary')!);
 
       expect(screen.getByText('來源檔案已更新或移除，以下顯示儲存時的摘錄。')).toBeInTheDocument();
       expect(screen.getByText('保留摘錄內容')).toBeInTheDocument();

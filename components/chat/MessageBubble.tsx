@@ -285,9 +285,17 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
             />
           )}
           {citations.length > 0 && (
-            <div className='w-full max-w-[85%] rounded-2xl border border-cyan-500/20 bg-gray-900/60 px-4 py-3 text-sm text-gray-200 md:max-w-[65ch]'>
-              <div className='mb-3 text-sm font-medium text-cyan-200'>📚 參考資料</div>
-              <div className='space-y-2'>
+            <details
+              data-testid='citation-list'
+              className='w-full max-w-[85%] rounded-2xl border border-cyan-500/20 bg-gray-900/60 px-4 py-3 text-sm text-gray-200 md:max-w-[65ch]'
+            >
+              <summary className='flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 text-sm font-medium text-cyan-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400'>
+                <span>📚 參考資料</span>
+                <span className='text-xs font-normal text-cyan-100/75'>
+                  {citations.length} 個來源
+                </span>
+              </summary>
+              <div className='mt-3 space-y-2'>
                 {citations.map(citation => {
                   const sourceContent = citationContentsById?.[citation.chunkId];
                   const resolvedContent = sourceContent ?? citation.excerpt;
@@ -319,7 +327,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
                   );
                 })}
               </div>
-            </div>
+            </details>
           )}
           {actionRow}
         </div>

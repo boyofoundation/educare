@@ -240,29 +240,20 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   }, []);
 
   useEffect(() => {
-    updatePinnedState();
-  }, [
-    currentSession.messages,
-    streamingResponse,
-    isThinking,
-    subagentBatches,
-    toolCallRecords,
-    pendingEmptyResponseNotice,
-    updatePinnedState,
-  ]);
-
-  useEffect(() => {
     const pendingResetSessionId = pendingNewSessionScrollResetRef.current;
     if (pendingResetSessionId) {
       if (pendingResetSessionId === currentSession.id && currentSession.messages.length > 0) {
         pendingNewSessionScrollResetRef.current = null;
-        scrollToBottom(streamingResponse ? 'auto' : 'smooth');
+        scrollToBottom('smooth');
       }
       return;
     }
 
+    // `isAtBottom` is captured before a message update. Re-measuring after the
+    // update can incorrectly mark a pinned user as unpinned, while smooth
+    // scrolling on every render causes visible bottom-end bouncing.
     if (isAtBottom) {
-      scrollToBottom(streamingResponse ? 'auto' : 'smooth');
+      scrollToBottom('auto');
     }
   }, [
     currentSession.id,
