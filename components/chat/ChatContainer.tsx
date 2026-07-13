@@ -116,6 +116,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   headerActions,
   onCreateSession,
   subagentDelegationEnabled = false,
+  mathToolsEnabled = false,
   routableTargetsOverride,
   onAcceptRouteProposal,
   onDeclineRouteProposal,
@@ -632,6 +633,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         agentHarnessEnabled: resumeCheckpoint?.agentHarnessEnabled ?? projectEditingActive,
         subagentDelegationEnabled:
           resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
+        mathToolsEnabled: resumeCheckpoint?.mathToolsEnabled ?? mathToolsEnabled,
         routableTargets: resumeCheckpoint?.routableTargets ?? routableTargets,
         htmlProjectEnabled: resumeCheckpoint?.htmlProjectEnabled ?? projectEditingActive,
         // 未開啟專案時,提供 createProject bootstrap 工具讓模型自行建立專案;
@@ -757,6 +759,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
         const newAiMessage = buildAssistantMessage(fullModelResponse, {
           citations: result.citations,
+          geometryBoards: result.geometryBoards,
           routeProposal: routeProposalRef.current,
         });
         const finalSession = applyTokenUsageToSession(

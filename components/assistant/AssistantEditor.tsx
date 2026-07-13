@@ -28,6 +28,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   const [starterPrompts, setStarterPrompts] = useState<string[]>([]);
   const [newStarterPrompt, setNewStarterPrompt] = useState('');
   const [subagentDelegationEnabled, setSubagentDelegationEnabled] = useState(false);
+  const [mathToolsEnabled, setMathToolsEnabled] = useState(false);
   const [routableAssistantIds, setRoutableAssistantIds] = useState<string[]>([]);
   const appContext = useContext(AppContext);
   const [isSaving, setIsSaving] = useState(false);
@@ -45,6 +46,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setStarterPrompts(assistant.starterPrompts || []);
       setNewStarterPrompt('');
       setSubagentDelegationEnabled(assistant.subagentDelegationEnabled ?? false);
+      setMathToolsEnabled(assistant.mathToolsEnabled ?? false);
       setRoutableAssistantIds(assistant.routableAssistantIds ?? []);
     } else {
       setName('');
@@ -54,6 +56,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setStarterPrompts([]);
       setNewStarterPrompt('');
       setSubagentDelegationEnabled(false);
+      setMathToolsEnabled(false);
       setRoutableAssistantIds([]);
     }
   }, [assistant]);
@@ -105,6 +108,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         starterPrompts: finalStarterPrompts,
         createdAt: assistant?.createdAt || Date.now(),
         subagentDelegationEnabled,
+        mathToolsEnabled,
         routableAssistantIds,
       };
 
@@ -278,6 +282,30 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             >
               開啟後,主模型可把研究或受限 HTML 工作委派給 1-4 個子代理人並行處理。這會增加 token
               成本,且 shared mode 會在執行時強制停用。
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div className='mb-6'>
+        <label
+          htmlFor='math-tools-enabled'
+          className='flex cursor-pointer select-none items-start gap-3'
+        >
+          <input
+            id='math-tools-enabled'
+            type='checkbox'
+            checked={mathToolsEnabled}
+            onChange={e => setMathToolsEnabled(e.target.checked)}
+            disabled={isSaving}
+            className='mt-1 h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0'
+            aria-describedby='math-tools-help'
+          />
+          <span className='flex flex-col'>
+            <span className='text-sm font-semibold text-gray-300'>數學計算與幾何繪圖工具</span>
+            <span id='math-tools-help' className='mt-1 text-xs leading-relaxed text-gray-500'>
+              開啟後，助理可使用數學計算與幾何繪圖工具。Ollama
+              目前不支援工具呼叫，因此無法使用此功能。
             </span>
           </span>
         </label>

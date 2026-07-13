@@ -25,6 +25,12 @@ vi.mock('../../ui/Icons', () => ({
   ),
 }));
 
+vi.mock('../GeometryBoard', () => ({
+  default: ({ board }: { board: { title: string } }) => (
+    <section data-testid='geometry-board'>{board.title}</section>
+  ),
+}));
+
 describe('MessageBubble', () => {
   describe('User Message Rendering', () => {
     it('should render user message with proper layout', () => {
@@ -131,6 +137,51 @@ describe('MessageBubble', () => {
       await waitFor(() => {
         expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Copy this response');
       });
+    });
+
+    it('renders geometry boards after the assistant content', () => {
+      // Arrange
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: 'Here is the constructed triangle.',
+        geometryBoards: [
+          {
+            id: 'geometry-1',
+            title: 'Triangle ABC',
+            doc: {
+              title: 'Triangle ABC',
+              boundingbox: [-5, 5, 5, -5],
+              objects: [],
+            },
+            computedPoints: [],
+          },
+        ],
+      });
+
+      // Act
+      render(<MessageBubble message={assistantMessage} index={0} />);
+
+      // Assert
+      const content = screen.getByTestId('markdown-content');
+      const geometryBoard = screen.getByTestId('geometry-board');
+      expect(geometryBoard).toHaveTextContent('Triangle ABC');
+      expect(
+        content.compareDocumentPosition(geometryBoard) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it('renders legacy assistant messages without geometry boards safely', () => {
+      // Arrange
+      const legacyAssistantMessage = createMockChatMessage({
+        role: 'model',
+        content: 'A response from before geometry boards existed.',
+      });
+
+      // Act & Assert
+      expect(() =>
+        render(<MessageBubble message={legacyAssistantMessage} index={0} />),
+      ).not.toThrow();
+      expect(screen.queryByTestId('geometry-board')).not.toBeInTheDocument();
     });
 
     it('should render persisted subagent runs in a collapsed agent activity timeline', () => {

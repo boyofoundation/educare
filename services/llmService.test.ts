@@ -8,6 +8,8 @@ const {
   mockExecuteHtmlProjectToolCall,
   mockRecordHtmlProjectTelemetryEvent,
   mockRunSubagentBatch,
+  mockExecuteCompute,
+  mockExecuteDrawGeometry,
 } = vi.hoisted(() => ({
   mockInitializeProviders: vi.fn(),
   mockGetActiveProvider: vi.fn(),
@@ -16,6 +18,8 @@ const {
   mockExecuteHtmlProjectToolCall: vi.fn(),
   mockRecordHtmlProjectTelemetryEvent: vi.fn(),
   mockRunSubagentBatch: vi.fn(),
+  mockExecuteCompute: vi.fn(),
+  mockExecuteDrawGeometry: vi.fn(),
 }));
 
 vi.mock('./providerRegistry', () => ({
@@ -62,12 +66,37 @@ vi.mock('./subagentService', () => ({
   runSubagentBatch: mockRunSubagentBatch,
 }));
 
+vi.mock('./mathComputeService', () => ({
+  executeCompute: mockExecuteCompute,
+  MATH_COMPUTE_TOOL_NAME: 'compute',
+  MATH_COMPUTE_TOOL_DESCRIPTION: 'Evaluate a mathematical expression.',
+  MATH_COMPUTE_TOOL_SCHEMA: {
+    type: 'object',
+    properties: { expr: { type: 'string' } },
+    required: ['expr'],
+  },
+  MATH_TOOLS_SYSTEM_PROMPT: 'Math tools prompt',
+}));
+
+vi.mock('./geometryToolService', () => ({
+  executeDrawGeometry: mockExecuteDrawGeometry,
+  DRAW_GEOMETRY_TOOL_NAME: 'draw_geometry',
+  DRAW_GEOMETRY_TOOL_DESCRIPTION: 'Draw a geometry diagram.',
+  DRAW_GEOMETRY_TOOL_SCHEMA: {
+    type: 'object',
+    properties: { title: { type: 'string' } },
+    required: ['title'],
+  },
+}));
+
 describe('streamChat', () => {
   beforeEach(() => {
     mockHasKnowledgeChunks.mockReturnValue(false);
 
     vi.resetModules();
     vi.clearAllMocks();
+    mockExecuteCompute.mockReset();
+    mockExecuteDrawGeometry.mockReset();
     mockInitializeProviders.mockResolvedValue(undefined);
     mockHasKnowledgeChunks.mockReturnValue(false);
     mockBuildKnowledgeSearchResponse.mockReturnValue({ matches: [] });
@@ -89,6 +118,347 @@ describe('streamChat', () => {
       },
       summary: 'updated project',
     });
+  });
+
+  it('hides math tools and their prompt when mathToolsEnabled is disabled', async () => {
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 0,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Calculate 1 + 1.',
+      assistantId: 'assistant-1',
+      mathToolsEnabled: false,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    expect(observedChatParams[0]?.tools).toBeUndefined();
+    expect(observedChatParams[0]?.systemPrompt).not.toContain('Math tools prompt');
+    expect(mockExecuteCompute).not.toHaveBeenCalled();
+    expect(mockExecuteDrawGeometry).not.toHaveBeenCalled();
+  });
+
+  it('exposes math tools and dispatches compute when mathToolsEnabled is enabled', async () => {
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    mockExecuteCompute.mockResolvedValue({
+      ok: true,
+      result: '4',
+      summary: 'Computed 4',
+    });
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<unknown>;
+        const result = await executeTool({ name: 'compute', args: { expr: '2 + 2' } });
+        expect(result).toEqual({ ok: true, result: '4', summary: 'Computed 4' });
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 1,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Calculate 2 + 2.',
+      assistantId: 'assistant-1',
+      mathToolsEnabled: true,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    const toolNames = (observedChatParams[0]?.tools as Array<{ name: string }>).map(
+      tool => tool.name,
+    );
+    expect(toolNames).toEqual(expect.arrayContaining(['compute', 'draw_geometry']));
+    expect(observedChatParams[0]?.systemPrompt).toContain('Math tools prompt');
+    expect(mockExecuteCompute).toHaveBeenCalledWith({ expr: '2 + 2' });
+  });
+
+  it('records successful draw geometry completion metadata when math tools are enabled', async () => {
+    const geometryDocument = {
+      title: 'Triangle ABC',
+      boundingbox: [-5, 5, 5, -5],
+      objects: [],
+    };
+    mockExecuteDrawGeometry.mockResolvedValue({
+      ok: true,
+      errors: [],
+      warnings: [],
+      computed_points: [{ id: 'A', x: 0, y: 0 }],
+      summary: 'Geometry drawn successfully.',
+    });
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<unknown>;
+        await executeTool({ name: 'draw_geometry', args: geometryDocument });
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 1,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+    const onComplete = vi.fn();
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Draw triangle ABC.',
+      assistantId: 'assistant-1',
+      mathToolsEnabled: true,
+      onChunk: vi.fn(),
+      onComplete,
+    });
+
+    expect(mockExecuteDrawGeometry).toHaveBeenCalledWith(geometryDocument);
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        geometryBoards: [
+          expect.objectContaining({
+            document: geometryDocument,
+            result: expect.objectContaining({
+              ok: true,
+              computed_points: [{ id: 'A', x: 0, y: 0 }],
+            }),
+          }),
+        ],
+      }),
+      '',
+    );
+  });
+
+  it('keeps math tools available to shared-session calls when enabled', async () => {
+    mockExecuteCompute.mockResolvedValue({
+      ok: true,
+      result: '9',
+      summary: 'Computed 9',
+    });
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        const toolNames = (params.tools as Array<{ name: string }>).map(tool => tool.name);
+        expect(toolNames).toEqual(expect.arrayContaining(['compute', 'draw_geometry']));
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<unknown>;
+        await executeTool({ name: 'compute', args: { expr: '3 * 3' } });
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 1,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Calculate 3 * 3.',
+      assistantId: 'shared-assistant-1',
+      sessionId: 'shared-session-1',
+      mathToolsEnabled: true,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    expect(mockExecuteCompute).toHaveBeenCalledWith({ expr: '3 * 3' });
+  });
+
+  it('stops compute after 20 recoverable failures', async () => {
+    mockExecuteCompute.mockResolvedValue({
+      ok: false,
+      recoverable: true,
+      code: 'compute-evaluation-failed',
+      error: 'invalid expression',
+      summary: 'invalid expression',
+    });
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<Record<string, unknown>>;
+        const results = await Promise.all(
+          Array.from({ length: 21 }, () => executeTool({ name: 'compute', args: { expr: 'bad' } })),
+        );
+        expect(results.slice(0, 20)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ recoverable: true })]),
+        );
+        expect(results[20]).toMatchObject({
+          recoverable: false,
+          code: 'compute-failure-limit-reached',
+        });
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 21,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Compute.',
+      assistantId: 'assistant-1',
+      mathToolsEnabled: true,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    expect(mockExecuteCompute).toHaveBeenCalledTimes(21);
+  });
+
+  it('stops draw_geometry after 6 recoverable failures', async () => {
+    const geometryDocument = {
+      title: 'Broken geometry',
+      boundingbox: [-5, 5, 5, -5],
+      objects: [],
+    };
+    mockExecuteDrawGeometry.mockResolvedValue({
+      ok: false,
+      recoverable: true,
+      code: 'geometry-validation-failed',
+      errors: [],
+      warnings: [],
+      computed_points: [],
+      summary: 'Invalid geometry.',
+    });
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<Record<string, unknown>>;
+        const results = await Promise.all(
+          Array.from({ length: 7 }, () =>
+            executeTool({ name: 'draw_geometry', args: geometryDocument }),
+          ),
+        );
+        expect(results.slice(0, 6)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ recoverable: true })]),
+        );
+        expect(results[6]).toMatchObject({
+          recoverable: false,
+          code: 'draw-geometry-failure-limit-reached',
+        });
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 7,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Draw geometry.',
+      assistantId: 'assistant-1',
+      mathToolsEnabled: true,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    expect(mockExecuteDrawGeometry).toHaveBeenCalledTimes(7);
   });
 
   it('allows valid HTML project tools under soft-gated main-turn exposure', async () => {

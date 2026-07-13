@@ -51,6 +51,22 @@ import {
   validateRouteCall,
   type RoutableTarget,
 } from './assistantRoutingService';
+import {
+  executeCompute,
+  MATH_COMPUTE_TOOL_DESCRIPTION,
+  MATH_COMPUTE_TOOL_NAME,
+  MATH_COMPUTE_TOOL_SCHEMA,
+  MATH_TOOLS_SYSTEM_PROMPT,
+  type ComputeArgs,
+} from './mathComputeService';
+import {
+  DRAW_GEOMETRY_TOOL_DESCRIPTION,
+  DRAW_GEOMETRY_TOOL_NAME,
+  DRAW_GEOMETRY_TOOL_SCHEMA,
+  executeDrawGeometry,
+  type DrawGeometryResult,
+  type GeometryDoc,
+} from './geometryToolService';
 
 export interface StreamChatParams {
   systemPrompt: string;
@@ -64,6 +80,7 @@ export interface StreamChatParams {
   activeProjectId?: string | null;
   knowledgeChunks?: RagChunk[];
   subagentDelegationEnabled?: boolean;
+  mathToolsEnabled?: boolean;
   routableTargets?: RoutableTarget[];
   onRouteProposal?: (proposal: RouteProposal) => void;
   /**
@@ -116,6 +133,10 @@ export interface StreamChatParams {
       activeProjectId?: string | null;
       subagentRuns?: SubagentRunRecord[];
       subagentUsageTotals?: TokenUsageTotals;
+      geometryBoards?: Array<{
+        document: GeometryDoc;
+        result: Extract<DrawGeometryResult, { ok: true }>;
+      }>;
     },
     fullText: string,
   ) => void;
@@ -251,6 +272,7 @@ export const streamChat = async (params: StreamChatParams) => {
     signal,
     packSetOverride,
     subagentDelegationEnabled = false,
+    mathToolsEnabled = false,
     routableTargets = [],
     htmlProjectEnabled = false,
     projectBootstrapEnabled = false,
@@ -287,6 +309,12 @@ export const streamChat = async (params: StreamChatParams) => {
   const subagentRunsByBatch = new Map<string, SubagentRunRecord[]>();
   let subagentRuns: SubagentRunRecord[] | undefined;
   let subagentUsageTotals: TokenUsageTotals | undefined;
+  const geometryBoards: Array<{
+    document: GeometryDoc;
+    result: Extract<DrawGeometryResult, { ok: true }>;
+  }> = [];
+  let computeFailureCount = 0;
+  let drawGeometryFailureCount = 0;
 
   const knowledgeToolEnabled = hasKnowledgeChunks(knowledgeChunks);
 
@@ -423,6 +451,7 @@ export const streamChat = async (params: StreamChatParams) => {
     const finalSystemPrompt = [
       systemPrompt,
       knowledgeToolEnabled ? KNOWLEDGE_SEARCH_SYSTEM_PROMPT : '',
+      mathToolsEnabled ? MATH_TOOLS_SYSTEM_PROMPT : '',
       htmlProjectToolEnabled
         ? buildHtmlProjectSystemPrompt({
             activeProjectId: resolvedActiveProjectId,
@@ -479,6 +508,56 @@ export const streamChat = async (params: StreamChatParams) => {
             knowledgeChunks,
             call.args as unknown as KnowledgeSearchArgs,
           );
+        } else if (mathToolsEnabled && call.name === MATH_COMPUTE_TOOL_NAME) {
+          const computeResult = await executeCompute(call.args as ComputeArgs);
+          if (computeResult.ok) {
+            result = computeResult;
+          } else {
+            computeFailureCount += 1;
+            result =
+              computeFailureCount > 20
+                ? {
+                    ok: false,
+                    recoverable: false,
+                    code: 'compute-failure-limit-reached',
+                    message: 'compute reached its limit of 20 recoverable failures for this run.',
+                    guidance:
+                      'Stop calling compute for this run and explain that the requested calculation could not be completed.',
+                  }
+                : {
+                    ...computeResult,
+                    // Provider loops escalate repeated recoverable codes after three attempts.
+                    // Keep each allowed failure independently recoverable until this tool's limit.
+                    code: `${computeResult.code}-${computeFailureCount}`,
+                  };
+          }
+        } else if (mathToolsEnabled && call.name === DRAW_GEOMETRY_TOOL_NAME) {
+          const drawGeometryResult = await executeDrawGeometry(call.args);
+          if (drawGeometryResult.ok) {
+            geometryBoards.push({
+              document: call.args as unknown as GeometryDoc,
+              result: drawGeometryResult,
+            });
+            result = drawGeometryResult;
+          } else {
+            drawGeometryFailureCount += 1;
+            result =
+              drawGeometryFailureCount > 6
+                ? {
+                    ok: false,
+                    recoverable: false,
+                    code: 'draw-geometry-failure-limit-reached',
+                    message:
+                      'draw_geometry reached its limit of 6 recoverable failures for this run.',
+                    guidance:
+                      'Stop calling draw_geometry for this run and explain that the requested diagram could not be completed.',
+                  }
+                : {
+                    ...drawGeometryResult,
+                    // Keep each allowed failure independently recoverable until this tool's limit.
+                    code: `${drawGeometryResult.code}-${drawGeometryFailureCount}`,
+                  };
+          }
         } else if (routableTargets.length > 0 && call.name === ROUTE_TOOL_NAME) {
           if (routeProposalCreated) {
             result = createRoutingRecoverableToolError(
@@ -592,6 +671,7 @@ export const streamChat = async (params: StreamChatParams) => {
               requestedTool: call.name,
               visibleToolNames: [
                 ...(knowledgeToolEnabled ? [KNOWLEDGE_SEARCH_TOOL_NAME] : []),
+                ...(mathToolsEnabled ? [MATH_COMPUTE_TOOL_NAME, DRAW_GEOMETRY_TOOL_NAME] : []),
                 ...htmlProjectToolDefinitions.map(tool => tool.name),
                 ...bootstrapToolDefinitions.map(tool => tool.name),
                 ...(subagentDelegationEnabled ? [SUBAGENT_DELEGATE_TOOL_NAME] : []),
@@ -606,6 +686,16 @@ export const streamChat = async (params: StreamChatParams) => {
         const resultRecord = result as Record<string, unknown> | undefined;
         if (resultRecord?.ok === false && resultRecord.recoverable === true) {
           emitToolRecord('recoverable_error', {
+            code: typeof resultRecord.code === 'string' ? resultRecord.code : undefined,
+            summary:
+              typeof resultRecord.message === 'string'
+                ? resultRecord.message
+                : typeof resultRecord.summary === 'string'
+                  ? resultRecord.summary
+                  : undefined,
+          });
+        } else if (resultRecord?.ok === false) {
+          emitToolRecord('failed', {
             code: typeof resultRecord.code === 'string' ? resultRecord.code : undefined,
             summary:
               typeof resultRecord.message === 'string'
@@ -641,6 +731,20 @@ export const streamChat = async (params: StreamChatParams) => {
               name: KNOWLEDGE_SEARCH_TOOL_NAME,
               description: KNOWLEDGE_SEARCH_TOOL_DESCRIPTION,
               parameters: KNOWLEDGE_SEARCH_TOOL_SCHEMA,
+            },
+          ]
+        : []),
+      ...(mathToolsEnabled
+        ? [
+            {
+              name: MATH_COMPUTE_TOOL_NAME,
+              description: MATH_COMPUTE_TOOL_DESCRIPTION,
+              parameters: MATH_COMPUTE_TOOL_SCHEMA,
+            },
+            {
+              name: DRAW_GEOMETRY_TOOL_NAME,
+              description: DRAW_GEOMETRY_TOOL_DESCRIPTION,
+              parameters: DRAW_GEOMETRY_TOOL_SCHEMA,
             },
           ]
         : []),
@@ -706,6 +810,7 @@ export const streamChat = async (params: StreamChatParams) => {
         activeProjectId: resolvedActiveProjectId,
         subagentRuns,
         subagentUsageTotals,
+        geometryBoards: geometryBoards.length > 0 ? geometryBoards : undefined,
       },
       fullResponseText,
     );

@@ -217,6 +217,7 @@ const buildCheckpoint = (overrides: Partial<AgentRunCheckpoint> = {}): AgentRunC
     candidatesTokenCount: 8,
   },
   agentHarnessEnabled: overrides.agentHarnessEnabled ?? true,
+  mathToolsEnabled: overrides.mathToolsEnabled ?? false,
   sharedMode: overrides.sharedMode ?? false,
   createdAt: overrides.createdAt ?? 1_720_000_000_000,
   updatedAt: overrides.updatedAt ?? 1_720_000_000_000,
@@ -1118,6 +1119,85 @@ describe('AgentRunController', () => {
       outputTokens: 2,
       totalTokens: 5,
     });
+  });
+
+  it('restores math tools from a checkpoint and forwards them to streamChat', async () => {
+    const resumeFrom = buildCheckpoint({ mathToolsEnabled: true });
+    const invocations = installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        projectSummary: completeProjectSummary,
+        toolSequence: ['reportTurnOutcome'],
+      }),
+    ]);
+    const controller = new AgentRunController(
+      buildOptions({
+        resumeFrom,
+        mathToolsEnabled: false,
+      }),
+    );
+
+    await controller.run();
+
+    expect(invocations[0]?.params.mathToolsEnabled).toBe(true);
+    expect(mockSaveCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({ mathToolsEnabled: true }),
+    );
+    expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+      resumeFrom.runId,
+      expect.objectContaining({ mathToolsEnabled: true }),
+    );
+  });
+
+  it('persists completed geometry boards in the run result and model history', async () => {
+    const geometryBoards = [
+      {
+        document: {
+          title: 'Right triangle',
+          boundingbox: [-1, 3, 4, -1] as [number, number, number, number],
+          objects: [],
+        },
+        result: {
+          ok: true as const,
+          errors: [],
+          warnings: [],
+          computed_points: [
+            { id: 'A', x: 0, y: 0 },
+            { id: 'B', x: 3, y: 0 },
+          ],
+          summary: 'Geometry drawn successfully.',
+        },
+      },
+    ];
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      (params.onComplete as (meta: unknown, fullText: string) => void)(
+        {
+          promptTokenCount: 10,
+          candidatesTokenCount: 5,
+          finishReason: 'complete',
+          projectSummary: completeProjectSummary,
+          toolSequence: ['draw_geometry', 'reportTurnOutcome'],
+          geometryBoards,
+        },
+        'I created the triangle.',
+      );
+    });
+    const controller = new AgentRunController(buildOptions({ mathToolsEnabled: true }));
+
+    const result = await controller.run();
+
+    const expectedGeometryBoards = [
+      {
+        id: 'geometry-0-0',
+        title: 'Right triangle',
+        doc: geometryBoards[0].document,
+        computedPoints: geometryBoards[0].result.computed_points,
+      },
+    ];
+    expect(result.geometryBoards).toEqual(expectedGeometryBoards);
+    expect(result.historyDelta.at(-1)).toEqual(
+      expect.objectContaining({ geometryBoards: expectedGeometryBoards }),
+    );
   });
 
   it('project bootstrap: createProject on turn 0 upgrades to full project mode on the next turn', async () => {

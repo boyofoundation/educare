@@ -186,6 +186,7 @@ function AppContent(): React.JSX.Element {
             assistantDescription={state.currentAssistant.description}
             starterPrompts={state.currentAssistant.starterPrompts ?? []}
             subagentDelegationEnabled={state.currentAssistant.subagentDelegationEnabled ?? false}
+            mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
           />
         )}
 
@@ -289,6 +290,7 @@ function AppContent(): React.JSX.Element {
                 subagentDelegationEnabled={
                   state.currentAssistant.subagentDelegationEnabled ?? false
                 }
+                mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
                 hideHeader={state.isMobile || state.isTablet}
                 isWorkspaceOpen={Boolean(state.isProjectWorkspaceOpen && state.activeProjectId)}
                 headerActions={

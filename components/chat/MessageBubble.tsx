@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useRef, useState } from 'react';
 import { MessageBubbleProps } from './types';
 import { UserIcon, GeminiIcon } from '../ui/Icons';
 import AgentActivityTimeline from './AgentActivityTimeline';
+import GeometryBoard from './GeometryBoard';
 import MarkdownContent from './MarkdownContent';
 import { AppContext } from '../core/useAppContext';
 import { attachmentToDataUrl } from '../../services/imageAttachmentService';
@@ -265,10 +266,6 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
           </div>
         </div>
         <div className='group flex min-w-0 flex-col gap-3'>
-          <AgentActivityTimeline
-            toolCalls={message.toolCallLog}
-            subagentRuns={message.subagentRuns}
-          />
           <div
             className={`w-full max-w-[90%] rounded-2xl rounded-bl-md px-5 py-4 shadow-lg md:max-w-[70ch] md:px-6 ${
               message.isError
@@ -302,6 +299,13 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
               />
             </div>
           </div>
+          {message.geometryBoards?.map(board => (
+            <GeometryBoard key={board.id} board={board} />
+          ))}
+          <AgentActivityTimeline
+            toolCalls={message.toolCallLog}
+            subagentRuns={message.subagentRuns}
+          />
           {message.routeProposal && (
             <RouteProposalCard
               proposal={message.routeProposal}

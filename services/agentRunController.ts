@@ -4,6 +4,7 @@ import {
   type AgentRunStatus,
   type ChatMessage,
   type FinishReason,
+  type GeometryBoardRecord,
   type HtmlProjectAgentTelemetryEvent,
   type HtmlProjectRuntimeDiagnosticStatus,
   type HtmlProjectSummary,
@@ -131,6 +132,7 @@ export interface AgentRunControllerOptions {
   /** G9 feature flag — when false, run EXACTLY ONE turn (legacy single-turn behavior). */
   agentHarnessEnabled: boolean;
   subagentDelegationEnabled?: boolean;
+  mathToolsEnabled?: boolean;
   routableTargets?: RoutableTarget[];
   /** HTML 專案模式開關。預設 false: 未開啟時不暴露任何 HTML 專案工具。 */
   htmlProjectEnabled?: boolean;
@@ -158,6 +160,7 @@ export interface AgentRunResult {
   finalHistory: ChatMessage[];
   historyDelta: ChatMessage[];
   citations?: MessageCitation[];
+  geometryBoards?: GeometryBoardRecord[];
   tokenInfo: {
     promptTokenCount: number;
     candidatesTokenCount: number;
@@ -249,6 +252,8 @@ export class AgentRunController {
     const effectiveDelegation =
       (resumeFrom?.subagentDelegationEnabled ?? options.subagentDelegationEnabled ?? false) &&
       !(options.sharedMode ?? false);
+    const effectiveMathToolsEnabled =
+      resumeFrom?.mathToolsEnabled ?? options.mathToolsEnabled ?? false;
     let effectiveHtmlProjectEnabled =
       resumeFrom?.htmlProjectEnabled ?? options.htmlProjectEnabled ?? false;
     // Bootstrap 升級後這些值會在 run 中途改變;checkpoint 一律以 effective 值為準。
@@ -294,6 +299,7 @@ export class AgentRunController {
     let finalProvider: string | undefined;
     let finalModel: string | undefined;
     let finalSubagentUsageTotals: TokenUsageTotals | undefined;
+    const geometryBoards: GeometryBoardRecord[] = [];
     let firstTurnPackSet = resumeFrom?.firstTurnPackSet
       ? [...resumeFrom.firstTurnPackSet]
       : undefined;
@@ -337,6 +343,7 @@ export class AgentRunController {
       },
       agentHarnessEnabled: effectiveAgentHarnessEnabled,
       subagentDelegationEnabled: effectiveDelegation,
+      mathToolsEnabled: effectiveMathToolsEnabled,
       routableTargets: options.routableTargets,
       htmlProjectEnabled: effectiveHtmlProjectEnabled,
       projectBootstrapEnabled,
@@ -376,6 +383,7 @@ export class AgentRunController {
           candidatesTokenCount: totalCandidatesTokens,
         },
         subagentDelegationEnabled: effectiveDelegation,
+        mathToolsEnabled: effectiveMathToolsEnabled,
         routableTargets: options.routableTargets,
         heartbeatAt: now,
         updatedAt: now,
@@ -406,6 +414,7 @@ export class AgentRunController {
           candidatesTokenCount: totalCandidatesTokens,
         },
         subagentDelegationEnabled: effectiveDelegation,
+        mathToolsEnabled: effectiveMathToolsEnabled,
         routableTargets: options.routableTargets,
         heartbeatAt: Date.now(),
         updatedAt: Date.now(),
@@ -493,6 +502,7 @@ export class AgentRunController {
           activeProjectId?: string | null;
           subagentRuns?: SubagentRunRecord[];
           subagentUsageTotals?: TokenUsageTotals;
+          geometryBoards?: GeometryBoardRecord[];
         } = {
           finishReason: 'complete',
           text: '',
@@ -516,6 +526,7 @@ export class AgentRunController {
             signal: this.internalAbort.signal,
             packSetOverride: isContinuation ? firstTurnPackSet : undefined,
             subagentDelegationEnabled: effectiveDelegation,
+            mathToolsEnabled: effectiveMathToolsEnabled,
             routableTargets: resumeFrom?.routableTargets ?? options.routableTargets,
             htmlProjectEnabled: effectiveHtmlProjectEnabled,
             projectBootstrapEnabled: projectBootstrapEnabled && !effectiveProjectId,
@@ -549,6 +560,12 @@ export class AgentRunController {
               turn.activeProjectId = meta.activeProjectId;
               turn.subagentRuns = meta.subagentRuns;
               turn.subagentUsageTotals = meta.subagentUsageTotals;
+              turn.geometryBoards = meta.geometryBoards?.map((board, index) => ({
+                id: `geometry-${state.turnIndex}-${index}`,
+                title: board.document.title,
+                doc: board.document,
+                computedPoints: board.result.computed_points,
+              }));
               totalPromptTokens += meta.promptTokenCount;
               totalCandidatesTokens += meta.candidatesTokenCount;
               if (meta.usage) {
@@ -730,7 +747,11 @@ export class AgentRunController {
           content: turn.text,
           agentTurnLog,
           subagentRuns: turn.subagentRuns,
+          geometryBoards: turn.geometryBoards,
         };
+        if (turn.geometryBoards) {
+          geometryBoards.push(...turn.geometryBoards);
+        }
         const committedMessages = synthetic ? [synthetic, modelMessage] : [modelMessage];
         checkpointHistory.push(...committedMessages);
         historyDelta.push(...committedMessages);
@@ -790,6 +811,7 @@ export class AgentRunController {
       finalHistory: history,
       historyDelta,
       citations: gatheredContext?.citations,
+      geometryBoards: geometryBoards.length > 0 ? geometryBoards : undefined,
       tokenInfo: {
         promptTokenCount: totalPromptTokens,
         candidatesTokenCount: totalCandidatesTokens,

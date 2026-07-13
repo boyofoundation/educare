@@ -72,6 +72,8 @@ export interface ChatContainerProps {
   onCreateSession?: () => Promise<void>;
   /** 子代理人委派開關。由父層從 assistant.subagentDelegationEnabled 傳入。 */
   subagentDelegationEnabled?: boolean;
+  /** 數學工具開關。由父層從 assistant.mathToolsEnabled 傳入。 */
+  mathToolsEnabled?: boolean;
   /** 覆寫本地／分享模式的路由目標；空陣列會明確停用路由。 */
   routableTargetsOverride?: RoutableTarget[] | null;
   /** Optional host-owned route proposal decisions, used by the isolated bundle runner. */
