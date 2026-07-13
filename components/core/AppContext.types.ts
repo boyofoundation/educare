@@ -105,7 +105,7 @@ export interface AppContextValue {
       assistantId: string,
       handoffContext?: ChatSession['handoffContext'],
     ) => Promise<ChatSession>;
-    deleteSession: (sessionId: string) => Promise<void>;
+    deleteSession: (sessionId: string, options?: { externallyManaged?: boolean }) => Promise<void>;
     updateSession: (session: ChatSession) => Promise<void>;
     setViewMode: (mode: ViewMode) => void;
     setBundleMode: (payload: { bundleId: string; bundle?: AgentBundle } | null) => void;

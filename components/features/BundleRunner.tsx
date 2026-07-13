@@ -321,16 +321,33 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       if (!window.confirm(bundleStrings.sandbox.confirmDeleteSession)) {
         return;
       }
-      const remaining = state.sessions.filter(s => s.id !== sessionId);
+
+      const remainingSessions = bundleSessions.filter(session => session.id !== sessionId);
       if (!previewBundle) {
-        await actions.deleteSession(sessionId);
+        await actions.deleteSession(sessionId, { externallyManaged: true });
       }
-      dispatch({ type: 'SET_SESSIONS', payload: remaining });
-      if (state.currentSession?.id === sessionId) {
-        dispatch({ type: 'SET_CURRENT_SESSION', payload: remaining[0] ?? null });
+      dispatch({ type: 'SET_SESSIONS', payload: remainingSessions });
+
+      if (state.currentSession?.id !== sessionId) {
+        return;
+      }
+
+      const nextSession = remainingSessions[0];
+      if (nextSession) {
+        resumeSession(nextSession);
+      } else {
+        await createSession();
       }
     },
-    [actions, dispatch, previewBundle, state.currentSession, state.sessions],
+    [
+      actions,
+      bundleSessions,
+      createSession,
+      dispatch,
+      previewBundle,
+      resumeSession,
+      state.currentSession?.id,
+    ],
   );
 
   if (state.isLoading) {

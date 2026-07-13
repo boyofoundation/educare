@@ -44,11 +44,24 @@ export const useStickToBottom = (thresholdPx = DEFAULT_BOTTOM_THRESHOLD_PX) => {
     setIsAtBottom(true);
   }, []);
 
+  const resetScrollToTop = useCallback(() => {
+    const container = containerRef.current;
+    if (container) {
+      if (typeof container.scrollTo === 'function') {
+        container.scrollTo({ top: 0, behavior: 'auto' });
+      } else {
+        container.scrollTop = 0;
+      }
+    }
+    setIsAtBottom(false);
+  }, []);
+
   return {
     containerRef,
     isAtBottom,
     handleScroll,
     scrollToBottom,
+    resetScrollToTop,
     updatePinnedState,
   };
 };

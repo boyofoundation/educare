@@ -587,9 +587,76 @@ describe('BundleRunner', () => {
     await act(async () => {
       fireEvent.click(screen.getAllByLabelText('刪除對話').at(-1)!);
     });
-    expect(actions.deleteSession).toHaveBeenCalledWith('older-session');
+    expect(actions.deleteSession).toHaveBeenCalledWith('older-session', {
+      externallyManaged: true,
+    });
     await waitFor(() =>
       expect(screen.queryAllByRole('button', { name: '續聊：舊對話' })).toHaveLength(0),
     );
+  });
+
+  it('deletes the final persisted session externally and replaces it with a new entry session', async () => {
+    const persistedSession: ChatSession = {
+      id: 'only-persisted-session',
+      assistantId: 'bundle-1:entry',
+      title: 'Only saved conversation',
+      messages: [],
+      createdAt: 10,
+      tokenCount: 0,
+    };
+    db.getBundle.mockResolvedValue({
+      id: 'bundle-1',
+      bundle: bundle(),
+      importedAt: 10,
+      sizeBytes: 100,
+    });
+    db.getSessionsForAssistant.mockResolvedValue([persistedSession]);
+    let now = 100;
+    vi.spyOn(Date, 'now').mockImplementation(() => now++);
+
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId('bundle-chat')).toHaveTextContent('only-persisted-session'),
+    );
+    db.saveSession.mockClear();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('對話紀錄'));
+      fireEvent.click(screen.getByLabelText('刪除對話'));
+    });
+
+    expect(actions.deleteSession).toHaveBeenCalledWith('only-persisted-session', {
+      externallyManaged: true,
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('bundle-chat')).not.toHaveTextContent('only-persisted-session'),
+    );
+    expect(db.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ assistantId: 'bundle-1:entry' }),
+    );
+  });
+
+  it('replaces the final preview session without touching IndexedDB or AppContext deletion', async () => {
+    let now = 200;
+    vi.spyOn(Date, 'now').mockImplementation(() => now++);
+
+    render(<Harness preview={bundle()} />);
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+    const initialSessionId = chat.mock.calls.at(-1)?.[0].session.id;
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('對話紀錄'));
+      fireEvent.click(screen.getByLabelText('刪除對話'));
+    });
+
+    await waitFor(() => {
+      expect(chat.mock.calls.at(-1)?.[0].session.id).not.toBe(initialSessionId);
+    });
+    expect(actions.deleteSession).not.toHaveBeenCalled();
+    expect(db.getBundle).not.toHaveBeenCalled();
+    expect(db.getSessionsForAssistant).not.toHaveBeenCalled();
+    expect(db.saveSession).not.toHaveBeenCalled();
   });
 });

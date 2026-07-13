@@ -204,6 +204,12 @@ function TestConsumer() {
         Delete Session
       </button>
       <button
+        data-testid='delete-managed-session'
+        onClick={() => actions.deleteSession('test-session-1', { externallyManaged: true })}
+      >
+        Delete Managed Session
+      </button>
+      <button
         data-testid='update-session'
         onClick={() => actions.updateSession(TEST_SESSIONS.withMessages)}
       >
@@ -825,6 +831,42 @@ describe('AppContext', () => {
       await waitFor(() => {
         expect(mockDb.deleteSession).toHaveBeenCalledWith('test-session-1');
       });
+    });
+
+    it('deletes externally managed sessions without confirmation or context replacement', async () => {
+      mockDb.getAssistant.mockResolvedValue(TEST_ASSISTANTS.basic);
+      mockDb.getSessionsForAssistant.mockResolvedValue([TEST_SESSIONS.withMessages]);
+
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('is-loading')).toHaveTextContent('false');
+      });
+      await act(async () => {
+        screen.getByTestId('select-assistant').click();
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId('current-assistant')).toHaveTextContent('Basic Assistant');
+      });
+
+      mockDb.deleteSession.mockClear();
+      mockDb.getSessionsForAssistant.mockClear();
+      testEnvironment.confirmSpy.mockClear();
+
+      await act(async () => {
+        screen.getByTestId('delete-managed-session').click();
+      });
+
+      expect(testEnvironment.confirmSpy).not.toHaveBeenCalled();
+      expect(mockDb.deleteSession).toHaveBeenCalledWith('test-session-1');
+      expect(mockDb.getSessionsForAssistant).not.toHaveBeenCalled();
+      expect(screen.getByTestId('current-session')).toHaveTextContent(
+        TEST_SESSIONS.withMessages.title,
+      );
     });
 
     it('should handle session updates', async () => {

@@ -129,6 +129,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const [resumeUnavailableReason, setResumeUnavailableReason] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const sessionRef = useRef(session);
+  const pendingNewSessionScrollResetRef = useRef<string | null>(null);
   const controllerRef = useRef<AgentRunController | null>(null);
   const isThinkingRef = useRef(isThinking);
   const subagentBatchesRef = useRef<Record<string, SubagentRunRecord[]>>({});
@@ -140,8 +141,14 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const handoffKickoffSessionIdRef = useRef<string | null>(null);
   const activeRunSessionRef = useRef<ChatSession | null>(null);
   const runOwnershipSessionIdRef = useRef<string | null>(null);
-  const { containerRef, isAtBottom, handleScroll, scrollToBottom, updatePinnedState } =
-    useStickToBottom(STICKY_SCROLL_THRESHOLD_PX);
+  const {
+    containerRef,
+    isAtBottom,
+    handleScroll,
+    scrollToBottom,
+    resetScrollToTop,
+    updatePinnedState,
+  } = useStickToBottom(STICKY_SCROLL_THRESHOLD_PX);
 
   useEffect(() => {
     isThinkingRef.current = isThinking;
@@ -182,6 +189,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setCurrentSession(session);
     sessionRef.current = session;
 
+    if (sessionChanged) {
+      if (session.messages.length === 0) {
+        pendingNewSessionScrollResetRef.current = session.id;
+        resetScrollToTop();
+      } else {
+        pendingNewSessionScrollResetRef.current = null;
+      }
+    }
+
     if (!sessionChanged || !controllerRef.current) {
       return;
     }
@@ -198,7 +214,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setPendingEmptyResponseNotice(null);
     setRunState(null);
     setAgentRunState?.(null);
-  }, [session, sandboxMode, setAgentRunState]);
+  }, [session, sandboxMode, setAgentRunState, resetScrollToTop]);
 
   useEffect(() => {
     sessionRef.current = currentSession;
@@ -236,10 +252,20 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   ]);
 
   useEffect(() => {
+    const pendingResetSessionId = pendingNewSessionScrollResetRef.current;
+    if (pendingResetSessionId) {
+      if (pendingResetSessionId === currentSession.id && currentSession.messages.length > 0) {
+        pendingNewSessionScrollResetRef.current = null;
+        scrollToBottom(streamingResponse ? 'auto' : 'smooth');
+      }
+      return;
+    }
+
     if (isAtBottom) {
       scrollToBottom(streamingResponse ? 'auto' : 'smooth');
     }
   }, [
+    currentSession.id,
     currentSession.messages,
     isAtBottom,
     isThinking,
@@ -1075,7 +1101,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
           <div role='log' aria-label='訊息列表' aria-live='polite' aria-relevant='additions text'>
             <Virtuoso
-              key={`${currentSession.id}:${currentSession.messages.length}`}
+              key={currentSession.id}
               data={currentSession.messages}
               customScrollParent={containerRef.current ?? undefined}
               followOutput={isAtBottom ? 'auto' : false}

@@ -430,24 +430,31 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
 
   // Delete session
   const deleteSession = useCallback(
-    async (sessionId: string) => {
+    async (sessionId: string, options?: { externallyManaged?: boolean }) => {
       if (!state.currentAssistant) {
         return;
       }
 
-      if (window.confirm('確定要刪除此聊天會話嗎？')) {
-        await db.deleteSession(sessionId);
-        await deleteRunCheckpointsForSession(sessionId);
-        const assistantSessions = await db.getSessionsForAssistant(state.currentAssistant.id);
-        const sortedSessions = assistantSessions.sort((a, b) => b.createdAt - a.createdAt);
-        dispatch({ type: 'SET_SESSIONS', payload: sortedSessions });
+      if (!options?.externallyManaged && !window.confirm('確定要刪除此聊天會話嗎？')) {
+        return;
+      }
 
-        if (state.currentSession?.id === sessionId) {
-          if (sortedSessions.length > 0) {
-            dispatch({ type: 'SET_CURRENT_SESSION', payload: sortedSessions[0] });
-          } else {
-            await createNewSession(state.currentAssistant.id);
-          }
+      await db.deleteSession(sessionId);
+      await deleteRunCheckpointsForSession(sessionId);
+
+      if (options?.externallyManaged) {
+        return;
+      }
+
+      const assistantSessions = await db.getSessionsForAssistant(state.currentAssistant.id);
+      const sortedSessions = assistantSessions.sort((a, b) => b.createdAt - a.createdAt);
+      dispatch({ type: 'SET_SESSIONS', payload: sortedSessions });
+
+      if (state.currentSession?.id === sessionId) {
+        if (sortedSessions.length > 0) {
+          dispatch({ type: 'SET_CURRENT_SESSION', payload: sortedSessions[0] });
+        } else {
+          await createNewSession(state.currentAssistant.id);
         }
       }
     },

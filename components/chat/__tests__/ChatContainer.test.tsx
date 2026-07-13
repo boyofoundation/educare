@@ -28,6 +28,8 @@ const {
   mockClaimCheckpoint,
   mockDeleteCheckpoint,
   mockGetProject,
+  mockVirtuosoMount,
+  mockVirtuosoUnmount,
 } = vi.hoisted(() => ({
   mockCreateNewSession: vi.fn().mockResolvedValue(undefined),
   mockUpdateSession: vi.fn().mockResolvedValue(undefined),
@@ -48,6 +50,8 @@ const {
   mockClaimCheckpoint: vi.fn().mockResolvedValue(null),
   mockDeleteCheckpoint: vi.fn().mockResolvedValue(undefined),
   mockGetProject: vi.fn().mockResolvedValue(undefined),
+  mockVirtuosoMount: vi.fn(),
+  mockVirtuosoUnmount: vi.fn(),
 }));
 
 vi.mock('../../core/useAppContext', async () => {
@@ -126,6 +130,10 @@ vi.mock('react-virtuoso', () => ({
     itemContent: (index: number, item: unknown) => unknown;
   }) => {
     const React = require('react');
+    React.useEffect(() => {
+      mockVirtuosoMount();
+      return () => mockVirtuosoUnmount();
+    }, []);
     return React.createElement(
       'div',
       { 'data-testid': 'virtuoso-scroller' },
@@ -332,6 +340,73 @@ describe('ChatContainer', () => {
     ).toBeInTheDocument();
     expect(screen.getByTestId('welcome-message')).toBeInTheDocument();
     expect(screen.getByRole('main', { name: '聊天對話' })).toBeInTheDocument();
+  });
+
+  it('resets to the top when switching from history to a fresh session welcome', async () => {
+    const { rerender } = render(
+      <ChatContainer
+        {...defaultProps}
+        session={createMockChatSession({
+          id: 'history-session',
+          messages: [{ role: 'user', content: 'Existing history' }],
+        })}
+      />,
+    );
+    const scrollTo = vi.mocked(HTMLElement.prototype.scrollTo);
+    scrollTo.mockClear();
+
+    rerender(
+      <ChatContainer
+        {...defaultProps}
+        session={createMockChatSession({ id: 'fresh-session', messages: [] })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
+    });
+    expect(screen.getByTestId('welcome-message')).toBeInTheDocument();
+
+    scrollTo.mockClear();
+    rerender(
+      <ChatContainer
+        {...defaultProps}
+        session={createMockChatSession({
+          id: 'fresh-session',
+          messages: [{ role: 'user', content: 'Fresh first message' }],
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'smooth' }));
+    });
+    expect(screen.getByText('Fresh first message')).toBeInTheDocument();
+  });
+
+  it('does not remount the virtualizer when messages update within the same session', () => {
+    const session = createMockChatSession({
+      id: 'stable-session',
+      messages: [{ role: 'user', content: 'First message' }],
+    });
+    const { rerender } = render(<ChatContainer {...defaultProps} session={session} />);
+
+    expect(mockVirtuosoMount).toHaveBeenCalledTimes(1);
+    expect(mockVirtuosoUnmount).not.toHaveBeenCalled();
+
+    rerender(
+      <ChatContainer
+        {...defaultProps}
+        session={{
+          ...session,
+          messages: [...session.messages, { role: 'model', content: 'Second message' }],
+        }}
+      />,
+    );
+
+    expect(mockVirtuosoMount).toHaveBeenCalledTimes(1);
+    expect(mockVirtuosoUnmount).not.toHaveBeenCalled();
+    expect(screen.getByText('Second message')).toBeInTheDocument();
   });
 
   it('keeps a long sandbox welcome render scrollable within the chat container', () => {
