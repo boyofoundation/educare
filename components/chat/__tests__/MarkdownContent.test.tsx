@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import MarkdownContent from '../MarkdownContent';
 
@@ -49,5 +50,104 @@ describe('MarkdownContent citations', () => {
 
     expect(screen.queryByRole('link', { name: '1' })).not.toBeInTheDocument();
     expect(screen.getByText('const ref = "[1]"')).toBeInTheDocument();
+  });
+});
+
+describe('MarkdownContent rich content rendering', () => {
+  it('renders inline and display LaTeX without exposing their delimiters', () => {
+    // Arrange
+    const { container } = render(
+      <MarkdownContent content={'質能方程式是 $E = mc^2$。\n\n$$\\frac{a}{b}$$'} />,
+    );
+
+    // Assert
+    expect(container.querySelectorAll('.katex')).toHaveLength(2);
+    expect(screen.getByText('質能方程式是', { exact: false })).toBeInTheDocument();
+    expect(container).not.toHaveTextContent('$E = mc^2$');
+    expect(container).not.toHaveTextContent('$$\\frac{a}{b}$$');
+  });
+
+  it('renders mhchem formulae through KaTeX', () => {
+    // Arrange
+    const { container } = render(<MarkdownContent content={'水是 $\\ce{H2O}$。'} />);
+
+    // Assert
+    expect(container.querySelector('.katex')).toBeInTheDocument();
+    expect(container.querySelector('annotation[encoding="application/x-tex"]')?.textContent).toBe(
+      '\\ce{H2O}',
+    );
+  });
+
+  it.each([
+    ['c++', 'int main() { return 0; }'],
+    ['objective-c', '@interface Greeter : NSObject'],
+    ['f#', 'let answer = 42'],
+  ])('preserves the %s language label and source for a fenced code block', (language, code) => {
+    // Arrange
+    render(<MarkdownContent content={`\`\`\`${language}\n${code}\n\`\`\``} />);
+
+    // Assert
+    expect(screen.getByText(language, { exact: true })).toBeInTheDocument();
+    expect(screen.getByText(code, { exact: true })).toBeInTheDocument();
+  });
+
+  it('uses a readable fallback label and preserves source for an unknown code language', () => {
+    // Arrange
+    render(<MarkdownContent content={'```not-a-real-language\nopaque syntax\n```'} />);
+
+    // Assert
+    expect(screen.getByText('not-a-real-language', { exact: true })).toBeInTheDocument();
+    expect(screen.getByText('opaque syntax', { exact: true })).toBeInTheDocument();
+  });
+
+  it('does not parse math delimiters inside a fenced code block', () => {
+    // Arrange
+    const source = 'const formula = "$E = mc^2$";';
+    const { container } = render(
+      <MarkdownContent content={`\`\`\`typescript\n${source}\n\`\`\``} />,
+    );
+
+    // Assert
+    expect(screen.getByText(source, { exact: true })).toBeInTheDocument();
+    expect(container.querySelector('.katex')).not.toBeInTheDocument();
+  });
+
+  it('keeps citation-like markers in math and code literal while linking prose citations', () => {
+    // Arrange
+    const { container } = render(
+      <MarkdownContent
+        content={'公式 $x_{[1]}$；程式碼 `const ref = "[1]"`；請參考說明。[1]'}
+        messageKey='msg-math'
+        citations={[
+          {
+            marker: 1,
+            chunkId: 'formula.md#0',
+            fileName: 'formula.md',
+            chunkIndex: 0,
+            excerpt: '公式說明',
+          },
+        ]}
+      />,
+    );
+
+    // Assert
+    expect(screen.getByRole('link', { name: '1' })).toHaveAttribute('href', '#cite-msg-math-1');
+    expect(screen.getByText('const ref = "[1]"')).toBeInTheDocument();
+    expect(container.querySelector('.katex')).toBeInTheDocument();
+    expect(container.querySelector('.katex')).not.toHaveTextContent('cite-msg-math-1');
+  });
+
+  it('copies the original fenced code text', async () => {
+    // Arrange
+    const source = 'const π = 3.14;';
+    render(<MarkdownContent content={`\`\`\`typescript\n${source}\n\`\`\``} />);
+
+    // Act
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '複製' }));
+    });
+
+    // Assert
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(`${source}\n`);
   });
 });

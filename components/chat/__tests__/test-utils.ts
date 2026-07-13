@@ -80,6 +80,7 @@ export const mockReactMarkdown = () => {
       const React = require('react');
       return React.createElement('div', { 'data-testid': 'markdown-content' }, children);
     },
+    defaultUrlTransform: (url: string) => url,
   }));
 };
 

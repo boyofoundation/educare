@@ -9,6 +9,7 @@ vi.mock('react-markdown', () => {
     default: function MockReactMarkdown(props: { children?: unknown }) {
       return React.createElement('div', { 'data-testid': 'markdown-content' }, props.children);
     },
+    defaultUrlTransform: (url: string) => url,
   };
 });
 vi.mock('remark-gfm', () => ({ default: vi.fn() }));

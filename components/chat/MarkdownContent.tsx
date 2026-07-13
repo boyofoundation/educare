@@ -1,10 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeHighlightCodeLines from 'rehype-highlight-code-lines';
 import type { MessageCitation } from '../../types';
 import 'highlight.js/styles/github-dark.css';
+import 'katex/dist/katex.min.css';
+import 'katex/contrib/mhchem';
 
 interface MarkdownContentProps {
   content: string;
@@ -54,26 +58,21 @@ const annotateCitationLinks = (
   }
 
   const markers = new Set(citations.map(citation => citation.marker));
-  const fencePattern = /(```[\s\S]*?```)/g;
-  const inlineCodePattern = /(`[^`\n]+`)/g;
+  const protectedContentPattern =
+    /(```[\s\S]*?```|`[^`\n]+`|\$\$[\s\S]*?\$\$|\$(?:\\.|[^$\\\n])+\$)/g;
 
   return content
-    .split(fencePattern)
+    .split(protectedContentPattern)
     .map(segment => {
-      if (segment.startsWith('```')) {
+      if (
+        segment.startsWith('```') ||
+        (segment.startsWith('`') && segment.endsWith('`')) ||
+        segment.startsWith('$')
+      ) {
         return segment;
       }
 
-      return segment
-        .split(inlineCodePattern)
-        .map(part => {
-          if (part.startsWith('`') && part.endsWith('`')) {
-            return part;
-          }
-
-          return rewriteCitationMarkers(part, messageKey, markers);
-        })
-        .join('');
+      return rewriteCitationMarkers(segment, messageKey, markers);
     })
     .join('');
 };
@@ -112,117 +111,131 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, citations, m
   };
 
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeHighlight, [rehypeHighlightCodeLines]]}
-      components={{
-        code(props) {
-          const { className, children, ...rest } = props as React.ComponentProps<'code'> & {
-            node?: {
-              position?: {
-                start?: { line?: number };
-                end?: { line?: number };
+    <div className='markdown-content'>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex, rehypeHighlight, [rehypeHighlightCodeLines]]}
+        skipHtml={false}
+        urlTransform={defaultUrlTransform}
+        components={{
+          code(props) {
+            const { className, children, ...rest } = props as React.ComponentProps<'code'> & {
+              node?: {
+                position?: {
+                  start?: { line?: number };
+                  end?: { line?: number };
+                };
               };
             };
-          };
-          const match = /language-(\w+)/.exec(className || '');
-          const language = match ? match[1] : '';
-          const position = rest.node?.position;
-          const startLine = position?.start?.line || 0;
-          const endLine = position?.end?.line || 0;
-          const isMultiline = Boolean(match) || endLine - startLine > 0;
+            const match = /language-([a-z0-9+#.-]+)/i.exec(className || '');
+            const language = match ? match[1] : '';
+            const position = rest.node?.position;
+            const startLine = position?.start?.line || 0;
+            const endLine = position?.end?.line || 0;
+            const isMultiline = Boolean(match) || endLine - startLine > 0;
 
-          if (isMultiline) {
-            const codeText = getPlainText(children);
-            const codeCopyTarget = `code-copy:${language}:${codeText}`;
-            const codeCopyLabel =
-              copyFeedback?.target === codeCopyTarget ? copyFeedback.label : '複製';
+            if (isMultiline) {
+              const codeText = getPlainText(children);
+              const codeCopyTarget = `code-copy:${language}:${codeText}`;
+              const codeCopyLabel =
+                copyFeedback?.target === codeCopyTarget ? copyFeedback.label : '複製';
+
+              return (
+                <div className='my-2 overflow-hidden rounded-xl border border-gray-700/70 bg-gray-900'>
+                  <div className='flex items-center justify-between gap-3 border-b border-gray-700/70 bg-gray-800/80 px-4 py-2 text-xs'>
+                    <span className='text-gray-300'>{language || 'code'}</span>
+                    <button
+                      type='button'
+                      onClick={() => void handleCopy(codeText, codeCopyTarget)}
+                      className='rounded-md px-2 py-1 text-gray-300 transition hover:bg-gray-700/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70'
+                      title={codeCopyLabel}
+                    >
+                      {codeCopyLabel}
+                    </button>
+                  </div>
+                  <pre className='w-full overflow-x-auto p-4 text-sm'>
+                    <code className={className} {...rest}>
+                      {children}
+                    </code>
+                  </pre>
+                </div>
+              );
+            }
 
             return (
-              <div className='my-2 overflow-hidden rounded-xl border border-gray-700/70 bg-gray-900'>
-                <div className='flex items-center justify-between gap-3 border-b border-gray-700/70 bg-gray-800/80 px-4 py-2 text-xs'>
-                  <span className='text-gray-300'>{language || 'code'}</span>
-                  <button
-                    type='button'
-                    onClick={() => void handleCopy(codeText, codeCopyTarget)}
-                    className='rounded-md px-2 py-1 text-gray-300 transition hover:bg-gray-700/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70'
-                    title={codeCopyLabel}
-                  >
-                    {codeCopyLabel}
-                  </button>
-                </div>
-                <pre className='w-full overflow-x-auto p-4 text-sm'>
-                  <code className={className} {...rest}>
-                    {children}
-                  </code>
-                </pre>
-              </div>
+              <code
+                className='rounded bg-gray-700 px-1.5 py-0.5 text-sm font-mono text-cyan-300'
+                {...rest}
+              >
+                {children}
+              </code>
             );
-          }
-
-          return (
-            <code
-              className='rounded bg-gray-700 px-1.5 py-0.5 text-sm font-mono text-cyan-300'
-              {...rest}
-            >
+          },
+          h1: ({ children }) => <h1 className='mb-2 text-xl font-bold text-white'>{children}</h1>,
+          h2: ({ children }) => (
+            <h2 className='mb-2 text-lg font-semibold text-white'>{children}</h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className='mb-1 text-base font-medium text-white'>{children}</h3>
+          ),
+          p: ({ children }) => <p className='mb-2 leading-relaxed'>{children}</p>,
+          ul: ({ children }) => (
+            <ul className='mb-2 list-inside list-disc space-y-1'>{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className='mb-2 list-inside list-decimal space-y-1'>{children}</ol>
+          ),
+          li: ({ children }) => <li className='text-sm'>{children}</li>,
+          blockquote: ({ children }) => (
+            <blockquote className='my-2 rounded-r border-l-4 border-cyan-500 bg-gray-800/50 py-2 pl-4'>
               {children}
-            </code>
-          );
-        },
-        h1: ({ children }) => <h1 className='mb-2 text-xl font-bold text-white'>{children}</h1>,
-        h2: ({ children }) => <h2 className='mb-2 text-lg font-semibold text-white'>{children}</h2>,
-        h3: ({ children }) => <h3 className='mb-1 text-base font-medium text-white'>{children}</h3>,
-        p: ({ children }) => <p className='mb-2 leading-relaxed'>{children}</p>,
-        ul: ({ children }) => <ul className='mb-2 list-inside list-disc space-y-1'>{children}</ul>,
-        ol: ({ children }) => (
-          <ol className='mb-2 list-inside list-decimal space-y-1'>{children}</ol>
-        ),
-        li: ({ children }) => <li className='text-sm'>{children}</li>,
-        blockquote: ({ children }) => (
-          <blockquote className='my-2 rounded-r border-l-4 border-cyan-500 bg-gray-800/50 py-2 pl-4'>
-            {children}
-          </blockquote>
-        ),
-        a: ({ children, href }) => {
-          if (href?.startsWith('#cite-')) {
+            </blockquote>
+          ),
+          a: ({ children, href }) => {
+            if (href?.startsWith('#cite-')) {
+              return (
+                <a
+                  href={href}
+                  className='align-super text-xs font-semibold text-cyan-300 no-underline hover:text-cyan-200'
+                >
+                  {children}
+                </a>
+              );
+            }
+
             return (
               <a
                 href={href}
-                className='align-super text-xs font-semibold text-cyan-300 no-underline hover:text-cyan-200'
+                target='_blank'
+                rel='noopener noreferrer'
+                className='text-cyan-400 underline hover:text-cyan-300'
               >
                 {children}
               </a>
             );
-          }
-
-          return (
-            <a
-              href={href}
-              target='_blank'
-              rel='noopener noreferrer'
-              className='text-cyan-400 underline hover:text-cyan-300'
-            >
+          },
+          strong: ({ children }) => (
+            <strong className='font-semibold text-white'>{children}</strong>
+          ),
+          em: ({ children }) => <em className='italic'>{children}</em>,
+          table: ({ children }) => (
+            <div className='my-2 overflow-x-auto'>
+              <table className='min-w-full border-collapse border border-gray-600'>
+                {children}
+              </table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className='border border-gray-600 bg-gray-700 px-4 py-2 text-left font-semibold'>
               {children}
-            </a>
-          );
-        },
-        strong: ({ children }) => <strong className='font-semibold text-white'>{children}</strong>,
-        em: ({ children }) => <em className='italic'>{children}</em>,
-        table: ({ children }) => (
-          <div className='my-2 overflow-x-auto'>
-            <table className='min-w-full border-collapse border border-gray-600'>{children}</table>
-          </div>
-        ),
-        th: ({ children }) => (
-          <th className='border border-gray-600 bg-gray-700 px-4 py-2 text-left font-semibold'>
-            {children}
-          </th>
-        ),
-        td: ({ children }) => <td className='border border-gray-600 px-4 py-2'>{children}</td>,
-      }}
-    >
-      {renderedContent}
-    </ReactMarkdown>
+            </th>
+          ),
+          td: ({ children }) => <td className='border border-gray-600 px-4 py-2'>{children}</td>,
+        }}
+      >
+        {renderedContent}
+      </ReactMarkdown>
+    </div>
   );
 };
 

@@ -7,6 +7,7 @@ vi.mock('react-markdown', () => ({
   default: ({ children }: { children: string }) => (
     <div data-testid='markdown-content'>{children}</div>
   ),
+  defaultUrlTransform: (url: string) => url,
 }));
 vi.mock('remark-gfm', () => ({ default: vi.fn() }));
 
