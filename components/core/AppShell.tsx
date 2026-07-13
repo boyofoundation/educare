@@ -144,6 +144,22 @@ function AppContent(): React.JSX.Element {
     );
   }
 
+  // Standalone bundle import/management route (?import=bundle): no sidebar, no provider menus.
+  if (state.isBundleImportRoute) {
+    return (
+      <Layout>
+        <BundleImportPage
+          onClose={() => {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('import');
+            window.location.href = url.toString();
+          }}
+          onOpenBundle={() => undefined}
+        />
+      </Layout>
+    );
+  }
+
   // If in shared mode, render SharedAssistant component (which sets up state) and continue with normal rendering
   if (state.isShared && state.sharedAssistantId) {
     // SharedAssistant component handles loading the shared assistant and setting up state

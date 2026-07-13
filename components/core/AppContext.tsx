@@ -68,6 +68,7 @@ const initialState: AppState = {
   isShared: null, // Changed to null to indicate "not yet determined"
   sharedAssistantId: null,
   bundleMode: null,
+  isBundleImportRoute: false,
   isSidebarOpen: true,
   isSidebarCollapsed: loadSidebarCollapsed(),
   isMobile: false,
@@ -111,6 +112,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       };
     case 'SET_BUNDLE_MODE':
       return { ...state, bundleMode: action.payload };
+    case 'SET_BUNDLE_IMPORT_ROUTE':
+      return { ...state, isBundleImportRoute: action.payload };
     case 'SET_SIDEBAR_OPEN':
       return { ...state, isSidebarOpen: action.payload };
     case 'SET_SIDEBAR_COLLAPSED':
@@ -535,7 +538,8 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       if (bundleId || importBundle) {
         dispatch({ type: 'SET_SHARED_MODE', payload: { isShared: false, assistantId: null } });
         dispatch({ type: 'SET_BUNDLE_MODE', payload: bundleId ? { bundleId } : null });
-        if (importBundle) {
+        if (importBundle && !bundleId) {
+          dispatch({ type: 'SET_BUNDLE_IMPORT_ROUTE', payload: true });
           dispatch({ type: 'SET_VIEW_MODE', payload: 'bundle_import' });
           dispatch({ type: 'SET_LOADING', payload: false });
         }

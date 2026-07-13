@@ -151,6 +151,7 @@ export const createMockAppState = (overrides: Partial<AppState> = {}): AppState 
   projectPreview: null,
   projectToolActivity: [],
   agentRunState: null,
+  isBundleImportRoute: false,
   ...overrides,
 });
 

@@ -161,6 +161,7 @@ const state: AppState = {
   projectPreview: null,
   projectToolActivity: [],
   agentRunState: null,
+  isBundleImportRoute: false,
 };
 
 const reducer = (current: AppState, action: AppAction): AppState => {

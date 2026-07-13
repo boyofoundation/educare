@@ -160,8 +160,8 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
     setIsTokenUsageOpen(prev => !prev);
   };
 
-  // In shared mode, render a simplified layout without sidebar
-  if (state.isShared || state.bundleMode) {
+  // In shared / bundle / standalone bundle-import mode, render a simplified layout without sidebar
+  if (state.isShared || state.bundleMode || state.isBundleImportRoute) {
     return (
       <div className='flex h-screen font-sans bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900'>
         {/* Main content area - full width in shared mode */}
