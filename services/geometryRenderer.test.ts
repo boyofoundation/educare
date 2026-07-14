@@ -49,7 +49,6 @@ describe('geometryRenderer: renderGeometryDoc', () => {
       { id: 'radius-circle', kind: 'circle', center: 'p1', radius: 'sqrt(4)' },
       { id: 'point-circle', kind: 'circle', center: 'p1', point: 'p2' },
       { id: 'polygon', kind: 'polygon', points: ['p1', 'p2', 'p3'] },
-      { id: 'angle', kind: 'angle', points: ['p1', 'p2', 'p3'], label: 'θ', radius: '1 + 1' },
       { id: 'caption', kind: 'text', x: '1 / 2', y: 8, text: 'Hello' },
     ]);
 
@@ -103,17 +102,7 @@ describe('geometryRenderer: renderGeometryDoc', () => {
       ],
       { name: '', fixed: true, withLabel: false },
     );
-    expect(jsxGraph.board.create).toHaveBeenNthCalledWith(
-      9,
-      'angle',
-      [
-        jsxGraph.board.create.mock.results[0]?.value,
-        jsxGraph.board.create.mock.results[1]?.value,
-        jsxGraph.board.create.mock.results[2]?.value,
-      ],
-      { name: 'θ', fixed: true, withLabel: true, radius: 2 },
-    );
-    expect(jsxGraph.board.create).toHaveBeenNthCalledWith(10, 'text', [0.5, 8, 'Hello'], {
+    expect(jsxGraph.board.create).toHaveBeenNthCalledWith(9, 'text', [0.5, 8, 'Hello'], {
       name: '',
       fixed: true,
       withLabel: false,

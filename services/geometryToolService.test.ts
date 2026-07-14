@@ -54,15 +54,6 @@ describe('geometryToolService: validateGeometryDoc', () => {
       ]),
     },
     {
-      name: 'angle',
-      document: createDocument([
-        { id: 'a', kind: 'point', x: 1, y: 0 },
-        { id: 'b', kind: 'point', x: 0, y: 0 },
-        { id: 'c', kind: 'point', x: 0, y: 1 },
-        { id: 'right-angle', kind: 'angle', points: ['a', 'b', 'c'], label: '90°', radius: 1 },
-      ]),
-    },
-    {
       name: 'text',
       document: createDocument([{ id: 'label', kind: 'text', x: '1 / 2', y: 3, text: 'Half' }]),
     },
@@ -230,23 +221,6 @@ describe('geometryToolService: validateGeometryDoc', () => {
 
     // Assert
     expect(result.errors).toEqual([{ index: 1, field: 'id', message: 'Duplicate object id: p.' }]);
-  });
-
-  it('rejects an angle without three declared point references', async () => {
-    // Arrange
-    const document = createDocument([
-      { id: 'a', kind: 'point', x: 1, y: 0 },
-      { id: 'b', kind: 'point', x: 0, y: 0 },
-      { kind: 'angle', points: ['a', 'b'] },
-    ]);
-
-    // Act
-    const result = await validateGeometryDoc(document);
-
-    // Assert
-    expect(result.errors).toEqual([
-      { index: 2, field: 'points', message: 'points must contain 3 object ids.' },
-    ]);
   });
 
   it('rejects chart data with mismatched x coordinates', async () => {

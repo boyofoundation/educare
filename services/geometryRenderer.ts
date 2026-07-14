@@ -100,17 +100,11 @@ const requirePositive = (value: number, field: string): number => {
   return value;
 };
 
-const getObjectLabel = (object: GeometryObject): string =>
-  'label' in object && typeof object.label === 'string' ? object.label : '';
-
-const elementAttributes = (object: GeometryObject): Record<string, unknown> => {
-  const label = getObjectLabel(object);
-  return {
-    name: label,
-    fixed: true,
-    withLabel: label.length > 0,
-  };
-};
+const elementAttributes = (object: GeometryObject): Record<string, unknown> => ({
+  name: object.kind === 'point' ? (object.label ?? '') : '',
+  fixed: true,
+  withLabel: object.kind === 'point' && Boolean(object.label),
+});
 
 const isOutOfView = (points: Array<[number, number]>, boundingbox: GeometryDoc['boundingbox']) => {
   const [xMin, yMax, xMax, yMin] = boundingbox;
@@ -217,18 +211,6 @@ export const renderGeometryDoc = async (
             elementAttributes(object),
           );
           break;
-        case 'angle': {
-          const attributes = elementAttributes(object);
-          if (object.radius !== undefined) {
-            attributes.radius = requirePositive(await evaluateExpression(object.radius), 'radius');
-          }
-          element = board.create(
-            'angle',
-            object.points.map(pointId => elements.get(pointId)) as unknown[],
-            attributes,
-          );
-          break;
-        }
         case 'text':
           element = board.create(
             'text',

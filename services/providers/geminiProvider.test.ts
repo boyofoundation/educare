@@ -362,7 +362,7 @@ describe('GeminiProvider', () => {
         }),
       ]),
     );
-    expect(variants).toHaveLength(15);
+    expect(variants).toHaveLength(14);
     expect(
       variants.every((variant: { required?: string[] }) => variant.required?.includes('kind')),
     ).toBe(true);
