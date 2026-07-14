@@ -106,6 +106,22 @@ export const DRAW_GEOMETRY_TOOL_SCHEMA = {
             type: 'object',
             properties: {
               id: { type: 'string' },
+              kind: { enum: ['angle'] },
+              points: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 3,
+                maxItems: 3,
+              },
+              label: { type: 'string' },
+              radius: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+            },
+            required: ['kind', 'points'],
+          },
+          {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
               kind: { enum: ['text'] },
               x: { anyOf: [{ type: 'number' }, { type: 'string' }] },
               y: { anyOf: [{ type: 'number' }, { type: 'string' }] },
@@ -260,6 +276,13 @@ export interface GeometryPolygon extends GeometryObjectBase {
   points: string[];
 }
 
+export interface GeometryAngle extends GeometryObjectBase {
+  kind: 'angle';
+  points: [string, string, string];
+  label?: string;
+  radius?: GeometryExpression;
+}
+
 export interface GeometryText extends GeometryObjectBase {
   kind: 'text';
   x: GeometryExpression;
@@ -325,6 +348,7 @@ export type GeometryObject =
   | GeometryFunctionGraph
   | GeometryImplicit
   | GeometryPolygon
+  | GeometryAngle
   | GeometryText
   | GeometryIntersection
   | GeometryChart
@@ -581,6 +605,15 @@ const validateObject = async (
           field: 'points',
           message: 'polygon requires at least three point ids.',
         });
+      }
+      break;
+    case 'angle':
+      validateReferences(errors, index, 'points', object.points, declaredIds, 3);
+      if (hasOwn(object, 'label') && typeof object.label !== 'string') {
+        errors.push({ index, field: 'label', message: 'label must be a string.' });
+      }
+      if (hasOwn(object, 'radius')) {
+        await validateExpression(errors, index, 'radius', object.radius);
       }
       break;
     case 'text':
