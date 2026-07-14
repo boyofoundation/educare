@@ -447,7 +447,6 @@ const validateStringArray = (
   });
 };
 
-
 const validateNumericPieValues = (
   errors: GeometryDiagnostic[],
   index: number,
@@ -468,7 +467,11 @@ const validateNumericPieValues = (
     }
   });
 
-  if (numericValues.length === values.length && numericValues.every(value => value === 0)) {
+  if (
+    values.length > 0 &&
+    numericValues.length === values.length &&
+    numericValues.every(value => value === 0)
+  ) {
     errors.push({
       index,
       field: 'values',
