@@ -52,6 +52,45 @@ vi.mock('../chat', () => ({
   },
 }));
 
+vi.mock('../bundle/BundleEditor', () => ({
+  default: ({
+    bundle,
+    onSave,
+  }: {
+    bundle: AgentBundle;
+    onSave: (bundle: AgentBundle) => Promise<void>;
+  }) => (
+    <div data-testid='bundle-editor'>
+      <button
+        type='button'
+        onClick={() =>
+          void onSave({
+            ...bundle,
+            manifest: { ...bundle.manifest, name: 'Edited bundle' },
+          })
+        }
+      >
+        儲存測試協作包
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock('../bundle/BundleProviderSetup', () => ({
+  default: ({ onReady, onCancel }: { onReady: () => void; onCancel?: () => void }) => (
+    <div data-testid='bundle-provider-setup'>
+      <button type='button' onClick={onReady}>
+        完成 Provider 設定
+      </button>
+      {onCancel && (
+        <button type='button' onClick={onCancel}>
+          取消 Provider 設定
+        </button>
+      )}
+    </div>
+  ),
+}));
+
 const bundle = (): AgentBundle => ({
   manifest: {
     format: 'educare-agent-bundle',
@@ -265,6 +304,54 @@ describe('BundleRunner', () => {
     expect(screen.queryByText(/HTML Canvas/)).not.toBeInTheDocument();
   });
 
+  it('opens the provider replacement flow from an active bundle chat', async () => {
+    db.getBundle.mockResolvedValue({
+      id: 'bundle-1',
+      bundle: bundle(),
+      importedAt: 10,
+      sizeBytes: 100,
+    });
+
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+
+    fireEvent.click(screen.getByRole('button', { name: '更換 AI 服務商' }));
+    await waitFor(() => expect(screen.getByTestId('bundle-provider-setup')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '完成 Provider 設定' }));
+
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+  });
+
+  it('persists edits to an imported bundle without replacing its record identity', async () => {
+    const record = {
+      id: 'bundle-1',
+      bundle: bundle(),
+      importedAt: 10,
+      sizeBytes: 100,
+    };
+    db.getBundle.mockResolvedValue(record);
+
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+    db.saveBundle.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: '編輯協作包' }));
+    fireEvent.click(await screen.findByRole('button', { name: '儲存測試協作包' }));
+
+    await waitFor(() => expect(db.saveBundle).toHaveBeenCalledOnce());
+    expect(db.saveBundle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'bundle-1',
+        importedAt: 10,
+        sizeBytes: expect.any(Number),
+        bundle: expect.objectContaining({
+          manifest: expect.objectContaining({ name: 'Edited bundle' }),
+        }),
+      }),
+    );
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toBeInTheDocument());
+  });
+
   it('defaults missing math-tools settings to false for the chat runtime', async () => {
     render(<Harness preview={bundle()} />);
 
@@ -364,11 +451,13 @@ describe('BundleRunner', () => {
 
     await waitFor(() => expect(screen.getByLabelText('受保護協作包解鎖')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '改用自己的 AI 服務商' }));
+    await waitFor(() => expect(screen.getByTestId('bundle-provider-setup')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '完成 Provider 設定' }));
 
     await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
     expect(credentials.decryptBundleProviderCredentials).not.toHaveBeenCalled();
     expect(providers.providerManager.setBundleProviderConfig).not.toHaveBeenCalled();
-    expect(providers.initializeProviders).toHaveBeenCalledOnce();
+    expect(providers.initializeProviders).toHaveBeenCalled();
   });
 
   it('uses decrypted credentials only after explicit confirmation and clears the matching override on unmount', async () => {

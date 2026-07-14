@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Assistant, RagChunk } from '../../types';
 import { RAGFileUpload } from './RAGFileUpload';
 import { useTursoAssistantStatus } from '../../hooks/useTursoAssistantStatus';
@@ -10,6 +10,9 @@ interface AssistantEditorProps {
   onSave: (assistant: Assistant) => Promise<void> | void;
   onCancel: () => void;
   onShare?: (assistant: Assistant) => void;
+  availableAssistants?: Assistant[];
+  onDraftChange?: (assistant: Assistant) => void;
+  showFooterActions?: boolean;
 }
 
 const MAX_STARTER_PROMPTS = 4;
@@ -20,6 +23,9 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   onSave,
   onCancel,
   onShare,
+  availableAssistants,
+  onDraftChange,
+  showFooterActions = true,
 }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -34,9 +40,54 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   const appContext = useContext(AppContext);
   const [isSaving, setIsSaving] = useState(false);
   const [highlightFields, setHighlightFields] = useState(false);
+  const hydratedAssistantIdRef = useRef<string | null | undefined>(undefined);
+  const isHydratedRef = useRef(false);
+
+  if (hydratedAssistantIdRef.current !== (assistant?.id ?? null)) {
+    hydratedAssistantIdRef.current = assistant?.id ?? null;
+    isHydratedRef.current = false;
+  }
 
   // Check if assistant exists in Turso for sharing
   const { canShare } = useTursoAssistantStatus(assistant?.id || null);
+  const routableAssistants = availableAssistants ?? appContext?.state.assistants ?? [];
+
+  const draftAssistant = useMemo<Assistant>(
+    () => ({
+      id: assistant?.id ?? '',
+      name: name.trim(),
+      description: description.trim(),
+      systemPrompt: systemPrompt.trim(),
+      ragChunks,
+      starterPrompts,
+      createdAt: assistant?.createdAt ?? 0,
+      subagentDelegationEnabled,
+      mathToolsEnabled,
+      webSpeechToolsEnabled,
+      routableAssistantIds,
+    }),
+    [
+      assistant?.createdAt,
+      assistant?.id,
+      description,
+      mathToolsEnabled,
+      name,
+      ragChunks,
+      routableAssistantIds,
+      starterPrompts,
+      subagentDelegationEnabled,
+      systemPrompt,
+      webSpeechToolsEnabled,
+    ],
+  );
+
+  // Bundle editing uses one outer save button, so keep its parent in sync with this draft.
+  // This effect is declared before hydration so switching assistants cannot emit stale fields.
+  useEffect(() => {
+    if (assistant && onDraftChange && isHydratedRef.current) {
+      onDraftChange(draftAssistant);
+    }
+  }, [assistant, draftAssistant, onDraftChange]);
 
   useEffect(() => {
     if (assistant) {
@@ -62,6 +113,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setWebSpeechToolsEnabled(false);
       setRoutableAssistantIds([]);
     }
+    isHydratedRef.current = true;
   }, [assistant]);
 
   // 將輸入框中尚未按「新增」的建議提問一併納入；驗證失敗回傳 null（呼叫端應中止）。
@@ -346,7 +398,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             僅勾選可由此助理建議轉接的目標；分享模式下目標也必須已分享。
           </p>
           <div className='mt-3 space-y-2'>
-            {(appContext?.state.assistants ?? [])
+            {routableAssistants
               .filter(item => item.id !== assistant?.id)
               .map(item => (
                 <label
@@ -378,67 +430,69 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         disabled={isSaving}
       />
 
-      <div className='mt-auto flex items-center justify-between'>
-        {/* Left side - Share section (only show for existing assistants) */}
-        <div className='flex-1'>
-          {assistant && (
-            <div className='space-y-2'>
-              <div className='flex items-center space-x-2'>
-                <button
-                  onClick={() => {
-                    if (canShare) {
-                      onShare?.(assistant);
-                    }
-                  }}
-                  disabled={!canShare}
-                  className={`flex items-center space-x-2 rounded-xl px-6 py-3 font-semibold shadow-lg transition-all duration-300 ${
-                    canShare
-                      ? 'cursor-pointer bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:-translate-y-0.5 hover:from-blue-500 hover:to-purple-500 hover:shadow-xl'
-                      : 'cursor-not-allowed bg-gray-600 text-gray-400 opacity-50'
-                  }`}
-                  title={canShare ? '分享助理' : '需要先遷移到 Turso 才能分享'}
-                >
-                  <svg className='h-4 w-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                    <path
-                      strokeLinecap='round'
-                      strokeLinejoin='round'
-                      strokeWidth={2}
-                      d='M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z'
-                    />
-                  </svg>
-                  <span>🎯 分享助理</span>
-                </button>
+      {showFooterActions && (
+        <div className='mt-auto flex items-center justify-between'>
+          {/* Left side - Share section (only show for existing assistants) */}
+          <div className='flex-1'>
+            {assistant && (
+              <div className='space-y-2'>
+                <div className='flex items-center space-x-2'>
+                  <button
+                    onClick={() => {
+                      if (canShare) {
+                        onShare?.(assistant);
+                      }
+                    }}
+                    disabled={!canShare}
+                    className={`flex items-center space-x-2 rounded-xl px-6 py-3 font-semibold shadow-lg transition-all duration-300 ${
+                      canShare
+                        ? 'cursor-pointer bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:-translate-y-0.5 hover:from-blue-500 hover:to-purple-500 hover:shadow-xl'
+                        : 'cursor-not-allowed bg-gray-600 text-gray-400 opacity-50'
+                    }`}
+                    title={canShare ? '分享助理' : '需要先遷移到 Turso 才能分享'}
+                  >
+                    <svg className='h-4 w-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                      <path
+                        strokeLinecap='round'
+                        strokeLinejoin='round'
+                        strokeWidth={2}
+                        d='M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z'
+                      />
+                    </svg>
+                    <span>🎯 分享助理</span>
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right side - Save and Cancel buttons */}
-        <div className='flex space-x-4'>
-          <button
-            data-testid='cancel-button'
-            onClick={onCancel}
-            className='rounded-xl bg-gray-600/80 px-6 py-3 font-semibold text-white transition-all duration-300 hover:-translate-y-0.5 hover:bg-gray-500 hover:shadow-lg'
-          >
-            取消
-          </button>
-          <button
-            data-testid='save-button'
-            onClick={handleSave}
-            className='rounded-xl bg-gradient-to-r from-cyan-600 to-cyan-500 px-8 py-3 font-bold text-white transition-all duration-300 hover:-translate-y-0.5 hover:from-cyan-500 hover:to-cyan-400 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:transform-none'
-            disabled={isSaving}
-          >
-            {isSaving ? (
-              <span className='flex items-center gap-2'>
-                <div className='h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent'></div>
-                處理中...
-              </span>
-            ) : (
-              '保存助理'
             )}
-          </button>
+          </div>
+
+          {/* Right side - Save and Cancel buttons */}
+          <div className='flex space-x-4'>
+            <button
+              data-testid='cancel-button'
+              onClick={onCancel}
+              className='rounded-xl bg-gray-600/80 px-6 py-3 font-semibold text-white transition-all duration-300 hover:-translate-y-0.5 hover:bg-gray-500 hover:shadow-lg'
+            >
+              取消
+            </button>
+            <button
+              data-testid='save-button'
+              onClick={handleSave}
+              className='rounded-xl bg-gradient-to-r from-cyan-600 to-cyan-500 px-8 py-3 font-bold text-white transition-all duration-300 hover:-translate-y-0.5 hover:from-cyan-500 hover:to-cyan-400 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:transform-none'
+              disabled={isSaving}
+            >
+              {isSaving ? (
+                <span className='flex items-center gap-2'>
+                  <div className='h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent'></div>
+                  處理中...
+                </span>
+              ) : (
+                '保存助理'
+              )}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatContainer } from '../chat';
 import { useAppContext } from '../core/useAppContext';
-import { downloadBundleJson } from '../../services/agentBundleService';
+import { estimateBundleSize, downloadBundleJson } from '../../services/agentBundleService';
 import { bundleStrings } from '../bundle/bundleStrings';
+import BundleEditor from '../bundle/BundleEditor';
+import BundleProviderSetup from '../bundle/BundleProviderSetup';
 import { resolveBundleRoutableTargets } from '../../services/assistantRoutingService';
 import { recordBundleFirstChatCompletion } from '../../services/bundleMetricsService';
 import * as db from '../../services/db';
@@ -62,6 +64,8 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
   const [decryptedCredentials, setDecryptedCredentials] =
     useState<BundleProviderCredentials | null>(null);
   const [credentialError, setCredentialError] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isProviderSetupOpen, setIsProviderSetupOpen] = useState(false);
   const bundleOverrideSourceRef = useRef<BundleProviderOverrideSource | null>(null);
 
   const clearCredentialState = useCallback(() => {
@@ -84,6 +88,8 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
   useEffect(() => {
     loadedBundleIdRef.current = null;
     setCredentialAccess('pending');
+    setIsEditing(false);
+    setIsProviderSetupOpen(false);
     clearCredentialState();
   }, [bundleId, clearCredentialState]);
 
@@ -95,6 +101,9 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
   }, [bundleId, clearBundleOverride, clearCredentialState]);
 
   const loadBundle = useCallback(async () => {
+    if (isProviderSetupOpen) {
+      return;
+    }
     if (loadedBundleIdRef.current === bundleId) {
       return;
     }
@@ -181,7 +190,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false });
     }
-  }, [bundleId, credentialAccess, dispatch, previewBundle]);
+  }, [bundleId, credentialAccess, dispatch, isProviderSetupOpen, previewBundle]);
 
   useEffect(() => {
     void loadBundle();
@@ -238,12 +247,19 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
     }
   }, [bundleId, clearCredentialState, decryptedCredentials]);
 
-  const handleUseOwnProvider = useCallback(async () => {
+  const handleOpenProviderSetup = useCallback(async () => {
     clearCredentialState();
     await clearBundleOverride();
     loadedBundleIdRef.current = null;
+    await initializeProviders();
     setCredentialAccess('own');
+    setIsProviderSetupOpen(true);
   }, [clearBundleOverride, clearCredentialState]);
+
+  const handleProviderSetupReady = useCallback(() => {
+    setIsProviderSetupOpen(false);
+    loadedBundleIdRef.current = null;
+  }, []);
 
   const persistBundleSession = useCallback(
     async (session: ChatSession) => {
@@ -467,6 +483,50 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
     ],
   );
 
+  const saveBundle = useCallback(
+    async (nextBundle: AgentBundle) => {
+      if (!previewBundle) {
+        const record = await db.getBundle(bundleId);
+        if (!record) {
+          throw new Error('找不到協作包，請重新匯入後再試。');
+        }
+        try {
+          await db.saveBundle({
+            ...record,
+            bundle: nextBundle,
+            sizeBytes: estimateBundleSize(nextBundle),
+          });
+        } catch (error) {
+          if ((error as Error).name === 'QuotaExceededError') {
+            throw new Error(bundleStrings.editor.storageFull);
+          }
+          throw error;
+        }
+      }
+
+      setLoadedBundle(nextBundle);
+      const currentAgent = nextBundle.agents.find(agent => agent.id === state.currentAssistant?.id);
+      if (currentAgent) {
+        dispatch({
+          type: 'SET_CURRENT_ASSISTANT',
+          payload: toAssistant(
+            currentAgent,
+            nextBundle,
+            state.currentAssistant?.createdAt ?? Date.now(),
+          ),
+        });
+      }
+      setIsEditing(false);
+    },
+    [
+      bundleId,
+      dispatch,
+      previewBundle,
+      state.currentAssistant?.createdAt,
+      state.currentAssistant?.id,
+    ],
+  );
+
   if (state.isLoading) {
     return (
       <div className='flex h-full items-center justify-center text-gray-400'>載入協作包中...</div>
@@ -483,6 +543,18 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
 
   const protectedBundle =
     loadedBundle?.manifest.schemaVersion === 2 && Boolean(loadedBundle.encryptedProviderSettings);
+
+  if (isProviderSetupOpen) {
+    return (
+      <div className='h-full overflow-y-auto bg-gray-900 p-6 md:p-8'>
+        <BundleProviderSetup
+          onReady={handleProviderSetupReady}
+          onCancel={() => setIsProviderSetupOpen(false)}
+        />
+      </div>
+    );
+  }
+
   if (protectedBundle && credentialAccess === 'pending') {
     return (
       <div className='mx-auto flex h-full max-w-xl items-center p-6'>
@@ -526,7 +598,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
                 </button>
                 <button
                   type='button'
-                  onClick={() => void handleUseOwnProvider()}
+                  onClick={() => void handleOpenProviderSetup()}
                   className='min-h-11 flex-1 rounded-lg border border-gray-600 px-4 py-2 text-sm text-gray-100 transition hover:bg-gray-700'
                 >
                   改用自己的 AI 服務商
@@ -583,6 +655,16 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
     return null;
   }
 
+  if (isEditing && loadedBundle) {
+    return (
+      <BundleEditor
+        bundle={loadedBundle}
+        onSave={saveBundle}
+        onCancel={() => setIsEditing(false)}
+      />
+    );
+  }
+
   const bundle = loadedBundle;
   const entryAssistant = bundle?.agents.find(agent => agent.id === bundle.manifest.entryAgentId);
   const headerActions = (
@@ -599,6 +681,20 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
           {bundleStrings.sandbox.backToWizard}
         </button>
       )}
+      <button
+        type='button'
+        onClick={() => setIsEditing(true)}
+        className='rounded-lg border border-cyan-500/50 px-3 py-2 text-sm text-cyan-100 transition hover:bg-cyan-500/10'
+      >
+        {bundleStrings.editor.title}
+      </button>
+      <button
+        type='button'
+        onClick={() => void handleOpenProviderSetup()}
+        className='rounded-lg border border-fuchsia-500/50 px-3 py-2 text-sm text-fuchsia-100 transition hover:bg-fuchsia-500/10'
+      >
+        更換 AI 服務商
+      </button>
       <button
         type='button'
         onClick={() => void clearConversation()}

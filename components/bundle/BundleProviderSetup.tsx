@@ -5,6 +5,7 @@ import { recordBundleByokCompletion } from '../../services/bundleMetricsService'
 
 export interface BundleProviderSetupProps {
   onReady: () => void;
+  onCancel?: () => void;
 }
 
 type StorageScope = 'session' | 'browser';
@@ -50,7 +51,7 @@ const isValidValue = (value: string, endpoint: boolean): boolean => {
   return value.trim().length >= 8;
 };
 
-const BundleProviderSetup: React.FC<BundleProviderSetupProps> = ({ onReady }) => {
+const BundleProviderSetup: React.FC<BundleProviderSetupProps> = ({ onReady, onCancel }) => {
   const [providerType, setProviderType] = useState<ProviderType>('gemini');
   const [value, setValue] = useState('');
   const [scope, setScope] = useState<StorageScope>('session');
@@ -125,9 +126,24 @@ const BundleProviderSetup: React.FC<BundleProviderSetupProps> = ({ onReady }) =>
       aria-label='協作包 AI 金鑰設定'
       className='mx-auto max-w-xl rounded-2xl border border-gray-700/50 bg-gray-800/50 p-6 shadow-xl'
     >
-      <h2 className='text-xl font-bold text-white'>開始前設定 AI 金鑰</h2>
+      <div className='flex items-start justify-between gap-4'>
+        <div>
+          <h2 className='text-xl font-bold text-white'>設定 BUNDLE 的 AI 服務商</h2>
+          <p className='mt-1 text-xs text-cyan-200'>可隨時重新選擇服務商與金鑰。</p>
+        </div>
+        {onCancel && (
+          <button
+            type='button'
+            onClick={onCancel}
+            className='min-h-11 rounded-lg border border-gray-600 px-3 py-2 text-sm text-gray-200 transition hover:bg-gray-700'
+          >
+            取消
+          </button>
+        )}
+      </div>
       <p className='mt-2 text-sm text-gray-400'>
-        協作包不含金鑰。請使用自己的 AI 服務商帳號；金鑰不會寫入協作包或網址。
+        協作包不含金鑰。請使用自己的 AI
+        服務商帳號；這次替換只套用至目前執行環境，不會寫入協作包或網址。
       </p>
 
       <label className='mt-5 block text-sm font-medium text-gray-300' htmlFor='bundle-provider'>

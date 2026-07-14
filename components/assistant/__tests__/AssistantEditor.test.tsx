@@ -199,6 +199,30 @@ describe('AssistantEditor', () => {
     );
   });
 
+  it('emits tool changes through the draft callback before the outer save', () => {
+    const onDraftChange = vi.fn();
+    render(
+      <AssistantEditor
+        {...props}
+        assistant={{
+          ...TEST_ASSISTANTS.basic,
+          mathToolsEnabled: false,
+          webSpeechToolsEnabled: false,
+        }}
+        onDraftChange={onDraftChange}
+      />,
+    );
+    onDraftChange.mockClear();
+
+    fireEvent.click(screen.getByLabelText(/數學計算與幾何繪圖工具/));
+    fireEvent.click(screen.getByLabelText(/語音發音與聽說練習工具/));
+
+    expect(onDraftChange).toHaveBeenCalled();
+    expect(onDraftChange.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({ mathToolsEnabled: true, webSpeechToolsEnabled: true }),
+    );
+  });
+
   it('saves starter prompts added via the 新增 button', () => {
     render(<AssistantEditor {...props} />);
 
