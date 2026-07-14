@@ -144,6 +144,21 @@ describe('MessageBubble', () => {
       });
     });
 
+    it('renders provider-generated images independently from input attachments', () => {
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: 'Here is your image.',
+        images: [{ url: 'data:image/png;base64,ZmFrZQ==', mimeType: 'image/png' }],
+      });
+
+      render(<MessageBubble message={assistantMessage} index={0} />);
+
+      expect(screen.getByRole('img', { name: '模型生成圖片 1' })).toHaveAttribute(
+        'src',
+        'data:image/png;base64,ZmFrZQ==',
+      );
+    });
+
     it('renders geometry boards after the assistant content', () => {
       // Arrange
       const assistantMessage = createMockChatMessage({

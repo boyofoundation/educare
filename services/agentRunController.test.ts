@@ -130,6 +130,7 @@ const buildStreamChatInvocation = (
       outputTokens: number;
       totalTokens: number;
     };
+    images: Array<{ url: string; mimeType?: string; index?: number }>;
   }> = {},
 ) => ({
   finishReason: overrides.finishReason ?? 'complete',
@@ -141,6 +142,7 @@ const buildStreamChatInvocation = (
   candidatesTokenCount: overrides.candidatesTokenCount ?? 5,
   subagentRuns: overrides.subagentRuns,
   subagentUsageTotals: overrides.subagentUsageTotals,
+  images: overrides.images,
 });
 
 const installStreamChatTurns = (
@@ -174,6 +176,7 @@ const installStreamChatTurns = (
           selectedPackSet: turn.selectedPackSet,
           subagentRuns: turn.subagentRuns,
           subagentUsageTotals: turn.subagentUsageTotals,
+          images: turn.images,
         },
         text,
       );
@@ -274,6 +277,29 @@ describe('AgentRunController', () => {
         agentTurnLog: agentTurnLog ?? 'continuation prompt',
       }),
     );
+  });
+
+  it('records the run-start snapshot version for an active project', async () => {
+    installStreamChatTurns([buildStreamChatInvocation({ finishReason: 'complete' })]);
+    const controller = new AgentRunController(buildOptions({ htmlProjectEnabled: true }));
+
+    const result = await controller.run();
+
+    expect(mockCreateSnapshot).toHaveBeenCalledWith('project-1', 'run-start');
+    expect(result.state.snapshotVersion).toBe(7);
+  });
+
+  it('continues the run and reports a run-start snapshot failure', async () => {
+    const snapshotError = new Error('snapshot unavailable');
+    mockCreateSnapshot.mockRejectedValueOnce(snapshotError);
+    const warningSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    installStreamChatTurns([buildStreamChatInvocation({ finishReason: 'complete' })]);
+    const controller = new AgentRunController(buildOptions({ htmlProjectEnabled: true }));
+
+    const result = await controller.run();
+
+    expect(result.state.status).toBe('complete');
+    expect(warningSpy).toHaveBeenCalledWith('Failed to create run-start snapshot:', snapshotError);
   });
 
   it('AC#1 checkpoint: saves the initial running payload before the first LLM call', async () => {
@@ -1283,6 +1309,23 @@ describe('AgentRunController', () => {
     expect(result.historyDelta).toContainEqual(
       expect.objectContaining({ geometryBoards: expectedGeometryBoards }),
     );
+  });
+
+  it('persists provider-generated images in the run result and model history', async () => {
+    const images = [{ url: 'data:image/png;base64,ZmFrZQ==', mimeType: 'image/png', index: 0 }];
+    installStreamChatTurns([
+      buildStreamChatInvocation({
+        text: '',
+        images,
+        projectSummary: null,
+      }),
+    ]);
+    const controller = new AgentRunController(buildOptions());
+
+    const result = await controller.run();
+
+    expect(result.images).toEqual(images);
+    expect(result.historyDelta).toContainEqual(expect.objectContaining({ images }));
   });
 
   it('project bootstrap: createProject on turn 0 upgrades to full project mode on the next turn', async () => {

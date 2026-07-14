@@ -4,6 +4,7 @@ import {
   ChatSession,
   GeometryBoardRecord,
   MessageAttachment,
+  MessageImage,
   RagChunk,
   RouteProposal,
   SubagentRunRecord,
@@ -100,6 +101,7 @@ export interface ThinkingIndicatorProps {
 
 export interface StreamingResponseProps {
   content: string;
+  images?: MessageImage[];
   assistantName?: string;
   subagentBatches?: Record<string, SubagentRunRecord[]>;
   toolCallLog?: ToolCallRecord[];

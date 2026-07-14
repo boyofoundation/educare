@@ -229,6 +229,13 @@ export interface MessageAttachment {
   name?: string;
 }
 
+/** Provider 回傳的原生圖片。URL 可為 HTTP(S) URL 或 data URL。 */
+export interface MessageImage {
+  url: string;
+  mimeType?: string;
+  index?: number;
+}
+
 export interface GeometryBoardRecord {
   id: string;
   title: string;
@@ -250,6 +257,8 @@ export interface ChatMessage {
    * 舊資料沒有此欄位，UI 與 provider 需優雅退化。
    */
   attachments?: MessageAttachment[];
+  /** Provider 回傳的原生圖片，與使用者輸入附件分開儲存。 */
+  images?: MessageImage[];
   /**
    * 訊息建立時間 (epoch ms)。舊資料可能沒有此欄位，UI 需優雅退化。
    */

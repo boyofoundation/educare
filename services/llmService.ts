@@ -1,6 +1,7 @@
 import {
   ChatMessage,
   MessageAttachment,
+  MessageImage,
   RagChunk,
   type FinishReason,
   type HtmlProjectAgentTelemetryEvent,
@@ -123,6 +124,7 @@ export interface StreamChatParams {
    */
   packSetOverride?: HtmlProjectToolPackName[];
   onChunk: (text: string) => void;
+  onImages?: (images: MessageImage[]) => void;
   onProjectToolActivity?: (update: HtmlProjectWorkspaceUpdate) => void;
   onSubagentActivity?: (update: SubagentActivityUpdate) => void;
   onToolCallActivity?: (record: ToolCallRecord) => void;
@@ -157,10 +159,30 @@ export interface StreamChatParams {
         result: Extract<DrawGeometryResult, { ok: true }>;
       }>;
       speechUtterances?: SpeechUtteranceDoc[];
+      images?: MessageImage[];
     },
     fullText: string,
   ) => void;
 }
+
+const mergeMessageImages = (
+  current: MessageImage[],
+  incoming: MessageImage[],
+): { images: MessageImage[]; added: MessageImage[] } => {
+  const images = [...current];
+  const added: MessageImage[] = [];
+
+  for (const image of incoming) {
+    if (images.some(existing => existing.url === image.url)) {
+      continue;
+    }
+
+    images.push(image);
+    added.push(image);
+  }
+
+  return { images, added };
+};
 
 const mapProviderForTelemetry = (
   providerName: string | undefined,
@@ -298,6 +320,7 @@ export const streamChat = async (params: StreamChatParams) => {
     htmlProjectEnabled = false,
     projectBootstrapEnabled = false,
     onChunk,
+    onImages,
     onProjectToolActivity,
     onSubagentActivity,
     onToolCallActivity,
@@ -329,6 +352,7 @@ export const streamChat = async (params: StreamChatParams) => {
   let usage: ProviderUsageMetadata | undefined;
   let responseProvider = activeProvider.name;
   let responseModel = activeProvider.supportedModels[0];
+  let responseImages: MessageImage[] = [];
   let resolvedActiveProjectId = htmlProjectAccessEnabled ? (activeProjectId ?? null) : null;
   let projectSummary: HtmlProjectSummary | null = null;
   let latestPreviewOutcome: HtmlProjectPreviewOutcome | undefined;
@@ -840,6 +864,14 @@ export const streamChat = async (params: StreamChatParams) => {
     };
 
     for await (const response of activeProvider.streamChat(chatParams)) {
+      if (response.images?.length) {
+        const mergedImages = mergeMessageImages(responseImages, response.images);
+        responseImages = mergedImages.images;
+        if (mergedImages.added.length > 0) {
+          onImages?.(mergedImages.added);
+        }
+      }
+
       if (response.text && !response.isComplete) {
         onChunk(response.text);
         fullResponseText += response.text;
@@ -855,6 +887,13 @@ export const streamChat = async (params: StreamChatParams) => {
         telemetryEvent.repeatedRecoverableErrors =
           response.metadata.repeatedRecoverableErrors || [];
         finishReason = response.metadata.finishReason;
+        if (response.metadata.images?.length) {
+          const mergedImages = mergeMessageImages(responseImages, response.metadata.images);
+          responseImages = mergedImages.images;
+          if (mergedImages.added.length > 0) {
+            onImages?.(mergedImages.added);
+          }
+        }
         break;
       }
     }
@@ -885,6 +924,7 @@ export const streamChat = async (params: StreamChatParams) => {
         subagentUsageTotals,
         geometryBoards: geometryBoards.length > 0 ? geometryBoards : undefined,
         speechUtterances: speechUtterances.length > 0 ? speechUtterances : undefined,
+        images: responseImages.length > 0 ? responseImages : undefined,
       },
       fullResponseText,
     );

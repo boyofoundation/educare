@@ -5,9 +5,11 @@ import MarkdownContent from './MarkdownContent';
 import AgentActivityTimeline from './AgentActivityTimeline';
 import GeometryBoard from './GeometryBoard';
 import SpeechUtteranceCard from './SpeechUtteranceCard';
+import GeneratedImageGrid from './GeneratedImageGrid';
 
 const StreamingResponse: React.FC<StreamingResponseProps> = ({
   content,
+  images,
   subagentBatches,
   toolCallLog,
   geometryBoards,
@@ -37,6 +39,7 @@ const StreamingResponse: React.FC<StreamingResponseProps> = ({
           {speechUtterances?.map(utterance => (
             <SpeechUtteranceCard key={utterance.id} utterance={utterance} />
           ))}
+          {images?.length ? <GeneratedImageGrid images={images} /> : null}
           {content !== '' && (
             <div className='relative w-full max-w-[90%] rounded-2xl rounded-bl-md border border-gray-700/50 bg-gray-800/80 px-5 py-4 text-gray-100 shadow-lg backdrop-blur-sm md:max-w-[70ch] md:px-6'>
               <div className='text-base leading-7'>

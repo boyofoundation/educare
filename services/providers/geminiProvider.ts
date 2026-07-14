@@ -2,6 +2,7 @@ import {
   Chat,
   createPartFromFunctionResponse,
   FunctionCallingConfigMode,
+  Modality,
   type FunctionCall,
   type FunctionDeclaration,
   GenerateContentResponse,
@@ -15,6 +16,7 @@ import {
   StreamingResponse,
   type ProviderUsageMetadata,
 } from '../llmAdapter';
+import type { MessageImage } from '../../types';
 import { buildRagPreamble } from './ragContextPreamble';
 import { ApiKeyManager } from '../apiKeyManager';
 import {
@@ -53,6 +55,9 @@ interface GeminiUsageMetadata {
 }
 
 const buildRepeatKey = (toolName: string, code: string): string => `${toolName}::${code}`;
+
+const isGeminiImageGenerationModel = (model: string): boolean =>
+  /(?:image-generation|image)/i.test(model);
 
 const buildGeminiUsageMetadata = (
   response: GenerateContentResponse,
@@ -105,6 +110,9 @@ export class GeminiProvider implements LLMProvider {
     'gemini-1.5-pro',
     'gemini-1.5-flash',
     'gemini-1.0-pro',
+    'gemini-2.5-flash-image',
+    'gemini-3.1-flash-image',
+    'gemini-3-pro-image-preview',
   ];
   readonly requiresApiKey = true;
   readonly supportsLocalMode = false;
@@ -236,7 +244,8 @@ export class GeminiProvider implements LLMProvider {
   private buildChatConfig(
     params: ChatParams,
     finalSystemPrompt: string,
-    forceAutoToolChoice = false,
+    forceAutoToolChoice: boolean,
+    model: string,
   ) {
     const { visibleTools, toolChoice } = resolveToolPolicy(params);
     const functionDeclarations: FunctionDeclaration[] | undefined = visibleTools?.map(tool => ({
@@ -279,6 +288,9 @@ export class GeminiProvider implements LLMProvider {
       temperature: (params.temperature as number | undefined) || this.config.temperature || 0.7,
       maxOutputTokens: (params.maxTokens as number | undefined) || this.config.maxTokens || 4096,
       abortSignal: params.signal,
+      ...(isGeminiImageGenerationModel(model)
+        ? { responseModalities: [Modality.TEXT, Modality.IMAGE] }
+        : {}),
       ...(functionDeclarations?.length
         ? {
             tools: [{ functionDeclarations }],
@@ -308,7 +320,7 @@ export class GeminiProvider implements LLMProvider {
 
     return ai.chats.create({
       model,
-      config: this.buildChatConfig(params, finalSystemPrompt),
+      config: this.buildChatConfig(params, finalSystemPrompt, false, model),
       history: truncatedHistory.map(msg => ({
         role: msg.role,
         parts: [
@@ -363,6 +375,24 @@ export class GeminiProvider implements LLMProvider {
     return response.text ?? '';
   }
 
+  private extractImages(response: GenerateContentResponse): MessageImage[] {
+    return this.getResponseParts(response).flatMap((part, index) => {
+      const inlineData = part.inlineData;
+      if (!inlineData?.data) {
+        return [];
+      }
+
+      const mimeType = inlineData.mimeType || 'image/png';
+      return [
+        {
+          url: `data:${mimeType};base64,${inlineData.data}`,
+          mimeType,
+          index,
+        },
+      ];
+    });
+  }
+
   private getFunctionCalls(response: GenerateContentResponse): FunctionCall[] {
     const parts = this.getResponseParts(response);
 
@@ -390,10 +420,12 @@ export class GeminiProvider implements LLMProvider {
   private buildCompletionChunk(
     response: GenerateContentResponse,
     model: string,
+    images: MessageImage[],
   ): StreamingResponse {
     return {
       text: '',
       isComplete: true,
+      ...(images.length > 0 ? { images } : {}),
       metadata: {
         promptTokenCount: response.usageMetadata?.promptTokenCount ?? 0,
         candidatesTokenCount: response.usageMetadata?.candidatesTokenCount ?? 0,
@@ -428,7 +460,7 @@ export class GeminiProvider implements LLMProvider {
       if (params.tools?.length && params.executeTool) {
         let response = await chat.sendMessage({
           message: this.buildUserMessage(params),
-          config: this.buildChatConfig(params, finalSystemPrompt),
+          config: this.buildChatConfig(params, finalSystemPrompt, false, model),
         });
         let toolRoundCount = 0;
         let usage = buildGeminiUsageMetadata(response);
@@ -459,7 +491,8 @@ export class GeminiProvider implements LLMProvider {
 
           if (functionCalls.length === 0) {
             const visibleText = this.extractVisibleText(response);
-            if (!visibleText) {
+            const images = this.extractImages(response);
+            if (!visibleText && images.length === 0) {
               throw new Error(
                 'Gemini terminal response had no visible text or actionable tool calls.',
               );
@@ -468,13 +501,14 @@ export class GeminiProvider implements LLMProvider {
             yield {
               text: visibleText,
               isComplete: false,
+              ...(images.length > 0 ? { images } : {}),
               metadata: {
                 model,
                 provider: this.name,
               },
             };
 
-            const completion = this.buildCompletionChunk(response, model);
+            const completion = this.buildCompletionChunk(response, model, images);
             completion.metadata = {
               ...completion.metadata,
               promptTokenCount: usage?.inputTokens ?? completion.metadata?.promptTokenCount ?? 0,
@@ -492,10 +526,12 @@ export class GeminiProvider implements LLMProvider {
           // ⑤ Incremental tool-round content yield: surface any visible text
           // that arrived alongside the function call before the round blocks.
           const incrementalText = this.extractVisibleText(response);
-          if (incrementalText) {
+          const incrementalImages = this.extractImages(response);
+          if (incrementalText || incrementalImages.length > 0) {
             yield {
               text: incrementalText,
               isComplete: false,
+              ...(incrementalImages.length > 0 ? { images: incrementalImages } : {}),
               metadata: {
                 model,
                 provider: this.name,
@@ -608,7 +644,7 @@ export class GeminiProvider implements LLMProvider {
 
           response = await chat.sendMessage({
             message: toolResponses,
-            config: this.buildChatConfig(params, finalSystemPrompt, true),
+            config: this.buildChatConfig(params, finalSystemPrompt, true, model),
           });
           const latestUsage = buildGeminiUsageMetadata(response);
           if (latestUsage?.source === 'api') {
@@ -628,16 +664,26 @@ export class GeminiProvider implements LLMProvider {
 
       const stream = await chat.sendMessageStream({
         message: this.buildUserMessage(params),
-        config: this.buildChatConfig(params, finalSystemPrompt),
+        config: this.buildChatConfig(params, finalSystemPrompt, false, model),
       });
       let aggregatedResponse: GenerateContentResponse | null = null;
+      const streamedImages: MessageImage[] = [];
 
       for await (const chunk of stream) {
         const chunkText = this.extractVisibleText(chunk);
-        if (chunkText) {
+        const chunkImages = this.extractImages(chunk);
+        if (chunkImages.length > 0) {
+          for (const image of chunkImages) {
+            if (!streamedImages.some(existing => existing.url === image.url)) {
+              streamedImages.push(image);
+            }
+          }
+        }
+        if (chunkText || chunkImages.length > 0) {
           yield {
             text: chunkText,
             isComplete: false,
+            ...(chunkImages.length > 0 ? { images: chunkImages } : {}),
             metadata: {
               model,
               provider: this.name,
@@ -650,6 +696,7 @@ export class GeminiProvider implements LLMProvider {
       const completion = this.buildCompletionChunk(
         aggregatedResponse ?? new GenerateContentResponse(),
         model,
+        streamedImages,
       );
       completion.metadata = {
         ...completion.metadata,

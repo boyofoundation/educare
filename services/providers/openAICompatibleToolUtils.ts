@@ -4,6 +4,7 @@ import {
   ToolDefinition,
   type ProviderUsageMetadata,
 } from '../llmAdapter';
+import type { MessageImage } from '../../types';
 import { buildRagPreamble } from './ragContextPreamble';
 import {
   buildEscalatedToolResult,
@@ -22,6 +23,14 @@ interface OpenAICompatibleToolCall {
   };
 }
 
+interface OpenAICompatibleImage {
+  image_url?: { url?: string };
+  url?: string;
+  mime_type?: string;
+  mimeType?: string;
+  index?: number;
+}
+
 type OpenAICompatibleContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
@@ -31,6 +40,7 @@ interface OpenAICompatibleMessage {
   content: string | OpenAICompatibleContentPart[] | null;
   tool_calls?: OpenAICompatibleToolCall[];
   tool_call_id?: string;
+  images?: OpenAICompatibleImage[];
 }
 
 interface OpenAICompatibleResponse {
@@ -48,6 +58,15 @@ interface OpenAICompatibleResponse {
       reasoning_tokens?: number;
     };
   };
+}
+
+interface OpenAICompatibleStreamChunk {
+  choices?: Array<{
+    delta?: { content?: unknown; images?: unknown[] };
+    message?: { images?: unknown[] };
+  }>;
+  images?: unknown[];
+  usage?: OpenAICompatibleResponse['usage'];
 }
 
 const buildOpenAICompatibleUsageMetadata = (
@@ -79,6 +98,38 @@ const buildOpenAICompatibleUsageMetadata = (
     cachedInputTokens,
     reasoningTokens,
   };
+};
+
+const normalizeOpenAICompatibleImages = (value: unknown): MessageImage[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((candidate, index) => {
+    if (!candidate || typeof candidate !== 'object') {
+      return [];
+    }
+
+    const image = candidate as OpenAICompatibleImage;
+    const url =
+      typeof image.image_url?.url === 'string'
+        ? image.image_url.url
+        : typeof image.url === 'string'
+          ? image.url
+          : '';
+    if (!url) {
+      return [];
+    }
+
+    const mimeType =
+      typeof image.mime_type === 'string'
+        ? image.mime_type
+        : typeof image.mimeType === 'string'
+          ? image.mimeType
+          : undefined;
+    const imageIndex = typeof image.index === 'number' ? image.index : index;
+    return [{ url, ...(mimeType ? { mimeType } : {}), index: imageIndex }];
+  });
 };
 
 interface StreamOptions {
@@ -519,22 +570,34 @@ export async function* streamOpenAICompatibleChat(
         };
       }
 
-      // API 回應的 assistant content 一律是字串;multi-part 只出現在送出的 user 訊息。
+      const assistantImages = normalizeOpenAICompatibleImages(assistantMessage?.images);
       const assistantText =
         typeof assistantMessage?.content === 'string' ? assistantMessage.content : '';
 
-      if (!assistantMessage?.tool_calls?.length) {
-        if (assistantText) {
-          yield {
-            text: assistantText,
-            isComplete: false,
-            metadata: {
-              model,
-              provider: providerName,
-            },
-          };
-        }
+      // Surface assistant content before either returning or blocking on tools.
+      if (assistantText) {
+        yield {
+          text: assistantText,
+          isComplete: false,
+          metadata: {
+            model,
+            provider: providerName,
+          },
+        };
+      }
+      if (assistantImages.length > 0) {
+        yield {
+          text: '',
+          isComplete: false,
+          images: assistantImages,
+          metadata: {
+            model,
+            provider: providerName,
+          },
+        };
+      }
 
+      if (!assistantMessage?.tool_calls?.length) {
         yield {
           text: '',
           isComplete: true,
@@ -547,23 +610,10 @@ export async function* streamOpenAICompatibleChat(
             toolRoundCount,
             repeatedRecoverableErrors: [...repeatedRecoverableErrors.values()],
             finishReason: 'complete',
+            ...(assistantImages.length > 0 ? { images: assistantImages } : {}),
           },
         };
         return;
-      }
-
-      // ③ Incremental content yield: if the assistant message has both content
-      // and tool_calls, yield the text immediately so the user sees partial
-      // progress before the tool round blocks on execution.
-      if (assistantText) {
-        yield {
-          text: assistantText,
-          isComplete: false,
-          metadata: {
-            model,
-            provider: providerName,
-          },
-        };
       }
 
       // ① Budget exhaustion (G13): no longer throws; yields a final
@@ -696,28 +746,44 @@ export async function* streamOpenAICompatibleChat(
       break;
     }
 
+    let parsedValue: unknown;
     try {
-      const parsed = JSON.parse(data);
-      const deltaContent = parsed.choices?.[0]?.delta?.content;
-
-      if (deltaContent) {
-        yield {
-          text: deltaContent,
-          isComplete: false,
-          metadata: {
-            model,
-            provider: providerName,
-          },
-        };
-      }
-
-      if (parsed.usage) {
-        promptTokenCount = parsed.usage.prompt_tokens || promptTokenCount;
-        candidatesTokenCount = parsed.usage.completion_tokens || candidatesTokenCount;
-        usage = buildOpenAICompatibleUsageMetadata(parsed.usage);
-      }
-    } catch {
+      parsedValue = JSON.parse(data);
+    } catch (error) {
+      console.warn('Failed to parse OpenAI-compatible SSE chunk:', error);
       continue;
+    }
+
+    if (!parsedValue || typeof parsedValue !== 'object') {
+      console.warn('Ignoring non-object OpenAI-compatible SSE chunk:', parsedValue);
+      continue;
+    }
+
+    const parsed = parsedValue as OpenAICompatibleStreamChunk;
+    const candidate = parsed.choices?.[0];
+    const deltaContent = candidate?.delta?.content;
+    const images = normalizeOpenAICompatibleImages([
+      ...(Array.isArray(candidate?.delta?.images) ? candidate.delta.images : []),
+      ...(Array.isArray(candidate?.message?.images) ? candidate.message.images : []),
+      ...(Array.isArray(parsed.images) ? parsed.images : []),
+    ]);
+
+    if (typeof deltaContent === 'string' || images.length > 0) {
+      yield {
+        text: typeof deltaContent === 'string' ? deltaContent : '',
+        isComplete: false,
+        ...(images.length > 0 ? { images } : {}),
+        metadata: {
+          model,
+          provider: providerName,
+        },
+      };
+    }
+
+    if (parsed.usage) {
+      promptTokenCount = parsed.usage.prompt_tokens || promptTokenCount;
+      candidatesTokenCount = parsed.usage.completion_tokens || candidatesTokenCount;
+      usage = buildOpenAICompatibleUsageMetadata(parsed.usage);
     }
   }
 

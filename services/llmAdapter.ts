@@ -1,4 +1,4 @@
-import { ChatMessage, FinishReason, MessageAttachment } from '../types';
+import { ChatMessage, FinishReason, MessageAttachment, MessageImage } from '../types';
 
 export interface ProviderUsageMetadata {
   source: 'api' | 'unavailable';
@@ -15,6 +15,7 @@ export interface ProviderUsageMetadata {
 export interface StreamingResponse {
   text: string;
   isComplete: boolean;
+  images?: MessageImage[];
   toolCalls?: ToolCall[];
   metadata?: {
     promptTokenCount?: number;
@@ -30,6 +31,7 @@ export interface StreamingResponse {
     }>;
     /** Agentic harness 結束原因 (G13/T1)。預算耗盡不再 throw。*/
     finishReason?: FinishReason;
+    images?: MessageImage[];
   };
 }
 

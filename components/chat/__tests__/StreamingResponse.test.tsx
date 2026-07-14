@@ -107,6 +107,20 @@ describe('StreamingResponse', () => {
       expect(screen.getByTestId('markdown-content')).toHaveTextContent('Practice this sentence.');
     });
 
+    it('renders provider-generated images while the response is streaming', () => {
+      render(
+        <StreamingResponse
+          content='Here is the image.'
+          images={[{ url: 'https://example.com/generated.png' }]}
+        />,
+      );
+
+      expect(screen.getByRole('img', { name: '模型生成圖片 1' })).toHaveAttribute(
+        'src',
+        'https://example.com/generated.png',
+      );
+    });
+
     it('should render with assistant-style layout', () => {
       // Arrange & Act
       render(<StreamingResponse content='Test content' />);

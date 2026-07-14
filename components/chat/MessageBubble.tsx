@@ -4,6 +4,7 @@ import { UserIcon, GeminiIcon } from '../ui/Icons';
 import AgentActivityTimeline from './AgentActivityTimeline';
 import GeometryBoard from './GeometryBoard';
 import SpeechUtteranceCard from './SpeechUtteranceCard';
+import GeneratedImageGrid from './GeneratedImageGrid';
 import MarkdownContent from './MarkdownContent';
 import { AppContext } from '../core/useAppContext';
 import { attachmentToDataUrl } from '../../services/imageAttachmentService';
@@ -299,6 +300,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
                 messageKey={messageKey}
               />
             </div>
+            {message.images?.length ? <GeneratedImageGrid images={message.images} /> : null}
           </div>
           {message.geometryBoards?.map(board => (
             <GeometryBoard key={board.id} board={board} />

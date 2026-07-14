@@ -13,6 +13,7 @@ import {
   type HtmlProjectWorkspaceUpdate,
   type MessageAttachment,
   type MessageCitation,
+  type MessageImage,
   type RagChunk,
   type SubagentActivityUpdate,
   type SubagentRunRecord,
@@ -111,6 +112,7 @@ export interface AgentRunTurnSummary {
 
 export interface AgentRunControllerCallbacks {
   onChunk: (text: string, turnIndex: number) => void;
+  onImages?: (images: MessageImage[], turnIndex: number) => void;
   onProjectToolActivity?: (update: HtmlProjectWorkspaceUpdate) => void;
   onSubagentActivity?: (update: SubagentActivityUpdate) => void;
   onToolCallActivity?: (record: ToolCallRecord) => void;
@@ -171,6 +173,7 @@ export interface AgentRunResult {
   citations?: MessageCitation[];
   geometryBoards?: GeometryBoardRecord[];
   speechUtterances?: SpeechUtteranceRecord[];
+  images?: MessageImage[];
   tokenInfo: {
     promptTokenCount: number;
     candidatesTokenCount: number;
@@ -304,8 +307,9 @@ export class AgentRunController {
           RUN_START_SNAPSHOT_NOTE,
         );
         this.state.snapshotVersion = snapshot.version;
-      } catch {
-        // best-effort — swallow.
+      } catch (error) {
+        // Snapshotting is optional; keep the run alive while preserving the failure evidence.
+        console.warn('Failed to create run-start snapshot:', error);
       }
     }
 
@@ -319,6 +323,7 @@ export class AgentRunController {
     let finalSubagentUsageTotals: TokenUsageTotals | undefined;
     const geometryBoards: GeometryBoardRecord[] = [];
     const speechUtterances: SpeechUtteranceRecord[] = [];
+    const images: MessageImage[] = [];
     let firstTurnPackSet = resumeFrom?.firstTurnPackSet
       ? [...resumeFrom.firstTurnPackSet]
       : undefined;
@@ -526,6 +531,7 @@ export class AgentRunController {
           subagentUsageTotals?: TokenUsageTotals;
           geometryBoards?: GeometryBoardRecord[];
           speechUtterances?: SpeechUtteranceRecord[];
+          images?: MessageImage[];
         } = {
           finishReason: 'complete',
           text: '',
@@ -558,6 +564,9 @@ export class AgentRunController {
               this.latestPartialText += text;
               callbacks.onChunk(text, state.turnIndex);
               void flushCheckpointProgress();
+            },
+            onImages: nextImages => {
+              callbacks.onImages?.(nextImages, state.turnIndex);
             },
             onProjectToolActivity: callbacks.onProjectToolActivity,
             onSubagentActivity: callbacks.onSubagentActivity,
@@ -597,6 +606,7 @@ export class AgentRunController {
                 title: utterance.title,
                 doc: utterance,
               }));
+              turn.images = meta.images;
               totalPromptTokens += meta.promptTokenCount;
               totalCandidatesTokens += meta.candidatesTokenCount;
               if (meta.usage) {
@@ -780,12 +790,20 @@ export class AgentRunController {
           subagentRuns: turn.subagentRuns,
           geometryBoards: turn.geometryBoards,
           speechUtterances: turn.speechUtterances,
+          images: turn.images,
         };
         if (turn.geometryBoards) {
           geometryBoards.push(...turn.geometryBoards);
         }
         if (turn.speechUtterances) {
           speechUtterances.push(...turn.speechUtterances);
+        }
+        if (turn.images) {
+          for (const image of turn.images) {
+            if (!images.some(existing => existing.url === image.url)) {
+              images.push(image);
+            }
+          }
         }
         const committedMessages = synthetic ? [synthetic, modelMessage] : [modelMessage];
         checkpointHistory.push(...committedMessages);
@@ -848,6 +866,7 @@ export class AgentRunController {
       citations: gatheredContext?.citations,
       geometryBoards: geometryBoards.length > 0 ? geometryBoards : undefined,
       speechUtterances: speechUtterances.length > 0 ? speechUtterances : undefined,
+      images: images.length > 0 ? images : undefined,
       tokenInfo: {
         promptTokenCount: totalPromptTokens,
         candidatesTokenCount: totalCandidatesTokens,

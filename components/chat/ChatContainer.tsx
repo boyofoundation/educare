@@ -38,6 +38,7 @@ import type {
   ChatSession,
   GeometryBoardRecord,
   MessageAttachment,
+  MessageImage,
   SpeechUtteranceRecord,
   SubagentRunRecord,
   ToolCallRecord,
@@ -63,7 +64,10 @@ const buildInterruptedNotice = (checkpoint: AgentRunCheckpoint): ChatMessage => 
 });
 
 const sameMessage = (left?: ChatMessage, right?: ChatMessage): boolean =>
-  left?.role === right?.role && left?.content === right?.content;
+  left?.role === right?.role &&
+  left?.content === right?.content &&
+  (left?.images ?? []).map(image => image.url).join('\n') ===
+    (right?.images ?? []).map(image => image.url).join('\n');
 
 const appendWithoutDuplicateTail = (
   existingMessages: ChatMessage[],
@@ -149,6 +153,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const [streamingSpeechUtterances, setStreamingSpeechUtterances] = useState<
     SpeechUtteranceRecord[]
   >([]);
+  const [streamingImages, setStreamingImages] = useState<MessageImage[]>([]);
   const [interruptedCheckpoint, setInterruptedCheckpoint] = useState<AgentRunCheckpoint | null>(
     null,
   );
@@ -299,6 +304,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setToolCallRecords([]);
     setStreamingGeometryBoards([]);
     setStreamingSpeechUtterances([]);
+    setStreamingImages([]);
     setPendingEmptyResponseNotice(null);
     setRunState(null);
     setAgentRunState?.(null);
@@ -655,6 +661,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setToolCallRecords([]);
     setStreamingGeometryBoards([]);
     setStreamingSpeechUtterances([]);
+    setStreamingImages([]);
     setResumeError(null);
     actions?.setAgentRunState?.(null);
 
@@ -746,6 +753,20 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             streamingBufferRef.current += chunk;
             scheduleStreamingFlush();
           },
+          onImages: images => {
+            if (!isRunSessionDisplayed()) {
+              return;
+            }
+            setStreamingImages(previous => {
+              const next = [...previous];
+              for (const image of images) {
+                if (!next.some(existing => existing.url === image.url)) {
+                  next.push(image);
+                }
+              }
+              return next;
+            });
+          },
           onProjectToolActivity: update => {
             if (!isRunSessionDisplayed()) {
               return;
@@ -815,6 +836,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         setStreamingResponse('');
         setStreamingGeometryBoards([]);
         setStreamingSpeechUtterances([]);
+        setStreamingImages([]);
         const fullModelResponse = result.fullText.trim();
         const latestErrorMessage = latestErrorMessageRef.current;
         const shouldPersistError = Boolean(latestErrorMessage) || result.state.status === 'failed';
@@ -846,12 +868,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
         if (fullModelResponse === '') {
           const hasArtifacts =
-            (result.geometryBoards?.length ?? 0) > 0 || (result.speechUtterances?.length ?? 0) > 0;
+            (result.geometryBoards?.length ?? 0) > 0 ||
+            (result.speechUtterances?.length ?? 0) > 0 ||
+            (result.images?.length ?? 0) > 0;
           const artifactMessage = hasArtifacts
             ? buildAssistantMessage('', {
                 citations: result.citations,
                 geometryBoards: result.geometryBoards,
                 speechUtterances: result.speechUtterances,
+                images: result.images,
                 routeProposal: routeProposalRef.current,
               })
             : undefined;
@@ -884,6 +909,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           citations: result.citations,
           geometryBoards: result.geometryBoards,
           speechUtterances: result.speechUtterances,
+          images: result.images,
           routeProposal: routeProposalRef.current,
         });
         const finalSession = applyTokenUsageToSession(
@@ -1158,8 +1184,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     toolCallRecords.length > 0 ||
     streamingGeometryBoards.length > 0 ||
     streamingSpeechUtterances.length > 0 ||
+    streamingImages.length > 0 ||
     Object.values(subagentBatches).some(runs => runs.length > 0);
-  const showStreamingResponse = streamingResponse !== '' || (isLoading && hasLiveActivity);
+  const showStreamingResponse =
+    streamingResponse !== '' || streamingImages.length > 0 || (isLoading && hasLiveActivity);
   const interruptedTurnLabel = interruptedCheckpoint
     ? `${Math.min(interruptedCheckpoint.turnIndex + 1, interruptedCheckpoint.maxTurns)}/${interruptedCheckpoint.maxTurns}`
     : null;
@@ -1348,6 +1376,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             {showStreamingResponse && (
               <StreamingResponse
                 content={streamingResponse}
+                images={streamingImages}
                 assistantName={assistantName}
                 subagentBatches={subagentBatches}
                 toolCallLog={toolCallRecords}

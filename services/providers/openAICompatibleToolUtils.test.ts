@@ -1287,6 +1287,149 @@ describe('streamOpenAICompatibleChat', () => {
     expect(responses.at(-1)?.metadata?.finishReason).toBe('complete');
   });
 
+  it('normalizes native images from an OpenAI-compatible completion', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      createJsonResponse({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Here is the generated image.',
+              images: [
+                {
+                  type: 'image_url',
+                  image_url: { url: 'data:image/png;base64,ZmFrZQ==' },
+                  index: 2,
+                },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 2, completion_tokens: 3 },
+      }),
+    );
+
+    const responses = [];
+    for await (const chunk of streamOpenAICompatibleChat({
+      endpoint: 'https://example.com/chat/completions',
+      headers: { Authorization: 'Bearer test' },
+      providerName: 'openai',
+      model: 'image-model',
+      params: {
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'create an image',
+        tools: [...TOOL_DEFINITIONS],
+        executeTool: vi.fn(),
+      },
+    })) {
+      responses.push(chunk);
+    }
+
+    expect(responses).toContainEqual(
+      expect.objectContaining({
+        text: '',
+        isComplete: false,
+        images: [
+          {
+            url: 'data:image/png;base64,ZmFrZQ==',
+            index: 2,
+          },
+        ],
+      }),
+    );
+    expect(responses.at(-1)?.metadata?.images).toEqual([
+      {
+        url: 'data:image/png;base64,ZmFrZQ==',
+        index: 2,
+      },
+    ]);
+  });
+
+  it('normalizes images emitted in OpenAI-compatible SSE deltas', async () => {
+    const sse = [
+      'data: ' +
+        JSON.stringify({
+          choices: [
+            {
+              delta: {
+                images: [
+                  {
+                    type: 'image_url',
+                    image_url: { url: 'https://example.com/generated.png' },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+    );
+
+    const responses = [];
+    for await (const chunk of streamOpenAICompatibleChat({
+      endpoint: 'https://example.com/chat/completions',
+      headers: { Authorization: 'Bearer test' },
+      providerName: 'openai',
+      model: 'image-model',
+      params: {
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'create an image',
+      },
+    })) {
+      responses.push(chunk);
+    }
+
+    expect(responses).toContainEqual(
+      expect.objectContaining({
+        isComplete: false,
+        images: [{ url: 'https://example.com/generated.png', index: 0 }],
+      }),
+    );
+  });
+
+  it('skips malformed SSE payloads while surfacing the parse failure', async () => {
+    const warningSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const sse = [
+      'data: {malformed-json',
+      'data: ' +
+        JSON.stringify({
+          choices: [{ delta: { content: 'recovered' } }],
+        }),
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+    );
+
+    const responses = [];
+    for await (const chunk of streamOpenAICompatibleChat({
+      endpoint: 'https://example.com/chat/completions',
+      headers: { Authorization: 'Bearer test' },
+      providerName: 'openai',
+      model: 'gpt-4o',
+      params: {
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'hello',
+      },
+    })) {
+      responses.push(chunk);
+    }
+
+    expect(responses).toContainEqual(expect.objectContaining({ text: 'recovered' }));
+    expect(warningSpy).toHaveBeenCalledWith(
+      'Failed to parse OpenAI-compatible SSE chunk:',
+      expect.any(SyntaxError),
+    );
+  });
+
   describe('tool-loop contract cases (shared)', () => {
     const sharedParams = {
       systemPrompt: 'You are helpful.',

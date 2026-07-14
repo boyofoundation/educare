@@ -38,6 +38,15 @@ const TOOL_DEFINITIONS = [
 
 type MockResponse = {
   text?: string;
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+        thought?: boolean;
+        inlineData?: { mimeType?: string; data?: string };
+      }>;
+    };
+  }>;
   functionCalls?: Array<{
     id?: string;
     name?: string;
@@ -1004,6 +1013,85 @@ describe('GeminiProvider', () => {
         metadata: expect.objectContaining({ promptTokenCount: 3, candidatesTokenCount: 5 }),
       }),
     ]);
+  });
+
+  it('surfaces Gemini inlineData image parts and requests image modalities for image models', async () => {
+    const provider = new GeminiProvider();
+    const { sendMessageStream } = await setupProvider(provider, {
+      streamChunks: [
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { text: 'Here is the image.' },
+                  { inlineData: { mimeType: 'image/png', data: 'ZmFrZQ==' } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const responses = await collectResponses(provider, { model: 'gemini-3.1-flash-image' });
+
+    expect(responses).toContainEqual(
+      expect.objectContaining({
+        text: 'Here is the image.',
+        images: [
+          {
+            url: 'data:image/png;base64,ZmFrZQ==',
+            mimeType: 'image/png',
+            index: 1,
+          },
+        ],
+      }),
+    );
+    expect(sendMessageStream).toHaveBeenCalledWith({
+      message: 'Hi',
+      config: expect.objectContaining({
+        responseModalities: ['TEXT', 'IMAGE'],
+      }),
+    });
+  });
+
+  it('does not reject an image-only Gemini terminal response', async () => {
+    const provider = new GeminiProvider();
+    const { sendMessage } = await setupProvider(provider, {
+      sendMessageResponses: [
+        {
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: 'image/jpeg', data: 'ZmFrZQ==' } }],
+              },
+            },
+          ],
+          functionCalls: [],
+        },
+      ],
+    });
+
+    const responses = await collectResponses(provider, {
+      tools: [...TOOL_DEFINITIONS],
+      executeTool: vi.fn(),
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(responses).toContainEqual(
+      expect.objectContaining({
+        isComplete: false,
+        images: [
+          {
+            url: 'data:image/jpeg;base64,ZmFrZQ==',
+            mimeType: 'image/jpeg',
+            index: 0,
+          },
+        ],
+      }),
+    );
+    expect(responses.at(-1)?.metadata?.finishReason).toBe('complete');
   });
 
   describe('tool-loop contract cases (shared)', () => {

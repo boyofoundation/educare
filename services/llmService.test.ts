@@ -177,6 +177,47 @@ describe('streamChat', () => {
     expect(mockExecuteDrawGeometry).not.toHaveBeenCalled();
   });
 
+  it('forwards provider-generated images to live callbacks and completion metadata', async () => {
+    const image = { url: 'data:image/png;base64,ZmFrZQ==', mimeType: 'image/png', index: 0 };
+    const provider = {
+      name: 'openai',
+      displayName: 'OpenAI',
+      supportedModels: ['image-model'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* () {
+        yield { text: '', isComplete: false, images: [image] };
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 1,
+            candidatesTokenCount: 2,
+            provider: 'openai',
+            model: 'image-model',
+            images: [image],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+    const onImages = vi.fn();
+    const onComplete = vi.fn();
+
+    const { streamChat } = await import('./llmService');
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'create an image',
+      assistantId: 'assistant-1',
+      onChunk: vi.fn(),
+      onImages,
+      onComplete,
+    });
+
+    expect(onImages).toHaveBeenCalledWith([image]);
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ images: [image] }), '');
+  });
+
   it('keeps the KaTeX prompt before math-tool guidance when mathToolsEnabled is enabled', async () => {
     const observedChatParams: Array<Record<string, unknown>> = [];
     mockExecuteCompute.mockResolvedValue({
