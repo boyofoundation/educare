@@ -316,6 +316,7 @@ describe('GeminiProvider', () => {
     });
     expect(JSON.stringify(declaration?.parameters)).not.toContain('"const"');
     expect(JSON.stringify(declaration?.parameters)).not.toContain('"oneOf"');
+    expect(JSON.stringify(declaration?.parameters)).not.toContain('"exclusiveMinimum"');
   });
 
   it('normalizes draw_geometry schemas for Gemini while retaining each required kind constraint', async () => {
