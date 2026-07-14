@@ -449,6 +449,36 @@ const validateStringArray = (
   });
 };
 
+
+const validateNumericPieValues = (
+  errors: GeometryDiagnostic[],
+  index: number,
+  values: unknown,
+): void => {
+  if (!Array.isArray(values)) {
+    return;
+  }
+
+  const numericValues = values.filter((value): value is number => typeof value === 'number');
+  values.forEach((value, valueIndex) => {
+    if (typeof value === 'number' && value < 0) {
+      errors.push({
+        index,
+        field: `values[${valueIndex}]`,
+        message: 'Pie chart values must be non-negative.',
+      });
+    }
+  });
+
+  if (numericValues.length === values.length && numericValues.every(value => value === 0)) {
+    errors.push({
+      index,
+      field: 'values',
+      message: 'Pie chart values must contain at least one positive value.',
+    });
+  }
+};
+
 const formatReferenceKindList = (kinds: readonly GeometryReferenceKind[]): string =>
   kinds.length === 1 ? kinds[0] : kinds.join(', ');
 
@@ -671,6 +701,9 @@ const validateObject = async (
           field: 'direction',
           message: 'direction must be horizontal or vertical.',
         });
+      }
+      if (object.chartStyle === 'pie') {
+        validateNumericPieValues(errors, index, object.values);
       }
       if (object.chartStyle === 'pie' && hasOwn(object, 'x')) {
         errors.push({

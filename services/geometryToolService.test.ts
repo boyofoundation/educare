@@ -242,6 +242,27 @@ describe('geometryToolService: validateGeometryDoc', () => {
     ]);
   });
 
+  it('rejects numeric pie chart values that are negative or all zero', async () => {
+    // Arrange
+    const document = createDocument([
+      { kind: 'chart', chartStyle: 'pie', values: [-1, 0] },
+      { kind: 'chart', chartStyle: 'pie', values: [0, 0] },
+    ]);
+
+    // Act
+    const result = await validateGeometryDoc(document);
+
+    // Assert
+    expect(result.errors).toEqual([
+      { index: 0, field: 'values[0]', message: 'Pie chart values must be non-negative.' },
+      {
+        index: 1,
+        field: 'values',
+        message: 'Pie chart values must contain at least one positive value.',
+      },
+    ]);
+  });
+
   it('rejects pie charts that are configured with x coordinates', async () => {
     // Arrange
     const document = createDocument([
