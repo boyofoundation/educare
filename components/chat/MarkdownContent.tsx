@@ -6,6 +6,12 @@ import rehypeKatex from 'rehype-katex';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeHighlightCodeLines from 'rehype-highlight-code-lines';
 import type { MessageCitation } from '../../types';
+import InlinePronunciationButton from './InlinePronunciationButton';
+import {
+  annotateInlinePronunciationMarkup,
+  INLINE_PRONUNCIATION_HREF_PREFIX,
+  parseInlinePronunciationHref,
+} from '../../services/speechMarkupService';
 import 'highlight.js/styles/github-dark.css';
 import 'katex/dist/katex.min.css';
 import 'katex/contrib/mhchem';
@@ -80,7 +86,11 @@ const annotateCitationLinks = (
 const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, citations, messageKey }) => {
   const [copyFeedback, setCopyFeedback] = useState<{ target: string; label: string } | null>(null);
   const copyFeedbackTimerRef = useRef<number | null>(null);
-  const renderedContent = annotateCitationLinks(content, citations, messageKey);
+  const renderedContent = annotateCitationLinks(
+    annotateInlinePronunciationMarkup(content),
+    citations,
+    messageKey,
+  );
 
   useEffect(() => {
     return () => {
@@ -116,7 +126,9 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, citations, m
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex, rehypeHighlight, [rehypeHighlightCodeLines]]}
         skipHtml={false}
-        urlTransform={defaultUrlTransform}
+        urlTransform={url =>
+          url.startsWith(INLINE_PRONUNCIATION_HREF_PREFIX) ? url : defaultUrlTransform(url)
+        }
         components={{
           code(props) {
             const { className, children, ...rest } = props as React.ComponentProps<'code'> & {
@@ -192,6 +204,15 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, citations, m
             </blockquote>
           ),
           a: ({ children, href }) => {
+            const pronunciation = parseInlinePronunciationHref(href);
+            if (pronunciation) {
+              return (
+                <InlinePronunciationButton utterance={pronunciation}>
+                  {children}
+                </InlinePronunciationButton>
+              );
+            }
+
             if (href?.startsWith('#cite-')) {
               return (
                 <a

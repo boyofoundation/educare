@@ -13,6 +13,7 @@ interface AssistantEditorProps {
   availableAssistants?: Assistant[];
   onDraftChange?: (assistant: Assistant) => void;
   showFooterActions?: boolean;
+  compact?: boolean;
 }
 
 const MAX_STARTER_PROMPTS = 4;
@@ -26,6 +27,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   availableAssistants,
   onDraftChange,
   showFooterActions = true,
+  compact = false,
 }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -193,9 +195,17 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   return (
     <div
       data-testid='assistant-editor'
-      className='chat-scroll flex h-full flex-col overflow-y-auto bg-gradient-to-br from-gray-800 to-gray-900 p-8'
+      className={`chat-scroll flex h-full flex-col overflow-y-auto ${
+        compact ? 'bg-[#141c26] p-5' : 'bg-gradient-to-br from-gray-800 to-gray-900 p-8'
+      }`}
     >
-      <h2 className='mb-8 bg-gradient-to-r from-white to-gray-300 bg-clip-text text-3xl font-bold text-transparent'>
+      <h2
+        className={
+          compact
+            ? 'mb-5 text-lg font-semibold text-gray-100'
+            : 'mb-8 bg-gradient-to-r from-white to-gray-300 bg-clip-text text-3xl font-bold text-transparent'
+        }
+      >
         {assistant ? '編輯助理' : '新增助理'}
       </h2>
 

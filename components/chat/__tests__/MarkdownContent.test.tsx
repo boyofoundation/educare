@@ -54,6 +54,32 @@ describe('MarkdownContent citations', () => {
 });
 
 describe('MarkdownContent rich content rendering', () => {
+  it('renders a complete pronounce tag as an inline playback icon', () => {
+    render(
+      <MarkdownContent
+        content={'Try <pronounce language="en-US">Good morning!</pronounce> today.'}
+      />,
+    );
+
+    expect(screen.getByText('Good morning!')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '播放發音：Good morning!' })).toBeInTheDocument();
+  });
+
+  it('does not turn pronunciation-like text in code or math into playback controls', () => {
+    render(
+      <MarkdownContent content={'`<pronounce>code</pronounce>` $<pronounce>math</pronounce>$'} />,
+    );
+
+    expect(screen.queryByRole('button', { name: /播放發音/ })).not.toBeInTheDocument();
+  });
+
+  it('does not create a playback control for an invalid pronunciation tag', () => {
+    render(<MarkdownContent content={'<pronounce language="../en">unsafe</pronounce>'} />);
+
+    expect(screen.queryByRole('button', { name: /播放發音/ })).not.toBeInTheDocument();
+    expect(screen.getByText('<pronounce language="../en">unsafe</pronounce>')).toBeInTheDocument();
+  });
+
   it('renders inline and display LaTeX without exposing their delimiters', () => {
     // Arrange
     const { container } = render(

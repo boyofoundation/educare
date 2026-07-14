@@ -41,7 +41,7 @@ export const SPEAK_TEXT_TOOL_SCHEMA = {
 } as const;
 
 export const WEB_SPEECH_TOOLS_SYSTEM_PROMPT = `
-When Web Speech tools are available, use speak_text for pronunciation, listening, shadowing, and language-learning examples that benefit from audio playback. Keep each utterance short and repeatable. For English learning, prefer language tags such as en-US or en-GB and include a brief note for stress, vowel, or rhythm when helpful. Do not claim the browser has spoken until the user presses the playback control.
+When Web Speech tools are available, use inline pronunciation markup for a word or short English sentence that should be directly playable in the chat: <pronounce language="en-US">exact English text</pronounce>. You may add rate="0.9" or pitch="1" when useful. The chat renders a small playback icon for complete pronounce tags; never put these tags inside code blocks or math. Use speak_text when a standalone pronunciation card with a title or note is more useful. Keep each utterance short and repeatable. For English learning, prefer language tags such as en-US or en-GB and include a brief note for stress, vowel, or rhythm when helpful. Do not claim the browser has spoken until the learner presses the playback control.
 `.trim();
 
 export interface SpeechUtteranceDoc {

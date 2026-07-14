@@ -130,4 +130,48 @@ describe('BundleEditor', () => {
       expect.objectContaining({ mathToolsEnabled: true, webSpeechToolsEnabled: true }),
     );
   });
+
+  it('provides a searchable assistant navigator and visible dirty state', () => {
+    const bundle = makeBundle();
+    render(<BundleEditor bundle={bundle} onSave={vi.fn()} onCancel={() => undefined} />);
+
+    expect(screen.getByTestId('editor-dirty-state')).toHaveTextContent('目前沒有未儲存修改');
+    fireEvent.change(screen.getByLabelText('協作包名稱'), {
+      target: { value: '搜尋體驗改版' },
+    });
+    expect(screen.getByTestId('editor-dirty-state')).toHaveTextContent('有未儲存修改');
+
+    fireEvent.change(screen.getByLabelText('搜尋助理'), { target: { value: '數學' } });
+    expect(screen.getByRole('button', { name: /數學助理/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /入口助理/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /數學助理/ }));
+    expect(screen.getByTestId('assistant-editor-stub')).toHaveTextContent('數學助理');
+  });
+
+  it('applies batch tool changes to every selected assistant before saving', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<BundleEditor bundle={makeBundle()} onSave={onSave} onCancel={() => undefined} />);
+
+    fireEvent.click(screen.getByLabelText('批次選取：入口助理'));
+    fireEvent.click(screen.getByLabelText('批次選取：數學助理'));
+    fireEvent.click(screen.getByRole('button', { name: '啟用數學工具' }));
+    fireEvent.click(screen.getByRole('button', { name: '啟用語音工具' }));
+    fireEvent.click(screen.getByRole('button', { name: '儲存協作包' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    expect(onSave.mock.calls[0][0].agents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'entry',
+          mathToolsEnabled: true,
+          webSpeechToolsEnabled: true,
+        }),
+        expect.objectContaining({
+          id: 'math',
+          mathToolsEnabled: true,
+          webSpeechToolsEnabled: true,
+        }),
+      ]),
+    );
+  });
 });

@@ -1,51 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React from 'react';
 import type { SpeechUtteranceRecord } from '../../types';
+import { useSpeechPlayback } from './useSpeechPlayback';
 
 interface SpeechUtteranceCardProps {
   utterance: SpeechUtteranceRecord;
 }
 
-const isSpeechSynthesisSupported = (): boolean =>
-  typeof window !== 'undefined' &&
-  'speechSynthesis' in window &&
-  'SpeechSynthesisUtterance' in window;
-
 const SpeechUtteranceCard: React.FC<SpeechUtteranceCardProps> = ({ utterance }) => {
-  const [speaking, setSpeaking] = useState(false);
-  const supported = useMemo(() => isSpeechSynthesisSupported(), []);
   const { doc } = utterance;
-
-  useEffect(() => {
-    return () => {
-      if (supported) {
-        window.speechSynthesis.cancel();
-      }
-    };
-  }, [supported]);
-
-  const handleSpeak = () => {
-    if (!supported) {
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-    const speech = new window.SpeechSynthesisUtterance(doc.text);
-    speech.lang = doc.language;
-    speech.rate = doc.rate;
-    speech.pitch = doc.pitch;
-    speech.onend = () => setSpeaking(false);
-    speech.onerror = () => setSpeaking(false);
-    setSpeaking(true);
-    window.speechSynthesis.speak(speech);
-  };
-
-  const handleStop = () => {
-    if (!supported) {
-      return;
-    }
-    window.speechSynthesis.cancel();
-    setSpeaking(false);
-  };
+  const { speaking, supported, speak, stop } = useSpeechPlayback(doc);
 
   return (
     <section
@@ -66,10 +29,10 @@ const SpeechUtteranceCard: React.FC<SpeechUtteranceCardProps> = ({ utterance }) 
         <div className='flex gap-2'>
           <button
             type='button'
-            onClick={handleSpeak}
+            onClick={speaking ? stop : speak}
             disabled={!supported}
             className='inline-flex min-h-10 items-center gap-2 rounded-lg border border-emerald-400/40 bg-emerald-600 px-3 py-2 font-medium text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400'
-            aria-label='播放發音'
+            aria-label={speaking ? '停止播放' : '播放發音'}
             title={supported ? '播放發音' : '此瀏覽器不支援語音播放'}
           >
             <svg className='h-4 w-4' fill='currentColor' viewBox='0 0 24 24' aria-hidden='true'>
@@ -80,7 +43,7 @@ const SpeechUtteranceCard: React.FC<SpeechUtteranceCardProps> = ({ utterance }) 
           {speaking && (
             <button
               type='button'
-              onClick={handleStop}
+              onClick={stop}
               className='inline-flex min-h-10 items-center rounded-lg border border-gray-600 px-3 py-2 font-medium text-gray-100 transition hover:bg-gray-700'
               aria-label='停止播放'
               title='停止播放'

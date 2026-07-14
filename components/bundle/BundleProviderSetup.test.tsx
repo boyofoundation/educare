@@ -58,17 +58,30 @@ describe('BundleProviderSetup', () => {
 
     await waitFor(() => expect(onReady).toHaveBeenCalledOnce());
 
-    expect(providerManager.setSessionProviderConfig).toHaveBeenCalledWith('gemini', {
-      apiKey: 'session-key',
-    });
+    expect(providerManager.setSessionProviderConfig).toHaveBeenCalledWith(
+      'gemini',
+      expect.objectContaining({
+        apiKey: 'session-key',
+        model: 'gemini-2.5-flash',
+        temperature: 0.7,
+        maxTokens: 4096,
+        maxToolRounds: 50,
+      }),
+    );
     expect(providerManager.enableProvider).not.toHaveBeenCalled();
     expect(providerManager.updateProviderConfig).not.toHaveBeenCalled();
     expect(providerManager.setActiveProvider).not.toHaveBeenCalled();
-    expect(provider.streamChat).toHaveBeenCalledWith({
-      systemPrompt: 'You are a connection test.',
-      history: [],
-      message: 'Reply with OK.',
-    });
+    expect(provider.streamChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: 'You are a connection test.',
+        history: [],
+        message: 'Reply with OK.',
+        model: 'gemini-2.5-flash',
+        temperature: 0.7,
+        maxTokens: 4096,
+        maxToolRounds: 50,
+      }),
+    );
     expect(screen.getByRole('status')).toHaveTextContent('連線測試成功，可以開始對話。');
   });
 
@@ -83,11 +96,61 @@ describe('BundleProviderSetup', () => {
     await waitFor(() => expect(onReady).toHaveBeenCalledOnce());
 
     expect(providerManager.enableProvider).toHaveBeenCalledWith('gemini', true);
-    expect(providerManager.updateProviderConfig).toHaveBeenCalledWith('gemini', {
-      apiKey: 'persistent-key',
-    });
+    expect(providerManager.updateProviderConfig).toHaveBeenCalledWith(
+      'gemini',
+      expect.objectContaining({
+        apiKey: 'persistent-key',
+        model: 'gemini-2.5-flash',
+        temperature: 0.7,
+        maxTokens: 4096,
+        maxToolRounds: 50,
+      }),
+    );
     expect(providerManager.setActiveProvider).toHaveBeenCalledWith('gemini');
-    expect(provider.initialize).toHaveBeenCalledWith({ apiKey: 'persistent-key' });
+    expect(provider.initialize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'persistent-key',
+        model: 'gemini-2.5-flash',
+        temperature: 0.7,
+        maxTokens: 4096,
+        maxToolRounds: 50,
+      }),
+    );
     expect(providerManager.setSessionProviderConfig).not.toHaveBeenCalled();
+  });
+
+  it('keeps model and advanced settings editable after switching providers', async () => {
+    const onReady = vi.fn();
+    render(<BundleProviderSetup onReady={onReady} />);
+
+    fireEvent.change(screen.getByLabelText('AI 服務商'), { target: { value: 'openrouter' } });
+    fireEvent.change(screen.getByLabelText('API 金鑰'), { target: { value: 'openrouter-key' } });
+    fireEvent.change(screen.getByLabelText('MODEL'), {
+      target: { value: 'anthropic/claude-3.7-sonnet' },
+    });
+    fireEvent.change(screen.getByLabelText(/創造性 \(Temperature\)/), {
+      target: { value: '1.2' },
+    });
+    fireEvent.change(screen.getByLabelText('最大回應長度 (Tokens)'), {
+      target: { value: '8192' },
+    });
+    fireEvent.change(screen.getByLabelText('工具呼叫次數上限'), {
+      target: { value: '80' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '儲存並開始對話' }));
+
+    await waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+
+    expect(providerManager.setSessionProviderConfig).toHaveBeenCalledWith(
+      'openrouter',
+      expect.objectContaining({
+        apiKey: 'openrouter-key',
+        model: 'anthropic/claude-3.7-sonnet',
+        temperature: 1.2,
+        maxTokens: 8192,
+        maxToolRounds: 80,
+      }),
+    );
+    expect(provider.streamChat).not.toHaveBeenCalled();
   });
 });
