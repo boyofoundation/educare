@@ -3,6 +3,7 @@ import { MessageBubbleProps } from './types';
 import { UserIcon, GeminiIcon } from '../ui/Icons';
 import AgentActivityTimeline from './AgentActivityTimeline';
 import GeometryBoard from './GeometryBoard';
+import SpeechUtteranceCard from './SpeechUtteranceCard';
 import MarkdownContent from './MarkdownContent';
 import { AppContext } from '../core/useAppContext';
 import { attachmentToDataUrl } from '../../services/imageAttachmentService';
@@ -301,6 +302,9 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
           </div>
           {message.geometryBoards?.map(board => (
             <GeometryBoard key={board.id} board={board} />
+          ))}
+          {message.speechUtterances?.map(utterance => (
+            <SpeechUtteranceCard key={utterance.id} utterance={utterance} />
           ))}
           <AgentActivityTimeline
             toolCalls={message.toolCallLog}

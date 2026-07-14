@@ -29,6 +29,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   const [newStarterPrompt, setNewStarterPrompt] = useState('');
   const [subagentDelegationEnabled, setSubagentDelegationEnabled] = useState(false);
   const [mathToolsEnabled, setMathToolsEnabled] = useState(false);
+  const [webSpeechToolsEnabled, setWebSpeechToolsEnabled] = useState(false);
   const [routableAssistantIds, setRoutableAssistantIds] = useState<string[]>([]);
   const appContext = useContext(AppContext);
   const [isSaving, setIsSaving] = useState(false);
@@ -47,6 +48,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setNewStarterPrompt('');
       setSubagentDelegationEnabled(assistant.subagentDelegationEnabled ?? false);
       setMathToolsEnabled(assistant.mathToolsEnabled ?? false);
+      setWebSpeechToolsEnabled(assistant.webSpeechToolsEnabled ?? false);
       setRoutableAssistantIds(assistant.routableAssistantIds ?? []);
     } else {
       setName('');
@@ -57,6 +59,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setNewStarterPrompt('');
       setSubagentDelegationEnabled(false);
       setMathToolsEnabled(false);
+      setWebSpeechToolsEnabled(false);
       setRoutableAssistantIds([]);
     }
   }, [assistant]);
@@ -109,6 +112,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         createdAt: assistant?.createdAt || Date.now(),
         subagentDelegationEnabled,
         mathToolsEnabled,
+        webSpeechToolsEnabled,
         routableAssistantIds,
       };
 
@@ -306,6 +310,30 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             <span id='math-tools-help' className='mt-1 text-xs leading-relaxed text-gray-500'>
               開啟後，助理可使用數學計算與幾何繪圖工具。Ollama
               目前不支援工具呼叫，因此無法使用此功能。
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div className='mb-6'>
+        <label
+          htmlFor='web-speech-tools-enabled'
+          className='flex cursor-pointer select-none items-start gap-3'
+        >
+          <input
+            id='web-speech-tools-enabled'
+            type='checkbox'
+            checked={webSpeechToolsEnabled}
+            onChange={e => setWebSpeechToolsEnabled(e.target.checked)}
+            disabled={isSaving}
+            className='mt-1 h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0'
+            aria-describedby='web-speech-tools-help'
+          />
+          <span className='flex flex-col'>
+            <span className='text-sm font-semibold text-gray-300'>語音發音與聽說練習工具</span>
+            <span id='web-speech-tools-help' className='mt-1 text-xs leading-relaxed text-gray-500'>
+              開啟後，助理可產生瀏覽器原生 Web Speech
+              發音卡，適合英文與其他語言聽說練習；此模式會停用 HTML 專案工具。
             </span>
           </span>
         </label>

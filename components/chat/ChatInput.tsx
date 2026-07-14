@@ -7,6 +7,39 @@ const MIN_TEXTAREA_HEIGHT_PX = 48;
 const APPROXIMATE_LINE_HEIGHT_PX = 20;
 const APPROXIMATE_VERTICAL_PADDING_PX = 28;
 
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((event: SpeechRecognitionResultEventLike) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+}
+
+interface SpeechRecognitionResultEventLike {
+  results: ArrayLike<{
+    isFinal: boolean;
+    0: { transcript: string };
+  }>;
+}
+
+const getSpeechRecognitionConstructor = (): SpeechRecognitionConstructor | undefined => {
+  if (typeof window === 'undefined') {
+    return undefined;
+  }
+  const speechWindow = window as Window &
+    typeof globalThis & {
+      SpeechRecognition?: SpeechRecognitionConstructor;
+      webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    };
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+};
+
 const ChatInput: React.FC<ChatInputProps> = ({
   value,
   onChange,
@@ -22,8 +55,11 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onRemoveAttachment,
 }) => {
   const [isComposing, setIsComposing] = React.useState(false);
+  const [isListening, setIsListening] = React.useState(false);
+  const [speechInputSupported, setSpeechInputSupported] = React.useState(false);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const speechRecognitionRef = React.useRef<SpeechRecognitionLike | null>(null);
   const inputLocked = isLoading || disabled || isRunning;
   const canSend = !inputLocked && (value.trim() !== '' || attachments.length > 0);
 
@@ -67,6 +103,14 @@ const ChatInput: React.FC<ChatInputProps> = ({
     syncTextareaHeight();
   }, [syncTextareaHeight, value]);
 
+  React.useEffect(() => {
+    setSpeechInputSupported(Boolean(getSpeechRecognitionConstructor()));
+    return () => {
+      speechRecognitionRef.current?.abort();
+      speechRecognitionRef.current = null;
+    };
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !isComposing) {
       e.preventDefault();
@@ -80,6 +124,54 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
   const handleCompositionEnd = () => {
     setIsComposing(false);
+  };
+
+  const toggleSpeechInput = () => {
+    if (inputLocked) {
+      return;
+    }
+
+    if (isListening) {
+      speechRecognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    const Recognition = getSpeechRecognitionConstructor();
+    if (!Recognition) {
+      setSpeechInputSupported(false);
+      return;
+    }
+
+    const recognition = new Recognition();
+    recognition.lang = navigator.language || 'zh-TW';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.onresult = event => {
+      let transcript = '';
+      for (let index = 0; index < event.results.length; index += 1) {
+        transcript += event.results[index][0].transcript;
+      }
+      const nextValue = value.trim().length > 0 ? `${value.trimEnd()} ${transcript}` : transcript;
+      onChange(nextValue);
+    };
+    recognition.onend = () => {
+      setIsListening(false);
+      speechRecognitionRef.current = null;
+    };
+    recognition.onerror = () => {
+      setIsListening(false);
+      speechRecognitionRef.current = null;
+    };
+    speechRecognitionRef.current = recognition;
+    try {
+      setIsListening(true);
+      recognition.start();
+    } catch {
+      recognition.abort();
+      speechRecognitionRef.current = null;
+      setIsListening(false);
+    }
   };
 
   return (
@@ -146,6 +238,31 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 </svg>
               </button>
             </>
+          )}
+          {speechInputSupported && (
+            <button
+              type='button'
+              onClick={toggleSpeechInput}
+              disabled={inputLocked}
+              className={`flex min-h-12 min-w-12 items-center justify-center rounded-2xl border-2 px-3 py-3 text-gray-300 shadow-lg transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+                inputLocked
+                  ? 'cursor-not-allowed border-gray-600/30 bg-gray-600/40 opacity-60'
+                  : isListening
+                    ? 'border-emerald-400/60 bg-emerald-600/80 text-white'
+                    : 'border-gray-600/40 bg-gray-700/60 hover:border-emerald-500/60 hover:text-emerald-300'
+              }`}
+              aria-label={isListening ? '停止語音輸入' : '開始語音輸入'}
+              title={isListening ? '停止語音輸入' : '開始語音輸入'}
+            >
+              <svg className='h-5 w-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                <path
+                  strokeLinecap='round'
+                  strokeLinejoin='round'
+                  strokeWidth={2}
+                  d='M12 3.75a3 3 0 00-3 3v4.5a3 3 0 006 0v-4.5a3 3 0 00-3-3zM6.75 10.5v.75a5.25 5.25 0 0010.5 0v-.75M12 16.5v3.75m-3 0h6'
+                />
+              </svg>
+            </button>
           )}
           <div className='relative flex-1'>
             <textarea

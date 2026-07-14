@@ -16,6 +16,7 @@ import {
   type RagChunk,
   type SubagentActivityUpdate,
   type SubagentRunRecord,
+  type SpeechUtteranceRecord,
   type TokenUsageTotals,
   type ToolCallRecord,
   type RouteProposal,
@@ -29,6 +30,7 @@ import { htmlProjectStore } from './htmlProjectStore';
 import { executeHtmlProjectToolCall } from './htmlProjectToolService';
 import { getProjectSummaryFromToolResult, streamChat } from './llmService';
 import type { GeometryDoc } from './geometryToolService';
+import type { SpeechUtteranceDoc } from './speechToolService';
 import { gatherKnowledge } from './knowledgeGatherService';
 
 /**
@@ -113,6 +115,10 @@ export interface AgentRunControllerCallbacks {
   onSubagentActivity?: (update: SubagentActivityUpdate) => void;
   onToolCallActivity?: (record: ToolCallRecord) => void;
   onGeometryBoardPreview?: (preview: { toolCallId: string; document: GeometryDoc }) => void;
+  onSpeechUtterancePreview?: (preview: {
+    toolCallId: string;
+    document: SpeechUtteranceDoc;
+  }) => void;
   onRouteProposal?: (proposal: RouteProposal) => void;
   onTurnStart?: (turnIndex: number, maxTurns: number) => void;
   onTurnComplete?: (turnIndex: number, summary: AgentRunTurnSummary) => void;
@@ -135,6 +141,7 @@ export interface AgentRunControllerOptions {
   agentHarnessEnabled: boolean;
   subagentDelegationEnabled?: boolean;
   mathToolsEnabled?: boolean;
+  webSpeechToolsEnabled?: boolean;
   routableTargets?: RoutableTarget[];
   /** HTML 專案模式開關。預設 false: 未開啟時不暴露任何 HTML 專案工具。 */
   htmlProjectEnabled?: boolean;
@@ -163,6 +170,7 @@ export interface AgentRunResult {
   historyDelta: ChatMessage[];
   citations?: MessageCitation[];
   geometryBoards?: GeometryBoardRecord[];
+  speechUtterances?: SpeechUtteranceRecord[];
   tokenInfo: {
     promptTokenCount: number;
     candidatesTokenCount: number;
@@ -256,8 +264,10 @@ export class AgentRunController {
       !(options.sharedMode ?? false);
     const effectiveMathToolsEnabled =
       resumeFrom?.mathToolsEnabled ?? options.mathToolsEnabled ?? false;
-    // 數學／幾何助理不使用 HTML Canvas，避免兩套 function calling 工具彼此干擾。
-    const htmlProjectAccessEnabled = !effectiveMathToolsEnabled;
+    const effectiveWebSpeechToolsEnabled =
+      resumeFrom?.webSpeechToolsEnabled ?? options.webSpeechToolsEnabled ?? false;
+    // 專用工具助理不使用 HTML Canvas，避免多套 function calling 工具彼此干擾。
+    const htmlProjectAccessEnabled = !effectiveMathToolsEnabled && !effectiveWebSpeechToolsEnabled;
     let effectiveHtmlProjectEnabled =
       htmlProjectAccessEnabled &&
       (resumeFrom?.htmlProjectEnabled ?? options.htmlProjectEnabled ?? false);
@@ -308,6 +318,7 @@ export class AgentRunController {
     let finalModel: string | undefined;
     let finalSubagentUsageTotals: TokenUsageTotals | undefined;
     const geometryBoards: GeometryBoardRecord[] = [];
+    const speechUtterances: SpeechUtteranceRecord[] = [];
     let firstTurnPackSet = resumeFrom?.firstTurnPackSet
       ? [...resumeFrom.firstTurnPackSet]
       : undefined;
@@ -352,6 +363,7 @@ export class AgentRunController {
       agentHarnessEnabled: effectiveAgentHarnessEnabled,
       subagentDelegationEnabled: effectiveDelegation,
       mathToolsEnabled: effectiveMathToolsEnabled,
+      webSpeechToolsEnabled: effectiveWebSpeechToolsEnabled,
       routableTargets: options.routableTargets,
       htmlProjectEnabled: effectiveHtmlProjectEnabled,
       projectBootstrapEnabled,
@@ -392,6 +404,7 @@ export class AgentRunController {
         },
         subagentDelegationEnabled: effectiveDelegation,
         mathToolsEnabled: effectiveMathToolsEnabled,
+        webSpeechToolsEnabled: effectiveWebSpeechToolsEnabled,
         routableTargets: options.routableTargets,
         heartbeatAt: now,
         updatedAt: now,
@@ -423,6 +436,7 @@ export class AgentRunController {
         },
         subagentDelegationEnabled: effectiveDelegation,
         mathToolsEnabled: effectiveMathToolsEnabled,
+        webSpeechToolsEnabled: effectiveWebSpeechToolsEnabled,
         routableTargets: options.routableTargets,
         heartbeatAt: Date.now(),
         updatedAt: Date.now(),
@@ -511,6 +525,7 @@ export class AgentRunController {
           subagentRuns?: SubagentRunRecord[];
           subagentUsageTotals?: TokenUsageTotals;
           geometryBoards?: GeometryBoardRecord[];
+          speechUtterances?: SpeechUtteranceRecord[];
         } = {
           finishReason: 'complete',
           text: '',
@@ -535,6 +550,7 @@ export class AgentRunController {
             packSetOverride: isContinuation ? firstTurnPackSet : undefined,
             subagentDelegationEnabled: effectiveDelegation,
             mathToolsEnabled: effectiveMathToolsEnabled,
+            webSpeechToolsEnabled: effectiveWebSpeechToolsEnabled,
             routableTargets: resumeFrom?.routableTargets ?? options.routableTargets,
             htmlProjectEnabled: effectiveHtmlProjectEnabled,
             projectBootstrapEnabled: projectBootstrapEnabled && !effectiveProjectId,
@@ -546,6 +562,7 @@ export class AgentRunController {
             onProjectToolActivity: callbacks.onProjectToolActivity,
             onSubagentActivity: callbacks.onSubagentActivity,
             onGeometryBoardPreview: callbacks.onGeometryBoardPreview,
+            onSpeechUtterancePreview: callbacks.onSpeechUtterancePreview,
             onToolCallActivity: record => {
               // Live tool-trace:回合中的 function-call loop 內,每個工具首次 'running'
               // 時立即累積並 emit state,讓 canvas AgentRunPanel 即時看到工具軌跡與活動
@@ -574,6 +591,11 @@ export class AgentRunController {
                 title: board.document.title,
                 doc: board.document,
                 computedPoints: board.result.computed_points,
+              }));
+              turn.speechUtterances = meta.speechUtterances?.map((utterance, index) => ({
+                id: `speech-${state.turnIndex}-${index}`,
+                title: utterance.title,
+                doc: utterance,
               }));
               totalPromptTokens += meta.promptTokenCount;
               totalCandidatesTokens += meta.candidatesTokenCount;
@@ -757,9 +779,13 @@ export class AgentRunController {
           agentTurnLog,
           subagentRuns: turn.subagentRuns,
           geometryBoards: turn.geometryBoards,
+          speechUtterances: turn.speechUtterances,
         };
         if (turn.geometryBoards) {
           geometryBoards.push(...turn.geometryBoards);
+        }
+        if (turn.speechUtterances) {
+          speechUtterances.push(...turn.speechUtterances);
         }
         const committedMessages = synthetic ? [synthetic, modelMessage] : [modelMessage];
         checkpointHistory.push(...committedMessages);
@@ -821,6 +847,7 @@ export class AgentRunController {
       historyDelta,
       citations: gatheredContext?.citations,
       geometryBoards: geometryBoards.length > 0 ? geometryBoards : undefined,
+      speechUtterances: speechUtterances.length > 0 ? speechUtterances : undefined,
       tokenInfo: {
         promptTokenCount: totalPromptTokens,
         candidatesTokenCount: totalCandidatesTokens,

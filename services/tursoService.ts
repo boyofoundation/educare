@@ -61,6 +61,7 @@ export interface TursoAssistant {
   starterPrompts?: string[];
   subagentDelegationEnabled?: boolean;
   mathToolsEnabled?: boolean;
+  webSpeechToolsEnabled?: boolean;
 }
 
 export interface TursoRagChunk {
@@ -178,6 +179,9 @@ export const saveAssistantToTurso = async (assistant: TursoAssistant): Promise<v
     }
     if (assistant.mathToolsEnabled !== undefined) {
       incomingConfig.mathToolsEnabled = assistant.mathToolsEnabled;
+    }
+    if (assistant.webSpeechToolsEnabled !== undefined) {
+      incomingConfig.webSpeechToolsEnabled = assistant.webSpeechToolsEnabled;
     }
     // 首先檢查助手是否已存在
     const existingResult = await client.execute({
@@ -336,6 +340,7 @@ export const getAssistantFromTurso = async (id: string): Promise<TursoAssistant 
       starterPrompts: config.starterPrompts,
       subagentDelegationEnabled: config.subagentDelegationEnabled,
       mathToolsEnabled: config.mathToolsEnabled,
+      webSpeechToolsEnabled: config.webSpeechToolsEnabled,
     };
   } catch (error) {
     console.error('Failed to get assistant from Turso:', error);
@@ -405,6 +410,7 @@ export const getAllAssistantsFromTurso = async (): Promise<TursoAssistant[]> => 
         starterPrompts: config.starterPrompts,
         subagentDelegationEnabled: config.subagentDelegationEnabled,
         mathToolsEnabled: config.mathToolsEnabled,
+        webSpeechToolsEnabled: config.webSpeechToolsEnabled,
       };
     });
   } catch (error) {

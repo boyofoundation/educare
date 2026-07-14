@@ -41,6 +41,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
         starterPrompts: assistant.starterPrompts,
         subagentDelegationEnabled: assistant.subagentDelegationEnabled,
         mathToolsEnabled: assistant.mathToolsEnabled,
+        webSpeechToolsEnabled: assistant.webSpeechToolsEnabled,
       });
 
       const baseUrl = window.location.pathname.replace(/\/[^/]*$/, '') || '/';
@@ -98,6 +99,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
     assistant.starterPrompts,
     assistant.subagentDelegationEnabled,
     assistant.mathToolsEnabled,
+    assistant.webSpeechToolsEnabled,
     assistant.systemPrompt,
     useShortUrl,
   ]);

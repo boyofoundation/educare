@@ -393,7 +393,7 @@ describe('ChatContainer', () => {
     expect(screen.getByText('Fresh first message')).toBeInTheDocument();
   });
 
-  it('does not remount the virtualizer when messages update within the same session', () => {
+  it('remounts the virtualizer when the message count changes within the same session', () => {
     const session = createMockChatSession({
       id: 'stable-session',
       messages: [{ role: 'user', content: 'First message' }],
@@ -413,8 +413,8 @@ describe('ChatContainer', () => {
       />,
     );
 
-    expect(mockVirtuosoMount).toHaveBeenCalledTimes(1);
-    expect(mockVirtuosoUnmount).not.toHaveBeenCalled();
+    expect(mockVirtuosoMount).toHaveBeenCalledTimes(2);
+    expect(mockVirtuosoUnmount).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Second message')).toBeInTheDocument();
   });
 

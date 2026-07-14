@@ -131,6 +131,29 @@ describe('agentBundleService', () => {
     expect(imported.bundle.agents[0]).toMatchObject({ mathToolsEnabled: true });
   });
 
+  it('round-trips an enabled web-speech-tools setting through export and import', () => {
+    const bundle = buildAgentBundle(
+      [
+        createAssistant({ webSpeechToolsEnabled: true }),
+        createAssistant({ id: 'science-tutor', name: 'Science Tutor' }),
+      ],
+      'math-tutor',
+      [],
+      {
+        name: 'Language Team',
+        description: 'A pair of teaching assistants.',
+        version: '1.0.0',
+      },
+    );
+
+    const parsed = parseBundleText(serializeBundle(bundle));
+    const imported = buildImportedBundle(parsed.bundle!);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.bundle?.agents[0]).toMatchObject({ webSpeechToolsEnabled: true });
+    expect(imported.bundle.agents[0]).toMatchObject({ webSpeechToolsEnabled: true });
+  });
+
   it('warns about a malformed math-tools field but retains the importable bundle', () => {
     const malformed = createBundle({
       agents: [createAssistantBundleAgent({ mathToolsEnabled: 'enabled' })],
@@ -151,6 +174,29 @@ describe('agentBundleService', () => {
     expect(parsed.bundle?.agents[0]).not.toHaveProperty('mathToolsEnabled');
     expect(buildImportedBundle(parsed.bundle!).bundle.agents[0]).not.toHaveProperty(
       'mathToolsEnabled',
+    );
+  });
+
+  it('warns about a malformed web-speech-tools field but retains the importable bundle', () => {
+    const malformed = createBundle({
+      agents: [createAssistantBundleAgent({ webSpeechToolsEnabled: 'enabled' })],
+    });
+
+    const parsed = parseBundleText(JSON.stringify(malformed));
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'missing-field',
+          message: expect.stringContaining('agents[0].webSpeechToolsEnabled'),
+        }),
+      ]),
+    );
+    expect(parsed.bundle).not.toBeNull();
+    expect(parsed.bundle?.agents[0]).not.toHaveProperty('webSpeechToolsEnabled');
+    expect(buildImportedBundle(parsed.bundle!).bundle.agents[0]).not.toHaveProperty(
+      'webSpeechToolsEnabled',
     );
   });
 

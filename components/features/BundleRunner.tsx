@@ -45,6 +45,7 @@ const toAssistant = (
   createdAt,
   subagentDelegationEnabled: false,
   mathToolsEnabled: agent.mathToolsEnabled ?? false,
+  webSpeechToolsEnabled: agent.webSpeechToolsEnabled ?? false,
   routableAssistantIds: bundle.routes
     .filter(route => route.fromAgentId === agent.id)
     .map(route => route.toAgentId),
@@ -697,6 +698,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       starterPrompts={state.currentAssistant.starterPrompts ?? []}
       subagentDelegationEnabled={false}
       mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
+      webSpeechToolsEnabled={state.currentAssistant.webSpeechToolsEnabled ?? false}
       routableTargetsOverride={
         bundle ? resolveBundleRoutableTargets(bundle, state.currentAssistant.id) : null
       }

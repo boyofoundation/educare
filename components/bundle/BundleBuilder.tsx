@@ -62,6 +62,7 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
   const [routesSeeded, setRoutesSeeded] = useState(false);
   const [includeProviderCredentials, setIncludeProviderCredentials] = useState(false);
   const [mathToolsEnabled, setMathToolsEnabled] = useState(false);
+  const [webSpeechToolsEnabled, setWebSpeechToolsEnabled] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<ProviderType | ''>('');
   const [password, setPassword] = useState('');
   const [passwordConfirmation, setPasswordConfirmation] = useState('');
@@ -160,12 +161,16 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
       return null;
     }
     return buildAgentBundle(
-      selectedAssistants.map(assistant => ({ ...assistant, mathToolsEnabled })),
+      selectedAssistants.map(assistant => ({
+        ...assistant,
+        mathToolsEnabled,
+        webSpeechToolsEnabled,
+      })),
       entryAgentId,
       routes,
       metadata,
     );
-  }, [selectedAssistants, entryAgentId, routes, metadata, mathToolsEnabled]);
+  }, [selectedAssistants, entryAgentId, routes, metadata, mathToolsEnabled, webSpeechToolsEnabled]);
 
   const validation = useMemo(() => (bundle ? validateBundle(bundle) : null), [bundle]);
   const sizeBytes = useMemo(() => (bundle ? estimateBundleSize(bundle) : 0), [bundle]);
@@ -472,6 +477,24 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
                   <span>{bundleStrings.builder.mathToolsLabel}</span>
                   <span id='bundle-math-tools-help' className='mt-1 text-xs text-gray-400'>
                     {bundleStrings.builder.mathToolsHelp}
+                  </span>
+                </span>
+              </label>
+            </fieldset>
+
+            <fieldset className='rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4'>
+              <label className='flex cursor-pointer items-start gap-2 text-sm text-gray-200'>
+                <input
+                  type='checkbox'
+                  checked={webSpeechToolsEnabled}
+                  onChange={event => setWebSpeechToolsEnabled(event.target.checked)}
+                  aria-describedby='bundle-web-speech-tools-help'
+                  className='mt-0.5'
+                />
+                <span className='flex flex-col'>
+                  <span>語音發音與聽說練習工具</span>
+                  <span id='bundle-web-speech-tools-help' className='mt-1 text-xs text-gray-400'>
+                    匯出後，協作包內助理可產生瀏覽器 Web Speech 發音卡；此模式會停用 HTML 專案工具。
                   </span>
                 </span>
               </label>

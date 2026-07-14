@@ -7,6 +7,7 @@ import {
   RagChunk,
   RouteProposal,
   SubagentRunRecord,
+  SpeechUtteranceRecord,
   ToolCallRecord,
 } from '../../types';
 import type { ProviderUsageMetadata } from '../../services/llmAdapter';
@@ -75,6 +76,8 @@ export interface ChatContainerProps {
   subagentDelegationEnabled?: boolean;
   /** 數學工具開關。由父層從 assistant.mathToolsEnabled 傳入。 */
   mathToolsEnabled?: boolean;
+  /** Web Speech 語音工具開關。由父層從 assistant.webSpeechToolsEnabled 傳入。 */
+  webSpeechToolsEnabled?: boolean;
   /** 覆寫本地／分享模式的路由目標；空陣列會明確停用路由。 */
   routableTargetsOverride?: RoutableTarget[] | null;
   /** Optional host-owned route proposal decisions, used by the isolated bundle runner. */
@@ -101,4 +104,5 @@ export interface StreamingResponseProps {
   subagentBatches?: Record<string, SubagentRunRecord[]>;
   toolCallLog?: ToolCallRecord[];
   geometryBoards?: GeometryBoardRecord[];
+  speechUtterances?: SpeechUtteranceRecord[];
 }

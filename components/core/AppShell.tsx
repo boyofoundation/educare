@@ -20,7 +20,8 @@ import { getBundleMetrics } from '../../services/bundleMetricsService';
 function AppContent(): React.JSX.Element {
   const { state, actions } = useAppContext();
   const bundleMetrics = getBundleMetrics();
-  const htmlProjectAccessEnabled = !state.currentAssistant?.mathToolsEnabled;
+  const htmlProjectAccessEnabled =
+    !state.currentAssistant?.mathToolsEnabled && !state.currentAssistant?.webSpeechToolsEnabled;
 
   // Initialize compression service with default configuration
   const compressionService = new ChatCompactorService({
@@ -188,6 +189,7 @@ function AppContent(): React.JSX.Element {
             starterPrompts={state.currentAssistant.starterPrompts ?? []}
             subagentDelegationEnabled={state.currentAssistant.subagentDelegationEnabled ?? false}
             mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
+            webSpeechToolsEnabled={state.currentAssistant.webSpeechToolsEnabled ?? false}
           />
         )}
 
@@ -292,6 +294,7 @@ function AppContent(): React.JSX.Element {
                   state.currentAssistant.subagentDelegationEnabled ?? false
                 }
                 mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
+                webSpeechToolsEnabled={state.currentAssistant.webSpeechToolsEnabled ?? false}
                 hideHeader={state.isMobile || state.isTablet}
                 isWorkspaceOpen={Boolean(
                   htmlProjectAccessEnabled && state.isProjectWorkspaceOpen && state.activeProjectId,

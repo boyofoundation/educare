@@ -1,4 +1,5 @@
 import type { GeometryDoc } from './services/geometryToolService';
+import type { SpeechUtteranceDoc } from './services/speechToolService';
 
 export interface RagChunk {
   fileName: string;
@@ -44,6 +45,7 @@ export interface Assistant {
    */
   subagentDelegationEnabled?: boolean;
   mathToolsEnabled?: boolean;
+  webSpeechToolsEnabled?: boolean;
   /** Assistant ids this assistant may propose as a user-confirmed handoff. */
   routableAssistantIds?: string[];
 }
@@ -68,6 +70,7 @@ export interface AgentBundleAgent {
   icon?: string;
   modelParams?: AgentBundleModelParams;
   mathToolsEnabled?: boolean;
+  webSpeechToolsEnabled?: boolean;
 }
 
 export interface AgentBundleRoute {
@@ -233,6 +236,12 @@ export interface GeometryBoardRecord {
   computedPoints: Array<{ id: string; x: number; y: number }>;
 }
 
+export interface SpeechUtteranceRecord {
+  id: string;
+  title: string;
+  doc: SpeechUtteranceDoc;
+}
+
 export interface ChatMessage {
   role: 'user' | 'model';
   content: string;
@@ -275,6 +284,10 @@ export interface ChatMessage {
    * 已完成的宣告式幾何圖。舊資料沒有此欄位時，UI 必須優雅退化。
    */
   geometryBoards?: GeometryBoardRecord[];
+  /**
+   * 已完成的語音發音宣告。舊資料沒有此欄位時，UI 必須優雅退化。
+   */
+  speechUtterances?: SpeechUtteranceRecord[];
   routeProposal?: RouteProposal;
 }
 
@@ -811,6 +824,7 @@ export interface AgentRunCheckpoint {
   agentHarnessEnabled: boolean;
   subagentDelegationEnabled?: boolean;
   mathToolsEnabled?: boolean;
+  webSpeechToolsEnabled?: boolean;
   routableTargets?: Array<{ id: string; name: string; description: string }>;
   /** HTML 專案模式開關快照,確保 resume 時維持與原回合一致的工具暴露。 */
   htmlProjectEnabled?: boolean;
@@ -869,6 +883,7 @@ export interface AssistantRevisionSnapshot {
   routableAssistantIds: string[];
   subagentDelegationEnabled: boolean;
   mathToolsEnabled: boolean;
+  webSpeechToolsEnabled: boolean;
   providerRequirements: string[];
   safetyMetadata: Record<string, string>;
   knowledgeRevisionIds: string[];

@@ -21,6 +21,11 @@ vi.mock('../GeometryBoard', () => ({
     <div data-testid='geometry-board'>{board.title}</div>
   ),
 }));
+vi.mock('../SpeechUtteranceCard', () => ({
+  default: ({ utterance }: { utterance: { title: string } }) => (
+    <div data-testid='speech-utterance-card'>{utterance.title}</div>
+  ),
+}));
 vi.mock('../../ui/Icons', () => ({
   GeminiIcon: ({ className }: { className?: string }) => (
     <span data-testid='gemini-icon' className={className}>
@@ -76,6 +81,30 @@ describe('StreamingResponse', () => {
       // Assert
       expect(screen.getByTestId('geometry-board')).toHaveTextContent('Live triangle preview');
       expect(screen.getByTestId('markdown-content')).toHaveTextContent('Creating the diagram…');
+    });
+
+    it('renders supplied speech utterances alongside the streaming response', () => {
+      render(
+        <StreamingResponse
+          content='Practice this sentence.'
+          speechUtterances={[
+            {
+              id: 'speech-1',
+              title: 'Sentence practice',
+              doc: {
+                text: 'I would like a cup of tea.',
+                language: 'en-US',
+                title: 'Sentence practice',
+                rate: 0.85,
+                pitch: 1,
+              },
+            },
+          ]}
+        />,
+      );
+
+      expect(screen.getByTestId('speech-utterance-card')).toHaveTextContent('Sentence practice');
+      expect(screen.getByTestId('markdown-content')).toHaveTextContent('Practice this sentence.');
     });
 
     it('should render with assistant-style layout', () => {

@@ -21,6 +21,8 @@ describe('ChatInput', () => {
 
   afterEach(() => {
     testEnv.cleanup();
+    Reflect.deleteProperty(window, 'SpeechRecognition');
+    Reflect.deleteProperty(window, 'webkitSpeechRecognition');
   });
 
   describe('Input Field Rendering', () => {
@@ -202,6 +204,57 @@ describe('ChatInput', () => {
 
       // Assert
       expect(mockProps.onChange).toHaveBeenCalledWith('');
+    });
+
+    it('uses native speech recognition when the browser supports it', async () => {
+      const recognitionInstances: Array<{
+        onresult:
+          | ((event: {
+              results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
+            }) => void)
+          | null;
+        onend: (() => void) | null;
+        start: ReturnType<typeof vi.fn>;
+        stop: ReturnType<typeof vi.fn>;
+        abort: ReturnType<typeof vi.fn>;
+      }> = [];
+
+      class MockSpeechRecognition {
+        lang = '';
+        interimResults = false;
+        continuous = false;
+        onresult:
+          | ((event: {
+              results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
+            }) => void)
+          | null = null;
+        onend: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        start = vi.fn();
+        stop = vi.fn();
+        abort = vi.fn();
+
+        constructor() {
+          recognitionInstances.push(this);
+        }
+      }
+
+      Object.defineProperty(window, 'webkitSpeechRecognition', {
+        value: MockSpeechRecognition,
+        configurable: true,
+      });
+
+      render(<ChatInput {...mockProps} value='Say' />);
+
+      const speechButton = await screen.findByRole('button', { name: '開始語音輸入' });
+      fireEvent.click(speechButton);
+      const recognitionInstance = recognitionInstances[0];
+      recognitionInstance?.onresult?.({
+        results: [{ isFinal: true, 0: { transcript: 'hello' } }],
+      });
+
+      expect(recognitionInstance?.start).toHaveBeenCalled();
+      expect(mockProps.onChange).toHaveBeenCalledWith('Say hello');
     });
   });
 

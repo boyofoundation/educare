@@ -482,7 +482,8 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
 
         {state.currentAssistant &&
           state.currentSession &&
-          !state.currentAssistant.mathToolsEnabled && (
+          !state.currentAssistant.mathToolsEnabled &&
+          !state.currentAssistant.webSpeechToolsEnabled && (
             <ProjectPicker
               assistantId={state.currentAssistant.id}
               activeProjectId={state.activeProjectId}

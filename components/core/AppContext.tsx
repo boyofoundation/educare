@@ -230,7 +230,9 @@ interface AppProviderProps {
 
 export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   const [state, dispatch] = useReducer(appReducer, initialState);
-  const currentAssistantUsesMathTools = state.currentAssistant?.mathToolsEnabled === true;
+  const currentAssistantUsesExclusiveTools =
+    state.currentAssistant?.mathToolsEnabled === true ||
+    state.currentAssistant?.webSpeechToolsEnabled === true;
 
   // Create new session
   const createNewSession = useCallback(
@@ -815,7 +817,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   }, [clearCurrentSessionProject, clearProjectWorkspace, state.currentSession]);
 
   const createProjectForCurrentSession = useCallback(async () => {
-    if (!state.currentSession || currentAssistantUsesMathTools) {
+    if (!state.currentSession || currentAssistantUsesExclusiveTools) {
       return;
     }
 
@@ -834,11 +836,11 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       project.name,
       '已建立新的 HTML 專案',
     );
-  }, [attachProjectToCurrentSession, currentAssistantUsesMathTools, state.currentSession]);
+  }, [attachProjectToCurrentSession, currentAssistantUsesExclusiveTools, state.currentSession]);
 
   const openProjectForCurrentSession = useCallback(
     async (projectId: string) => {
-      if (!state.currentSession || currentAssistantUsesMathTools) {
+      if (!state.currentSession || currentAssistantUsesExclusiveTools) {
         return;
       }
 
@@ -853,7 +855,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         '已開啟既有 HTML 專案',
       );
     },
-    [attachProjectToCurrentSession, currentAssistantUsesMathTools, state.currentSession],
+    [attachProjectToCurrentSession, currentAssistantUsesExclusiveTools, state.currentSession],
   );
 
   const renameProjectForCurrentSession = useCallback(
@@ -962,7 +964,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
 
   const syncProjectWorkspaceForSession = useCallback(
     async (session: ChatSession | null) => {
-      if (currentAssistantUsesMathTools) {
+      if (currentAssistantUsesExclusiveTools) {
         clearProjectWorkspace();
         return;
       }
@@ -993,7 +995,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         );
       }
     },
-    [clearCurrentSessionProject, clearProjectWorkspace, currentAssistantUsesMathTools],
+    [clearCurrentSessionProject, clearProjectWorkspace, currentAssistantUsesExclusiveTools],
   );
 
   useEffect(() => {

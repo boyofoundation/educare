@@ -130,6 +130,9 @@ export const getBundleContentFingerprint = async (
       ...(agent.icon === undefined ? {} : { icon: agent.icon }),
       ...(agent.modelParams === undefined ? {} : { modelParams: agent.modelParams }),
       ...(agent.mathToolsEnabled === undefined ? {} : { mathToolsEnabled: agent.mathToolsEnabled }),
+      ...(agent.webSpeechToolsEnabled === undefined
+        ? {}
+        : { webSpeechToolsEnabled: agent.webSpeechToolsEnabled }),
     })),
     routes: bundle.routes.map(route => ({
       fromAgentId: removeImportedBundleNamespace(route.fromAgentId, importedBundleId),
@@ -303,6 +306,20 @@ const parseAgent = (
       );
     }
   }
+  let webSpeechToolsEnabled: boolean | undefined;
+  if (raw.webSpeechToolsEnabled !== undefined) {
+    if (typeof raw.webSpeechToolsEnabled === 'boolean') {
+      webSpeechToolsEnabled = raw.webSpeechToolsEnabled;
+    } else {
+      warnings.push(
+        issue(
+          'missing-field',
+          `${label}.webSpeechToolsEnabled 必須是布林值，已忽略。`,
+          '請修正協作包後重新匯出。',
+        ),
+      );
+    }
+  }
 
   if (
     !validId ||
@@ -329,6 +346,7 @@ const parseAgent = (
     ...(icon === undefined ? {} : { icon }),
     ...(modelParams === undefined ? {} : { modelParams }),
     ...(mathToolsEnabled === undefined ? {} : { mathToolsEnabled }),
+    ...(webSpeechToolsEnabled === undefined ? {} : { webSpeechToolsEnabled }),
   };
 };
 
@@ -560,6 +578,7 @@ export const buildAgentBundle = (
     starterPrompts: assistant.starterPrompts ?? [],
     ragChunks: (assistant.ragChunks ?? []).map(({ fileName, content }) => ({ fileName, content })),
     ...(assistant.mathToolsEnabled === true ? { mathToolsEnabled: true } : {}),
+    ...(assistant.webSpeechToolsEnabled === true ? { webSpeechToolsEnabled: true } : {}),
   })),
   routes: routes.map(({ fromAgentId, toAgentId, condition }) => ({
     fromAgentId,
@@ -642,6 +661,9 @@ export const buildImportedBundle = (bundle: VersionedAgentBundle): BundleRecord 
       ...(agent.icon === undefined ? {} : { icon: agent.icon }),
       ...(agent.modelParams === undefined ? {} : { modelParams: { ...agent.modelParams } }),
       ...(agent.mathToolsEnabled === undefined ? {} : { mathToolsEnabled: agent.mathToolsEnabled }),
+      ...(agent.webSpeechToolsEnabled === undefined
+        ? {}
+        : { webSpeechToolsEnabled: agent.webSpeechToolsEnabled }),
     })),
     routes: bundle.routes.map(route => ({
       fromAgentId: namespacedIds.get(route.fromAgentId)!,

@@ -30,6 +30,11 @@ vi.mock('../GeometryBoard', () => ({
     <section data-testid='geometry-board'>{board.title}</section>
   ),
 }));
+vi.mock('../SpeechUtteranceCard', () => ({
+  default: ({ utterance }: { utterance: { title: string } }) => (
+    <section data-testid='speech-utterance-card'>{utterance.title}</section>
+  ),
+}));
 
 describe('MessageBubble', () => {
   describe('User Message Rendering', () => {
@@ -182,6 +187,32 @@ describe('MessageBubble', () => {
         render(<MessageBubble message={legacyAssistantMessage} index={0} />),
       ).not.toThrow();
       expect(screen.queryByTestId('geometry-board')).not.toBeInTheDocument();
+    });
+
+    it('renders speech utterance cards after the assistant content', () => {
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: 'Listen and repeat.',
+        speechUtterances: [
+          {
+            id: 'speech-1',
+            title: 'Greeting pronunciation',
+            doc: {
+              text: 'Good morning',
+              language: 'en-US',
+              title: 'Greeting pronunciation',
+              rate: 0.9,
+              pitch: 1,
+            },
+          },
+        ],
+      });
+
+      render(<MessageBubble message={assistantMessage} index={0} />);
+
+      expect(screen.getByTestId('speech-utterance-card')).toHaveTextContent(
+        'Greeting pronunciation',
+      );
     });
 
     it('should render persisted subagent runs in a collapsed agent activity timeline', () => {

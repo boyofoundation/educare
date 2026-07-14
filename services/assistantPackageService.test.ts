@@ -43,6 +43,8 @@ const createAssistantJson = (overrides: Record<string, unknown> = {}): Uint8Arra
       systemPrompt: 'You are a patient math tutor.',
       starterPrompts: [],
       subagentDelegationEnabled: false,
+      mathToolsEnabled: false,
+      webSpeechToolsEnabled: false,
       ...overrides,
     }),
   );
@@ -63,6 +65,8 @@ const createParsedPackage = (
     systemPrompt: 'You are a patient math tutor.',
     starterPrompts: ['解釋一元二次方程式'],
     subagentDelegationEnabled: true,
+    mathToolsEnabled: false,
+    webSpeechToolsEnabled: false,
   },
   ragChunks: [],
   ...overrides,
@@ -102,6 +106,8 @@ describe('assistantPackageService', () => {
         systemPrompt: 'You are a patient math tutor.',
         starterPrompts: ['解釋一元二次方程式', '出三題練習題'],
         subagentDelegationEnabled: true,
+        mathToolsEnabled: false,
+        webSpeechToolsEnabled: false,
       });
       expect(parsed.ragChunks).toEqual([
         {
@@ -149,7 +155,28 @@ describe('assistantPackageService', () => {
       expect(parsed.assistant.description).toBe('');
       expect(parsed.assistant.starterPrompts).toEqual([]);
       expect(parsed.assistant.subagentDelegationEnabled).toBe(false);
+      expect(parsed.assistant.mathToolsEnabled).toBe(false);
+      expect(parsed.assistant.webSpeechToolsEnabled).toBe(false);
       expect(parsed.ragChunks).toEqual([]);
+    });
+
+    it('preserves assistant tool-mode flags through export and import', () => {
+      const assistant = createAssistant({
+        mathToolsEnabled: true,
+        webSpeechToolsEnabled: true,
+      });
+
+      const parsed = parseAssistantPackage(buildAssistantPackageZip(assistant));
+      const imported = buildImportedAssistant(parsed, []);
+
+      expect(parsed.assistant).toMatchObject({
+        mathToolsEnabled: true,
+        webSpeechToolsEnabled: true,
+      });
+      expect(imported).toMatchObject({
+        mathToolsEnabled: true,
+        webSpeechToolsEnabled: true,
+      });
     });
   });
 

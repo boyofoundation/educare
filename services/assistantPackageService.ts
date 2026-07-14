@@ -22,6 +22,8 @@ interface AssistantPackageConfig {
   systemPrompt: string;
   starterPrompts: string[];
   subagentDelegationEnabled: boolean;
+  mathToolsEnabled: boolean;
+  webSpeechToolsEnabled: boolean;
 }
 
 export interface ParsedAssistantPackage {
@@ -72,6 +74,8 @@ export const buildAssistantPackageZip = (assistant: Assistant): Uint8Array => {
     systemPrompt: assistant.systemPrompt ?? '',
     starterPrompts: assistant.starterPrompts ?? [],
     subagentDelegationEnabled: assistant.subagentDelegationEnabled ?? false,
+    mathToolsEnabled: assistant.mathToolsEnabled ?? false,
+    webSpeechToolsEnabled: assistant.webSpeechToolsEnabled ?? false,
   };
 
   return zipSync(
@@ -144,6 +148,8 @@ const parseAssistantConfig = (raw: unknown): AssistantPackageConfig => {
       ? raw.starterPrompts.filter((prompt): prompt is string => typeof prompt === 'string')
       : [],
     subagentDelegationEnabled: raw.subagentDelegationEnabled === true,
+    mathToolsEnabled: raw.mathToolsEnabled === true,
+    webSpeechToolsEnabled: raw.webSpeechToolsEnabled === true,
   };
 };
 
@@ -205,6 +211,8 @@ export const buildImportedAssistant = (
     systemPrompt: parsed.assistant.systemPrompt,
     starterPrompts: parsed.assistant.starterPrompts,
     subagentDelegationEnabled: parsed.assistant.subagentDelegationEnabled,
+    mathToolsEnabled: parsed.assistant.mathToolsEnabled,
+    webSpeechToolsEnabled: parsed.assistant.webSpeechToolsEnabled,
     ragChunks: parsed.ragChunks,
     createdAt: Date.now(),
     isShared: false,

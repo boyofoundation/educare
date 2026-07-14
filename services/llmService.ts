@@ -69,6 +69,15 @@ import {
   type DrawGeometryResult,
   type GeometryDoc,
 } from './geometryToolService';
+import {
+  executeSpeakText,
+  SPEAK_TEXT_TOOL_DESCRIPTION,
+  SPEAK_TEXT_TOOL_NAME,
+  SPEAK_TEXT_TOOL_SCHEMA,
+  WEB_SPEECH_TOOLS_SYSTEM_PROMPT,
+  type SpeakTextArgs,
+  type SpeechUtteranceDoc,
+} from './speechToolService';
 
 export interface StreamChatParams {
   systemPrompt: string;
@@ -83,6 +92,7 @@ export interface StreamChatParams {
   knowledgeChunks?: RagChunk[];
   subagentDelegationEnabled?: boolean;
   mathToolsEnabled?: boolean;
+  webSpeechToolsEnabled?: boolean;
   routableTargets?: RoutableTarget[];
   onRouteProposal?: (proposal: RouteProposal) => void;
   /**
@@ -118,6 +128,11 @@ export interface StreamChatParams {
   onToolCallActivity?: (record: ToolCallRecord) => void;
   /** 已解析但尚未完成驗證的圖形，僅供串流 UI 暫態預覽。 */
   onGeometryBoardPreview?: (preview: { toolCallId: string; document: GeometryDoc }) => void;
+  /** 已完成的語音宣告，供串流 UI 即時顯示可播放區塊。 */
+  onSpeechUtterancePreview?: (preview: {
+    toolCallId: string;
+    document: SpeechUtteranceDoc;
+  }) => void;
   onComplete: (
     metadata: {
       promptTokenCount: number;
@@ -141,6 +156,7 @@ export interface StreamChatParams {
         document: GeometryDoc;
         result: Extract<DrawGeometryResult, { ok: true }>;
       }>;
+      speechUtterances?: SpeechUtteranceDoc[];
     },
     fullText: string,
   ) => void;
@@ -277,6 +293,7 @@ export const streamChat = async (params: StreamChatParams) => {
     packSetOverride,
     subagentDelegationEnabled = false,
     mathToolsEnabled = false,
+    webSpeechToolsEnabled = false,
     routableTargets = [],
     htmlProjectEnabled = false,
     projectBootstrapEnabled = false,
@@ -285,11 +302,12 @@ export const streamChat = async (params: StreamChatParams) => {
     onSubagentActivity,
     onToolCallActivity,
     onGeometryBoardPreview,
+    onSpeechUtterancePreview,
     onRouteProposal,
     onComplete,
   } = params;
 
-  const htmlProjectAccessEnabled = !mathToolsEnabled;
+  const htmlProjectAccessEnabled = !mathToolsEnabled && !webSpeechToolsEnabled;
   const effectiveHtmlProjectEnabled = htmlProjectAccessEnabled && htmlProjectEnabled;
   const effectiveProjectBootstrapEnabled = htmlProjectAccessEnabled && projectBootstrapEnabled;
 
@@ -322,8 +340,10 @@ export const streamChat = async (params: StreamChatParams) => {
     document: GeometryDoc;
     result: Extract<DrawGeometryResult, { ok: true }>;
   }> = [];
+  const speechUtterances: SpeechUtteranceDoc[] = [];
   let computeFailureCount = 0;
   let drawGeometryFailureCount = 0;
+  let speakTextFailureCount = 0;
 
   const knowledgeToolEnabled = hasKnowledgeChunks(knowledgeChunks);
 
@@ -463,6 +483,7 @@ export const streamChat = async (params: StreamChatParams) => {
       MARKDOWN_MATH_SYSTEM_PROMPT,
       knowledgeToolEnabled ? KNOWLEDGE_SEARCH_SYSTEM_PROMPT : '',
       mathToolsEnabled ? MATH_TOOLS_SYSTEM_PROMPT : '',
+      webSpeechToolsEnabled ? WEB_SPEECH_TOOLS_SYSTEM_PROMPT : '',
       htmlProjectToolEnabled
         ? buildHtmlProjectSystemPrompt({
             activeProjectId: resolvedActiveProjectId,
@@ -572,6 +593,32 @@ export const streamChat = async (params: StreamChatParams) => {
                     ...drawGeometryResult,
                     // Keep each allowed failure independently recoverable until this tool's limit.
                     code: `${drawGeometryResult.code}-${drawGeometryFailureCount}`,
+                  };
+          }
+        } else if (webSpeechToolsEnabled && call.name === SPEAK_TEXT_TOOL_NAME) {
+          const speakTextResult = executeSpeakText(call.args as SpeakTextArgs);
+          if (speakTextResult.ok) {
+            speechUtterances.push(speakTextResult.utterance);
+            onSpeechUtterancePreview?.({
+              toolCallId,
+              document: speakTextResult.utterance,
+            });
+            result = speakTextResult;
+          } else {
+            speakTextFailureCount += 1;
+            result =
+              speakTextFailureCount > 8
+                ? {
+                    ok: false,
+                    recoverable: false,
+                    code: 'speak-text-failure-limit-reached',
+                    message: 'speak_text reached its limit of 8 recoverable failures for this run.',
+                    guidance:
+                      'Stop calling speak_text for this run and explain that the pronunciation card could not be prepared.',
+                  }
+                : {
+                    ...speakTextResult,
+                    code: `${speakTextResult.code}-${speakTextFailureCount}`,
                   };
           }
         } else if (routableTargets.length > 0 && call.name === ROUTE_TOOL_NAME) {
@@ -688,6 +735,7 @@ export const streamChat = async (params: StreamChatParams) => {
               visibleToolNames: [
                 ...(knowledgeToolEnabled ? [KNOWLEDGE_SEARCH_TOOL_NAME] : []),
                 ...(mathToolsEnabled ? [MATH_COMPUTE_TOOL_NAME, DRAW_GEOMETRY_TOOL_NAME] : []),
+                ...(webSpeechToolsEnabled ? [SPEAK_TEXT_TOOL_NAME] : []),
                 ...htmlProjectToolDefinitions.map(tool => tool.name),
                 ...bootstrapToolDefinitions.map(tool => tool.name),
                 ...(subagentDelegationEnabled ? [SUBAGENT_DELEGATE_TOOL_NAME] : []),
@@ -764,6 +812,15 @@ export const streamChat = async (params: StreamChatParams) => {
             },
           ]
         : []),
+      ...(webSpeechToolsEnabled
+        ? [
+            {
+              name: SPEAK_TEXT_TOOL_NAME,
+              description: SPEAK_TEXT_TOOL_DESCRIPTION,
+              parameters: SPEAK_TEXT_TOOL_SCHEMA,
+            },
+          ]
+        : []),
       ...htmlProjectToolDefinitions,
       ...bootstrapToolDefinitions,
       ...(subagentDelegationEnabled ? [delegationToolDefinition] : []),
@@ -827,6 +884,7 @@ export const streamChat = async (params: StreamChatParams) => {
         subagentRuns,
         subagentUsageTotals,
         geometryBoards: geometryBoards.length > 0 ? geometryBoards : undefined,
+        speechUtterances: speechUtterances.length > 0 ? speechUtterances : undefined,
       },
       fullResponseText,
     );

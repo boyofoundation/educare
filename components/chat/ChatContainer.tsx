@@ -38,12 +38,14 @@ import type {
   ChatSession,
   GeometryBoardRecord,
   MessageAttachment,
+  SpeechUtteranceRecord,
   SubagentRunRecord,
   ToolCallRecord,
   RouteProposal,
 } from '../../types';
 import { HtmlProjectWorkspaceUpdate } from '../../types';
 import { DRAW_GEOMETRY_TOOL_NAME, type GeometryDoc } from '../../services/geometryToolService';
+import { SPEAK_TEXT_TOOL_NAME, type SpeechUtteranceDoc } from '../../services/speechToolService';
 import {
   getCachedSharedRoutableTargets,
   resolveRoutableTargets,
@@ -119,6 +121,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   onCreateSession,
   subagentDelegationEnabled = false,
   mathToolsEnabled = false,
+  webSpeechToolsEnabled = false,
   routableTargetsOverride,
   onAcceptRouteProposal,
   onDeclineRouteProposal,
@@ -143,6 +146,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const [subagentBatches, setSubagentBatches] = useState<Record<string, SubagentRunRecord[]>>({});
   const [toolCallRecords, setToolCallRecords] = useState<ToolCallRecord[]>([]);
   const [streamingGeometryBoards, setStreamingGeometryBoards] = useState<GeometryBoardRecord[]>([]);
+  const [streamingSpeechUtterances, setStreamingSpeechUtterances] = useState<
+    SpeechUtteranceRecord[]
+  >([]);
   const [interruptedCheckpoint, setInterruptedCheckpoint] = useState<AgentRunCheckpoint | null>(
     null,
   );
@@ -292,6 +298,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setSubagentBatches({});
     setToolCallRecords([]);
     setStreamingGeometryBoards([]);
+    setStreamingSpeechUtterances([]);
     setPendingEmptyResponseNotice(null);
     setRunState(null);
     setAgentRunState?.(null);
@@ -510,6 +517,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     ) {
       setStreamingGeometryBoards(previous => previous.filter(board => board.id !== record.id));
     }
+
+    if (
+      record.name === SPEAK_TEXT_TOOL_NAME &&
+      (record.status === 'failed' || record.status === 'recoverable_error')
+    ) {
+      setStreamingSpeechUtterances(previous =>
+        previous.filter(utterance => utterance.id !== record.id),
+      );
+    }
   };
 
   const handleGeometryBoardPreview = ({
@@ -534,6 +550,31 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
       const next = [...previous];
       next[existingIndex] = board;
+      return next;
+    });
+  };
+
+  const handleSpeechUtterancePreview = ({
+    toolCallId,
+    document,
+  }: {
+    toolCallId: string;
+    document: SpeechUtteranceDoc;
+  }) => {
+    const utterance: SpeechUtteranceRecord = {
+      id: toolCallId,
+      title: document.title,
+      doc: document,
+    };
+
+    setStreamingSpeechUtterances(previous => {
+      const existingIndex = previous.findIndex(item => item.id === toolCallId);
+      if (existingIndex === -1) {
+        return [...previous, utterance];
+      }
+
+      const next = [...previous];
+      next[existingIndex] = utterance;
       return next;
     });
   };
@@ -613,6 +654,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setSubagentBatches({});
     setToolCallRecords([]);
     setStreamingGeometryBoards([]);
+    setStreamingSpeechUtterances([]);
     setResumeError(null);
     actions?.setAgentRunState?.(null);
 
@@ -643,10 +685,13 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         enhancedSystemPrompt = `${enhancedSystemPrompt}${compactedContextPrompt}`;
       }
 
-      // 數學／幾何工具模式完全停用 HTML 專案，避免兩套 function calling 工具互相干擾。
-      // resume checkpoint 的 math flag 代表原 run 的權威設定。
+      // 專用工具模式完全停用 HTML 專案，避免多套 function calling 工具互相干擾。
+      // resume checkpoint 的 flag 代表原 run 的權威設定。
       const effectiveMathToolsEnabled = resumeCheckpoint?.mathToolsEnabled ?? mathToolsEnabled;
-      const htmlProjectAccessEnabled = !effectiveMathToolsEnabled;
+      const effectiveWebSpeechToolsEnabled =
+        resumeCheckpoint?.webSpeechToolsEnabled ?? webSpeechToolsEnabled;
+      const htmlProjectAccessEnabled =
+        !effectiveMathToolsEnabled && !effectiveWebSpeechToolsEnabled;
       const effectiveProjectId = htmlProjectAccessEnabled
         ? (resumeCheckpoint?.projectId ?? displaySession.activeProjectId ?? null)
         : null;
@@ -676,6 +721,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         subagentDelegationEnabled:
           resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
         mathToolsEnabled: effectiveMathToolsEnabled,
+        webSpeechToolsEnabled: effectiveWebSpeechToolsEnabled,
         routableTargets: resumeCheckpoint?.routableTargets ?? routableTargets,
         htmlProjectEnabled:
           htmlProjectAccessEnabled &&
@@ -717,6 +763,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               return;
             }
             handleGeometryBoardPreview(preview);
+          },
+          onSpeechUtterancePreview: preview => {
+            if (!isRunSessionDisplayed()) {
+              return;
+            }
+            handleSpeechUtterancePreview(preview);
           },
           onToolCallActivity: record => {
             if (!isRunSessionDisplayed()) {
@@ -762,6 +814,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         setStatusText('');
         setStreamingResponse('');
         setStreamingGeometryBoards([]);
+        setStreamingSpeechUtterances([]);
         const fullModelResponse = result.fullText.trim();
         const latestErrorMessage = latestErrorMessageRef.current;
         const shouldPersistError = Boolean(latestErrorMessage) || result.state.status === 'failed';
@@ -792,14 +845,16 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         }
 
         if (fullModelResponse === '') {
-          const artifactMessage =
-            result.geometryBoards && result.geometryBoards.length > 0
-              ? buildAssistantMessage('', {
-                  citations: result.citations,
-                  geometryBoards: result.geometryBoards,
-                  routeProposal: routeProposalRef.current,
-                })
-              : undefined;
+          const hasArtifacts =
+            (result.geometryBoards?.length ?? 0) > 0 || (result.speechUtterances?.length ?? 0) > 0;
+          const artifactMessage = hasArtifacts
+            ? buildAssistantMessage('', {
+                citations: result.citations,
+                geometryBoards: result.geometryBoards,
+                speechUtterances: result.speechUtterances,
+                routeProposal: routeProposalRef.current,
+              })
+            : undefined;
           const finalSession = applyTokenUsageToSession(
             {
               ...baseSession,
@@ -828,6 +883,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         const newAiMessage = buildAssistantMessage(fullModelResponse, {
           citations: result.citations,
           geometryBoards: result.geometryBoards,
+          speechUtterances: result.speechUtterances,
           routeProposal: routeProposalRef.current,
         });
         const finalSession = applyTokenUsageToSession(
@@ -919,6 +975,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       actions?.setAgentRunState?.(null);
       setStreamingResponse('');
       setStreamingGeometryBoards([]);
+      setStreamingSpeechUtterances([]);
       setSubagentBatches({});
       setToolCallRecords([]);
 
@@ -1100,6 +1157,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const hasLiveActivity =
     toolCallRecords.length > 0 ||
     streamingGeometryBoards.length > 0 ||
+    streamingSpeechUtterances.length > 0 ||
     Object.values(subagentBatches).some(runs => runs.length > 0);
   const showStreamingResponse = streamingResponse !== '' || (isLoading && hasLiveActivity);
   const interruptedTurnLabel = interruptedCheckpoint
@@ -1139,6 +1197,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                     actions?.setAgentRunState?.(null);
                     setRunState(null);
                     setStreamingResponse('');
+                    setStreamingSpeechUtterances([]);
                     setPendingEmptyResponseNotice(null);
                     setIsThinking(false);
                     setStatusText('');
@@ -1252,8 +1311,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             )}
 
           <div role='log' aria-label='訊息列表' aria-live='polite' aria-relevant='additions text'>
+            {/* A stable key can leave react-virtuoso with an empty measurement after the
+                initial zero-item render; remount when persisted message count changes. */}
             <Virtuoso
-              key={currentSession.id}
+              key={`${currentSession.id}:${currentSession.messages.length}`}
               data={currentSession.messages}
               customScrollParent={containerRef.current ?? undefined}
               followOutput={isAtBottom ? 'auto' : false}
@@ -1291,6 +1352,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                 subagentBatches={subagentBatches}
                 toolCallLog={toolCallRecords}
                 geometryBoards={streamingGeometryBoards}
+                speechUtterances={streamingSpeechUtterances}
               />
             )}
 

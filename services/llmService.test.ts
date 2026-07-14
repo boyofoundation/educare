@@ -289,6 +289,89 @@ describe('streamChat', () => {
     expect(mockExecuteHtmlProjectToolCall).not.toHaveBeenCalled();
   });
 
+  it('injects speech tools and hides HTML project tools when web speech tools are enabled', async () => {
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const onSpeechUtterancePreview = vi.fn();
+    const onComplete = vi.fn();
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<unknown>;
+        await executeTool({
+          name: 'speak_text',
+          args: {
+            text: 'Good morning',
+            language: 'en-US',
+            title: 'Greeting practice',
+            rate: 0.85,
+          },
+        });
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 1,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Help me pronounce Good morning.',
+      assistantId: 'assistant-1',
+      activeProjectId: 'project-123',
+      webSpeechToolsEnabled: true,
+      htmlProjectEnabled: true,
+      projectBootstrapEnabled: true,
+      onChunk: vi.fn(),
+      onSpeechUtterancePreview,
+      onComplete,
+    });
+
+    expect(
+      (observedChatParams[0]?.tools as Array<{ name: string }>).map(tool => tool.name),
+    ).toEqual(['speak_text']);
+    expect(mockExecuteHtmlProjectToolCall).not.toHaveBeenCalled();
+    expect(onSpeechUtterancePreview).toHaveBeenCalledWith({
+      toolCallId: expect.stringMatching(/^speak_text-1-\d+$/),
+      document: expect.objectContaining({
+        text: 'Good morning',
+        language: 'en-US',
+        title: 'Greeting practice',
+        rate: 0.85,
+        pitch: 1,
+      }),
+    });
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        speechUtterances: [
+          expect.objectContaining({
+            text: 'Good morning',
+            language: 'en-US',
+          }),
+        ],
+      }),
+      '',
+    );
+  });
+
   it('previews a normalized geometry document before draw completion and persists it', async () => {
     // Arrange
     const geometryDocument = {
