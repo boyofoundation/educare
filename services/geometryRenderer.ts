@@ -90,6 +90,16 @@ const evaluateExpression = async (
   return value;
 };
 
+const evaluateExpressions = async (values: Array<number | string>): Promise<number[]> =>
+  Promise.all(values.map(value => evaluateExpression(value)));
+
+const requirePositive = (value: number, field: string): number => {
+  if (value <= 0) {
+    throw new Error(`${field} must resolve to a positive number.`);
+  }
+  return value;
+};
+
 const elementAttributes = (object: GeometryObject): Record<string, unknown> => ({
   name: object.kind === 'point' ? (object.label ?? '') : '',
   fixed: true,
@@ -221,6 +231,114 @@ export const renderGeometryDoc = async (
           } else if (object.id) {
             computedPoints.push({ id: object.id, x, y });
           }
+          break;
+        }
+        case 'chart': {
+          const values = await evaluateExpressions(object.values);
+          const x = object.x ? await evaluateExpressions(object.x) : undefined;
+          if (object.chartStyle === 'pie' && values.every(value => value >= 0) === false) {
+            throw new Error('Pie chart values must be non-negative.');
+          }
+          if (object.chartStyle === 'pie' && values.every(value => value === 0)) {
+            throw new Error('Pie chart values must contain at least one positive value.');
+          }
+
+          const chartAttributes: Record<string, unknown> = {
+            ...elementAttributes(object),
+            chartStyle: object.chartStyle === 'scatter' ? 'point' : object.chartStyle,
+          };
+          if (object.labels) {
+            chartAttributes.labels = object.labels;
+          }
+          if (object.colors) {
+            chartAttributes.colors = object.colors;
+          }
+          if (object.center) {
+            chartAttributes.center = await evaluateExpressions(object.center);
+          }
+          if (object.radius !== undefined) {
+            chartAttributes.radius = requirePositive(
+              await evaluateExpression(object.radius),
+              'radius',
+            );
+          }
+          if (object.width !== undefined) {
+            chartAttributes.width = object.width;
+          }
+          if (object.direction) {
+            chartAttributes.dir = object.direction;
+          }
+
+          element = board.create('chart', x ? [x, values] : [values], chartAttributes);
+          break;
+        }
+        case 'arrow':
+          element = board.create(
+            'arrow',
+            object.points.map(pointId => elements.get(pointId)) as unknown[],
+            elementAttributes(object),
+          );
+          break;
+        case 'rectangle': {
+          const x = await evaluateExpression(object.x);
+          const y = await evaluateExpression(object.y);
+          const width = requirePositive(await evaluateExpression(object.width), 'width');
+          const height = requirePositive(await evaluateExpression(object.height), 'height');
+          element = board.create(
+            'polygon',
+            [
+              [x, y],
+              [x + width, y],
+              [x + width, y + height],
+              [x, y + height],
+            ],
+            elementAttributes(object),
+          );
+          break;
+        }
+        case 'ellipse': {
+          const x = await evaluateExpression(object.x);
+          const y = await evaluateExpression(object.y);
+          const radiusX = requirePositive(await evaluateExpression(object.radiusX), 'radiusX');
+          const radiusY = requirePositive(await evaluateExpression(object.radiusY), 'radiusY');
+          const [majorRadius, minorRadius] =
+            radiusX >= radiusY ? [radiusX, radiusY] : [radiusY, radiusX];
+          const focusDistance = Math.sqrt(majorRadius ** 2 - minorRadius ** 2);
+          const parents =
+            radiusX >= radiusY
+              ? [
+                  [x - focusDistance, y],
+                  [x + focusDistance, y],
+                  [x, y + radiusY],
+                ]
+              : [
+                  [x, y - focusDistance],
+                  [x, y + focusDistance],
+                  [x + radiusX, y],
+                ];
+          element = board.create('ellipse', parents, elementAttributes(object));
+          break;
+        }
+        case 'arc':
+        case 'sector': {
+          const x = await evaluateExpression(object.x);
+          const y = await evaluateExpression(object.y);
+          const radius = requirePositive(await evaluateExpression(object.radius), 'radius');
+          const startAngle = await evaluateExpression(object.startAngle);
+          const endAngle = await evaluateExpression(object.endAngle);
+          const angleDifference = Math.abs(endAngle - startAngle);
+          if (angleDifference === 0) {
+            throw new Error('startAngle and endAngle must be different.');
+          }
+          const parents = [
+            [x, y],
+            [x + radius * Math.cos(startAngle), y + radius * Math.sin(startAngle)],
+            [x + radius * Math.cos(endAngle), y + radius * Math.sin(endAngle)],
+          ];
+          element = board.create(object.kind, parents, {
+            ...elementAttributes(object),
+            selection: angleDifference > Math.PI ? 'major' : 'minor',
+          });
           break;
         }
       }

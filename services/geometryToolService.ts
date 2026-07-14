@@ -3,7 +3,7 @@ import type { MathJsStatic } from 'mathjs';
 export const DRAW_GEOMETRY_TOOL_NAME = 'draw_geometry';
 
 export const DRAW_GEOMETRY_TOOL_DESCRIPTION =
-  'Validate and draw a self-contained declarative geometry board. Read coordinates only from computed_points in the result.';
+  'Validate and draw a self-contained declarative math visual board with geometry, charts, and basic shapes. Read intersection coordinates only from computed_points in the result.';
 
 export const DRAW_GEOMETRY_TOOL_SCHEMA = {
   type: 'object',
@@ -127,6 +127,89 @@ export const DRAW_GEOMETRY_TOOL_SCHEMA = {
             },
             required: ['kind', 'sources'],
           },
+          {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['chart'] },
+              chartStyle: { enum: ['bar', 'line', 'pie', 'scatter'] },
+              values: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 24,
+                items: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              },
+              x: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 24,
+                items: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              },
+              labels: { type: 'array', maxItems: 24, items: { type: 'string' } },
+              colors: { type: 'array', maxItems: 24, items: { type: 'string' } },
+              center: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 2,
+                items: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              },
+              radius: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              width: { type: 'number', exclusiveMinimum: 0 },
+              direction: { enum: ['horizontal', 'vertical'] },
+            },
+            required: ['kind', 'chartStyle', 'values'],
+          },
+          {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['arrow'] },
+              points: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 2,
+                maxItems: 2,
+              },
+            },
+            required: ['kind', 'points'],
+          },
+          {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['rectangle'] },
+              x: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              y: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              width: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              height: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+            },
+            required: ['kind', 'x', 'y', 'width', 'height'],
+          },
+          {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['ellipse'] },
+              x: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              y: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              radiusX: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              radiusY: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+            },
+            required: ['kind', 'x', 'y', 'radiusX', 'radiusY'],
+          },
+          {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              kind: { enum: ['arc', 'sector'] },
+              x: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              y: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              radius: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              startAngle: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+              endAngle: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+            },
+            required: ['kind', 'x', 'y', 'radius', 'startAngle', 'endAngle'],
+          },
         ],
       },
     },
@@ -193,6 +276,51 @@ export interface GeometryIntersection extends GeometryObjectBase {
   sources: [string, string];
 }
 
+export type GeometryChartStyle = 'bar' | 'line' | 'pie' | 'scatter';
+
+export interface GeometryChart extends GeometryObjectBase {
+  kind: 'chart';
+  chartStyle: GeometryChartStyle;
+  values: GeometryExpression[];
+  x?: GeometryExpression[];
+  labels?: string[];
+  colors?: string[];
+  center?: [GeometryExpression, GeometryExpression];
+  radius?: GeometryExpression;
+  width?: number;
+  direction?: 'horizontal' | 'vertical';
+}
+
+export interface GeometryArrow extends GeometryObjectBase {
+  kind: 'arrow';
+  points: [string, string];
+}
+
+export interface GeometryRectangle extends GeometryObjectBase {
+  kind: 'rectangle';
+  x: GeometryExpression;
+  y: GeometryExpression;
+  width: GeometryExpression;
+  height: GeometryExpression;
+}
+
+export interface GeometryEllipse extends GeometryObjectBase {
+  kind: 'ellipse';
+  x: GeometryExpression;
+  y: GeometryExpression;
+  radiusX: GeometryExpression;
+  radiusY: GeometryExpression;
+}
+
+export interface GeometryArc extends GeometryObjectBase {
+  kind: 'arc' | 'sector';
+  x: GeometryExpression;
+  y: GeometryExpression;
+  radius: GeometryExpression;
+  startAngle: GeometryExpression;
+  endAngle: GeometryExpression;
+}
+
 export type GeometryObject =
   | GeometryPoint
   | GeometryLine
@@ -202,7 +330,12 @@ export type GeometryObject =
   | GeometryImplicit
   | GeometryPolygon
   | GeometryText
-  | GeometryIntersection;
+  | GeometryIntersection
+  | GeometryChart
+  | GeometryArrow
+  | GeometryRectangle
+  | GeometryEllipse
+  | GeometryArc;
 
 export interface GeometryDoc {
   title: string;
@@ -264,6 +397,44 @@ const validateExpression = async (
       });
     }
   }
+};
+
+const validateExpressionArray = async (
+  errors: GeometryDiagnostic[],
+  index: number,
+  field: string,
+  value: unknown,
+): Promise<void> => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 24) {
+    errors.push({ index, field, message: `${field} must contain between 1 and 24 values.` });
+    return;
+  }
+
+  for (const [valueIndex, item] of value.entries()) {
+    await validateExpression(errors, index, `${field}[${valueIndex}]`, item);
+  }
+};
+
+const validateStringArray = (
+  errors: GeometryDiagnostic[],
+  index: number,
+  field: string,
+  value: unknown,
+): void => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 24) {
+    errors.push({ index, field, message: `${field} must contain between 1 and 24 values.` });
+    return;
+  }
+
+  value.forEach((item, itemIndex) => {
+    if (typeof item !== 'string' || item.trim().length === 0) {
+      errors.push({
+        index,
+        field: `${field}[${itemIndex}]`,
+        message: 'Value must be a non-empty string.',
+      });
+    }
+  });
 };
 
 const validateReferences = (
@@ -360,6 +531,112 @@ const validateObject = async (
       break;
     case 'intersection':
       validateReferences(errors, index, 'sources', object.sources, declaredIds, 2);
+      break;
+    case 'chart': {
+      if (!['bar', 'line', 'pie', 'scatter'].includes(String(object.chartStyle))) {
+        errors.push({
+          index,
+          field: 'chartStyle',
+          message: 'chartStyle must be bar, line, pie, or scatter.',
+        });
+      }
+      await validateExpressionArray(errors, index, 'values', object.values);
+      if (hasOwn(object, 'x')) {
+        await validateExpressionArray(errors, index, 'x', object.x);
+        if (
+          Array.isArray(object.values) &&
+          Array.isArray(object.x) &&
+          object.values.length !== object.x.length
+        ) {
+          errors.push({
+            index,
+            field: 'x',
+            message: 'x and values must contain the same number of values.',
+          });
+        }
+      }
+      if (hasOwn(object, 'labels')) {
+        validateStringArray(errors, index, 'labels', object.labels);
+        if (
+          Array.isArray(object.values) &&
+          Array.isArray(object.labels) &&
+          object.labels.length > object.values.length
+        ) {
+          errors.push({
+            index,
+            field: 'labels',
+            message: 'labels cannot contain more values than values.',
+          });
+        }
+      }
+      if (hasOwn(object, 'colors')) {
+        validateStringArray(errors, index, 'colors', object.colors);
+      }
+      if (hasOwn(object, 'center')) {
+        if (!Array.isArray(object.center) || object.center.length !== 2) {
+          errors.push({
+            index,
+            field: 'center',
+            message: 'center must contain exactly two coordinates.',
+          });
+        } else {
+          await validateExpression(errors, index, 'center[0]', object.center[0]);
+          await validateExpression(errors, index, 'center[1]', object.center[1]);
+        }
+      }
+      if (hasOwn(object, 'radius')) {
+        await validateExpression(errors, index, 'radius', object.radius);
+      }
+      if (
+        object.width !== undefined &&
+        (typeof object.width !== 'number' || !Number.isFinite(object.width) || object.width <= 0)
+      ) {
+        errors.push({ index, field: 'width', message: 'width must be a positive finite number.' });
+      }
+      if (
+        object.direction !== undefined &&
+        !['horizontal', 'vertical'].includes(String(object.direction))
+      ) {
+        errors.push({
+          index,
+          field: 'direction',
+          message: 'direction must be horizontal or vertical.',
+        });
+      }
+      if (object.chartStyle === 'pie' && hasOwn(object, 'x')) {
+        errors.push({
+          index,
+          field: 'x',
+          message: 'pie charts use values only and do not accept x.',
+        });
+      }
+      if (object.chartStyle === 'pie' && hasOwn(object, 'direction')) {
+        errors.push({ index, field: 'direction', message: 'pie charts do not accept direction.' });
+      }
+      break;
+    }
+    case 'arrow':
+      validateReferences(errors, index, 'points', object.points, declaredIds, 2);
+      break;
+    case 'rectangle':
+      await validateExpression(errors, index, 'x', object.x);
+      await validateExpression(errors, index, 'y', object.y);
+      await validateExpression(errors, index, 'width', object.width);
+      await validateExpression(errors, index, 'height', object.height);
+      break;
+    case 'ellipse':
+      await validateExpression(errors, index, 'x', object.x);
+      await validateExpression(errors, index, 'y', object.y);
+      await validateExpression(errors, index, 'radiusX', object.radiusX);
+      await validateExpression(errors, index, 'radiusY', object.radiusY);
+      break;
+    case 'arc':
+    case 'sector':
+      await validateExpression(errors, index, 'x', object.x);
+      await validateExpression(errors, index, 'y', object.y);
+      await validateExpression(errors, index, 'radius', object.radius);
+      await validateExpression(errors, index, 'startAngle', object.startAngle);
+      await validateExpression(errors, index, 'endAngle', object.endAngle);
       break;
     default:
       errors.push({

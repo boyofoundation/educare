@@ -115,6 +115,115 @@ describe('geometryRenderer: renderGeometryDoc', () => {
     expect(jsxGraph.freeBoard).toHaveBeenCalledWith(jsxGraph.board);
   });
 
+  it('translates charts and basic visual shapes to JSXGraph elements', async () => {
+    // Arrange
+    const documentModel = createDocument([
+      {
+        id: 'bar-chart',
+        kind: 'chart',
+        chartStyle: 'bar',
+        values: ['1 + 1', 3],
+        labels: ['A', 'B'],
+        colors: ['#f97316'],
+        width: 0.6,
+        direction: 'vertical',
+      },
+      {
+        id: 'scatter-chart',
+        kind: 'chart',
+        chartStyle: 'scatter',
+        x: [1, 2],
+        values: [2, 4],
+      },
+      { id: 'p1', kind: 'point', x: 0, y: 0 },
+      { id: 'p2', kind: 'point', x: 2, y: 1 },
+      { id: 'vector', kind: 'arrow', points: ['p1', 'p2'] },
+      { id: 'box', kind: 'rectangle', x: -3, y: -2, width: 2, height: 1 },
+      { id: 'oval', kind: 'ellipse', x: 3, y: 2, radiusX: 3, radiusY: 2 },
+      { id: 'slice', kind: 'sector', x: 0, y: 0, radius: 2, startAngle: 0, endAngle: 'pi / 2' },
+      { id: 'curve', kind: 'arc', x: 0, y: 0, radius: 2, startAngle: 0, endAngle: 'pi' },
+    ]);
+
+    // Act
+    const result = await renderGeometryDoc(document.createElement('div'), documentModel);
+
+    // Assert
+    expect(jsxGraph.board.create).toHaveBeenNthCalledWith(1, 'chart', [[2, 3]], {
+      name: '',
+      fixed: true,
+      withLabel: false,
+      chartStyle: 'bar',
+      labels: ['A', 'B'],
+      colors: ['#f97316'],
+      width: 0.6,
+      dir: 'vertical',
+    });
+    expect(jsxGraph.board.create).toHaveBeenNthCalledWith(
+      2,
+      'chart',
+      [
+        [1, 2],
+        [2, 4],
+      ],
+      { name: '', fixed: true, withLabel: false, chartStyle: 'point' },
+    );
+    expect(jsxGraph.board.create).toHaveBeenNthCalledWith(
+      5,
+      'arrow',
+      [jsxGraph.board.create.mock.results[2]?.value, jsxGraph.board.create.mock.results[3]?.value],
+      { name: '', fixed: true, withLabel: false },
+    );
+    expect(jsxGraph.board.create).toHaveBeenNthCalledWith(
+      6,
+      'polygon',
+      [
+        [-3, -2],
+        [-1, -2],
+        [-1, -1],
+        [-3, -1],
+      ],
+      { name: '', fixed: true, withLabel: false },
+    );
+    expect(jsxGraph.board.create).toHaveBeenNthCalledWith(
+      7,
+      'ellipse',
+      [
+        [3 - Math.sqrt(5), 2],
+        [3 + Math.sqrt(5), 2],
+        [3, 4],
+      ],
+      { name: '', fixed: true, withLabel: false },
+    );
+    expect(jsxGraph.board.create).toHaveBeenNthCalledWith(8, 'sector', expect.any(Array), {
+      name: '',
+      fixed: true,
+      withLabel: false,
+      selection: 'minor',
+    });
+    expect(jsxGraph.board.create).toHaveBeenNthCalledWith(9, 'arc', expect.any(Array), {
+      name: '',
+      fixed: true,
+      withLabel: false,
+      selection: 'minor',
+    });
+    expect(result.errors).toEqual([]);
+  });
+
+  it('returns a render error for a pie chart with negative values', async () => {
+    // Arrange
+    const documentModel = createDocument([
+      { id: 'invalid-pie', kind: 'chart', chartStyle: 'pie', values: [-1, 2] },
+    ]);
+
+    // Act
+    const result = await renderGeometryDoc(document.createElement('div'), documentModel);
+
+    // Assert
+    expect(result.errors).toEqual([
+      { index: 0, field: 'object', message: 'Pie chart values must be non-negative.' },
+    ]);
+  });
+
   it('returns the coordinates of an existing intersection', async () => {
     // Arrange
     jsxGraph.board.create.mockImplementation(kind =>

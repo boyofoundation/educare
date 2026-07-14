@@ -67,6 +67,48 @@ describe('geometryToolService: validateGeometryDoc', () => {
         { id: 'crossing', kind: 'intersection', sources: ['line', 'circle'] },
       ]),
     },
+    {
+      name: 'bar chart',
+      document: createDocument([
+        {
+          id: 'scores',
+          kind: 'chart',
+          chartStyle: 'bar',
+          values: [3, '2 + 2'],
+          labels: ['A', 'B'],
+        },
+      ]),
+    },
+    {
+      name: 'scatter chart',
+      document: createDocument([
+        { id: 'scores', kind: 'chart', chartStyle: 'scatter', x: [1, 2], values: [2, 4] },
+      ]),
+    },
+    {
+      name: 'arrow',
+      document: createDocument([
+        { id: 'p1', kind: 'point', x: 0, y: 0 },
+        { id: 'p2', kind: 'point', x: 2, y: 1 },
+        { id: 'direction', kind: 'arrow', points: ['p1', 'p2'] },
+      ]),
+    },
+    {
+      name: 'rectangle',
+      document: createDocument([{ id: 'box', kind: 'rectangle', x: 0, y: 0, width: 3, height: 2 }]),
+    },
+    {
+      name: 'ellipse',
+      document: createDocument([
+        { id: 'oval', kind: 'ellipse', x: 0, y: 0, radiusX: 3, radiusY: 2 },
+      ]),
+    },
+    {
+      name: 'sector',
+      document: createDocument([
+        { id: 'slice', kind: 'sector', x: 0, y: 0, radius: 2, startAngle: 0, endAngle: 'pi / 2' },
+      ]),
+    },
   ];
 
   it.each(validDocuments)('accepts a valid $name document', async ({ document }) => {
@@ -166,6 +208,44 @@ describe('geometryToolService: validateGeometryDoc', () => {
 
     // Assert
     expect(result.errors).toEqual([{ index: 1, field: 'id', message: 'Duplicate object id: p.' }]);
+  });
+
+  it('rejects chart data with mismatched x coordinates', async () => {
+    // Arrange
+    const document = createDocument([
+      { kind: 'chart', chartStyle: 'line', x: [1, 2], values: [3] },
+    ]);
+
+    // Act
+    const result = await validateGeometryDoc(document);
+
+    // Assert
+    expect(result.errors).toEqual([
+      {
+        index: 0,
+        field: 'x',
+        message: 'x and values must contain the same number of values.',
+      },
+    ]);
+  });
+
+  it('rejects pie charts that are configured with x coordinates', async () => {
+    // Arrange
+    const document = createDocument([
+      { kind: 'chart', chartStyle: 'pie', x: [1, 2], values: [3, 4] },
+    ]);
+
+    // Act
+    const result = await validateGeometryDoc(document);
+
+    // Assert
+    expect(result.errors).toEqual([
+      {
+        index: 0,
+        field: 'x',
+        message: 'pie charts use values only and do not accept x.',
+      },
+    ]);
   });
 
   const invalidReferenceCases = [
