@@ -89,6 +89,19 @@ describe('geometryToolService: validateGeometryDoc', () => {
       ]),
     },
     {
+      name: 'pie chart with center and radius expressions',
+      document: createDocument([
+        {
+          id: 'pie',
+          kind: 'chart',
+          chartStyle: 'pie',
+          values: [3, '2 + 2'],
+          center: ['1 + 1', 'sqrt(9)'],
+          radius: 'sqrt(4)',
+        },
+      ]),
+    },
+    {
       name: 'scatter chart',
       document: createDocument([
         { id: 'scores', kind: 'chart', chartStyle: 'scatter', x: [1, 2], values: [2, 4] },
@@ -274,6 +287,22 @@ describe('geometryToolService: validateGeometryDoc', () => {
     ]);
   });
 
+  it('rejects malformed pie chart center and radius expressions', async () => {
+    // Arrange
+    const document = createDocument([
+      { kind: 'chart', chartStyle: 'pie', values: [1], center: [0], radius: 'sqrt(' },
+    ]);
+
+    // Act
+    const result = await validateGeometryDoc(document);
+
+    // Assert
+    expect(result.errors).toEqual([
+      { index: 0, field: 'center', message: 'center must contain exactly two coordinates.' },
+      expect.objectContaining({ index: 0, field: 'radius' }),
+    ]);
+  });
+
   const invalidReferenceCases = [
     {
       name: 'forward references',
@@ -308,5 +337,50 @@ describe('geometryToolService: validateGeometryDoc', () => {
         }),
       ),
     );
+  });
+
+  it('rejects point reference fields that resolve to non-point objects', async () => {
+    // Arrange
+    const document = createDocument([
+      { id: 'p1', kind: 'point', x: 0, y: 0 },
+      { id: 'p2', kind: 'point', x: 1, y: 1 },
+      { id: 'line', kind: 'line', points: ['p1', 'p2'] },
+      { id: 'chart', kind: 'chart', chartStyle: 'bar', values: [1] },
+      { id: 'text', kind: 'text', x: 0, y: 0, text: 'label' },
+      { id: 'bad-segment', kind: 'segment', points: ['p1', 'chart'] },
+      { id: 'bad-polygon', kind: 'polygon', points: ['p1', 'p2', 'line'] },
+      { id: 'bad-arrow', kind: 'arrow', points: ['text', 'p2'] },
+      { id: 'bad-circle', kind: 'circle', center: 'line', point: 'p1' },
+    ]);
+
+    // Act
+    const result = await validateGeometryDoc(document);
+
+    // Assert
+    expect(result.errors).toEqual([
+      expect.objectContaining({ field: 'points[1]', message: expect.stringContaining('chart') }),
+      expect.objectContaining({ field: 'points[2]', message: expect.stringContaining('line') }),
+      expect.objectContaining({ field: 'points[0]', message: expect.stringContaining('text') }),
+      expect.objectContaining({ field: 'center[0]', message: expect.stringContaining('line') }),
+    ]);
+  });
+
+  it('rejects intersection sources that resolve to unsupported object kinds', async () => {
+    // Arrange
+    const document = createDocument([
+      { id: 'p1', kind: 'point', x: 0, y: 0 },
+      { id: 'p2', kind: 'point', x: 1, y: 1 },
+      { id: 'line', kind: 'line', points: ['p1', 'p2'] },
+      { id: 'chart', kind: 'chart', chartStyle: 'bar', values: [1] },
+      { id: 'bad-crossing', kind: 'intersection', sources: ['line', 'chart'] },
+    ]);
+
+    // Act
+    const result = await validateGeometryDoc(document);
+
+    // Assert
+    expect(result.errors).toEqual([
+      expect.objectContaining({ field: 'sources[1]', message: expect.stringContaining('chart') }),
+    ]);
   });
 });

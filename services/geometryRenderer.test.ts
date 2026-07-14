@@ -220,6 +220,34 @@ describe('geometryRenderer: renderGeometryDoc', () => {
     expect(result.errors).toEqual([]);
   });
 
+  it('translates pie chart center and radius expressions to JSXGraph chart attributes', async () => {
+    // Arrange
+    const documentModel = createDocument([
+      {
+        id: 'pie-chart',
+        kind: 'chart',
+        chartStyle: 'pie',
+        values: [1, '2 + 1'],
+        center: ['1 + 1', 'sqrt(9)'],
+        radius: 'sqrt(4)',
+      },
+    ]);
+
+    // Act
+    const result = await renderGeometryDoc(document.createElement('div'), documentModel);
+
+    // Assert
+    expect(jsxGraph.board.create).toHaveBeenCalledWith('chart', [[1, 3]], {
+      name: '',
+      fixed: true,
+      withLabel: false,
+      chartStyle: 'pie',
+      center: [2, 3],
+      radius: 2,
+    });
+    expect(result.errors).toEqual([]);
+  });
+
   it('returns a render error for a pie chart with negative values', async () => {
     // Arrange
     const documentModel = createDocument([
@@ -232,6 +260,21 @@ describe('geometryRenderer: renderGeometryDoc', () => {
     // Assert
     expect(result.errors).toEqual([
       { index: 0, field: 'object', message: 'Pie chart values must be non-negative.' },
+    ]);
+  });
+
+  it('returns a render error for a pie chart with non-positive radius', async () => {
+    // Arrange
+    const documentModel = createDocument([
+      { id: 'invalid-pie', kind: 'chart', chartStyle: 'pie', values: [1], radius: 0 },
+    ]);
+
+    // Act
+    const result = await renderGeometryDoc(document.createElement('div'), documentModel);
+
+    // Assert
+    expect(result.errors).toEqual([
+      { index: 0, field: 'object', message: 'radius must resolve to a positive number.' },
     ]);
   });
 
