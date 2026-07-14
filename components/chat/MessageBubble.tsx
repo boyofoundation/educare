@@ -4,6 +4,7 @@ import { UserIcon, GeminiIcon } from '../ui/Icons';
 import AgentActivityTimeline from './AgentActivityTimeline';
 import GeometryBoard from './GeometryBoard';
 import SpeechUtteranceCard from './SpeechUtteranceCard';
+import ReadAloudButton from './ReadAloudButton';
 import GeneratedImageGrid from './GeneratedImageGrid';
 import MarkdownContent from './MarkdownContent';
 import { AppContext } from '../core/useAppContext';
@@ -223,6 +224,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
           {timestampLabel}
         </span>
       )}
+      {!isUser && message.content.trim() !== '' && <ReadAloudButton content={message.content} />}
       <button
         type='button'
         onClick={() => void handleCopy(displayContent)}

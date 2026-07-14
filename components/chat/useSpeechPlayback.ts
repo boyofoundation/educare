@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SpeechUtteranceDoc } from '../../services/speechToolService';
 
 const getSpeechSynthesis = (): Window['speechSynthesis'] | undefined => {
@@ -12,18 +12,30 @@ const getSpeechSynthesis = (): Window['speechSynthesis'] | undefined => {
 export const isSpeechSynthesisSupported = (): boolean =>
   Boolean(getSpeechSynthesis() && typeof window.SpeechSynthesisUtterance === 'function');
 
+interface ActiveSpeechPlayback {
+  owner: symbol;
+  setSpeaking: (speaking: boolean) => void;
+}
+
+let activeSpeechPlayback: ActiveSpeechPlayback | null = null;
+
 export const useSpeechPlayback = (utterance: SpeechUtteranceDoc) => {
   const [speaking, setSpeaking] = useState(false);
   const supported = useMemo(() => isSpeechSynthesisSupported(), []);
+  const ownerRef = useRef(Symbol('speech-playback-owner'));
 
   useEffect(() => {
+    const owner = ownerRef.current;
+
     return () => {
-      const speechSynthesis = getSpeechSynthesis();
-      if (supported && speechSynthesis) {
-        speechSynthesis.cancel();
+      if (activeSpeechPlayback?.owner !== owner) {
+        return;
       }
+
+      activeSpeechPlayback = null;
+      getSpeechSynthesis()?.cancel();
     };
-  }, [supported]);
+  }, []);
 
   const stop = () => {
     const speechSynthesis = getSpeechSynthesis();
@@ -31,6 +43,12 @@ export const useSpeechPlayback = (utterance: SpeechUtteranceDoc) => {
       return;
     }
 
+    if (activeSpeechPlayback?.owner !== ownerRef.current) {
+      setSpeaking(false);
+      return;
+    }
+
+    activeSpeechPlayback = null;
     speechSynthesis.cancel();
     setSpeaking(false);
   };
@@ -41,13 +59,32 @@ export const useSpeechPlayback = (utterance: SpeechUtteranceDoc) => {
       return;
     }
 
+    const previousPlayback = activeSpeechPlayback;
+    activeSpeechPlayback = null;
+    previousPlayback?.setSpeaking(false);
     speechSynthesis.cancel();
+
     const speech = new window.SpeechSynthesisUtterance(utterance.text);
     speech.lang = utterance.language;
     speech.rate = utterance.rate;
     speech.pitch = utterance.pitch;
-    speech.onend = () => setSpeaking(false);
-    speech.onerror = () => setSpeaking(false);
+
+    const playback: ActiveSpeechPlayback = {
+      owner: ownerRef.current,
+      setSpeaking,
+    };
+    const finishPlayback = () => {
+      if (activeSpeechPlayback !== playback) {
+        return;
+      }
+
+      activeSpeechPlayback = null;
+      setSpeaking(false);
+    };
+
+    speech.onend = finishPlayback;
+    speech.onerror = finishPlayback;
+    activeSpeechPlayback = playback;
     setSpeaking(true);
     speechSynthesis.speak(speech);
   };
