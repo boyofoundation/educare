@@ -145,8 +145,6 @@ export const DRAW_GEOMETRY_TOOL_SCHEMA = {
               colors: { type: 'array', items: { type: 'string' } },
               center: {
                 type: 'array',
-                minItems: 2,
-                maxItems: 2,
                 items: { anyOf: [{ type: 'number' }, { type: 'string' }] },
               },
               radius: { anyOf: [{ type: 'number' }, { type: 'string' }] },
