@@ -356,9 +356,6 @@ const INTERSECTION_SOURCE_KINDS: readonly GeometryReferenceKind[] = [
   'circle',
   'functiongraph',
   'implicit',
-  'polygon',
-  'rectangle',
-  'ellipse',
   'arc',
   'sector',
 ];

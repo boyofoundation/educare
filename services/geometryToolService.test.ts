@@ -367,7 +367,11 @@ describe('geometryToolService: validateGeometryDoc', () => {
       { id: 'p2', kind: 'point', x: 1, y: 1 },
       { id: 'line', kind: 'line', points: ['p1', 'p2'] },
       { id: 'chart', kind: 'chart', chartStyle: 'bar', values: [1] },
+      { id: 'box', kind: 'rectangle', x: 0, y: 0, width: 1, height: 1 },
+      { id: 'oval', kind: 'ellipse', x: 0, y: 0, radiusX: 2, radiusY: 1 },
       { id: 'bad-crossing', kind: 'intersection', sources: ['line', 'chart'] },
+      { id: 'bad-box-crossing', kind: 'intersection', sources: ['line', 'box'] },
+      { id: 'bad-oval-crossing', kind: 'intersection', sources: ['line', 'oval'] },
     ]);
 
     // Act
@@ -376,6 +380,8 @@ describe('geometryToolService: validateGeometryDoc', () => {
     // Assert
     expect(result.errors).toEqual([
       expect.objectContaining({ field: 'sources[1]', message: expect.stringContaining('chart') }),
+      expect.objectContaining({ field: 'sources[1]', message: expect.stringContaining('box') }),
+      expect.objectContaining({ field: 'sources[1]', message: expect.stringContaining('oval') }),
     ]);
   });
 });
