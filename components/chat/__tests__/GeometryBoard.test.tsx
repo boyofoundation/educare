@@ -42,7 +42,7 @@ describe('GeometryBoard', () => {
     const { unmount } = render(<GeometryBoard board={geometryBoard} />);
 
     // Assert
-    const container = screen.getByLabelText('Triangle ABC 幾何圖');
+    const container = screen.getByLabelText('Triangle ABC 數學視覺圖板');
     expect(container).toHaveClass('aspect-[4/3]');
     expect(screen.getByRole('heading', { name: 'Triangle ABC' })).toBeInTheDocument();
     await waitFor(() => {

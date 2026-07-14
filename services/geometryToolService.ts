@@ -135,18 +135,14 @@ export const DRAW_GEOMETRY_TOOL_SCHEMA = {
               chartStyle: { enum: ['bar', 'line', 'pie', 'scatter'] },
               values: {
                 type: 'array',
-                minItems: 1,
-                maxItems: 24,
                 items: { anyOf: [{ type: 'number' }, { type: 'string' }] },
               },
               x: {
                 type: 'array',
-                minItems: 1,
-                maxItems: 24,
                 items: { anyOf: [{ type: 'number' }, { type: 'string' }] },
               },
-              labels: { type: 'array', maxItems: 24, items: { type: 'string' } },
-              colors: { type: 'array', maxItems: 24, items: { type: 'string' } },
+              labels: { type: 'array', items: { type: 'string' } },
+              colors: { type: 'array', items: { type: 'string' } },
               center: {
                 type: 'array',
                 minItems: 2,
@@ -154,7 +150,7 @@ export const DRAW_GEOMETRY_TOOL_SCHEMA = {
                 items: { anyOf: [{ type: 'number' }, { type: 'string' }] },
               },
               radius: { anyOf: [{ type: 'number' }, { type: 'string' }] },
-              width: { type: 'number', exclusiveMinimum: 0 },
+              width: { type: 'number' },
               direction: { enum: ['horizontal', 'vertical'] },
             },
             required: ['kind', 'chartStyle', 'values'],
@@ -353,6 +349,22 @@ export interface GeometryValidationResult {
   errors: GeometryDiagnostic[];
 }
 
+type GeometryReferenceKind = GeometryObject['kind'];
+
+const POINT_REFERENCE_KINDS: readonly GeometryReferenceKind[] = ['point'];
+const INTERSECTION_SOURCE_KINDS: readonly GeometryReferenceKind[] = [
+  'line',
+  'segment',
+  'circle',
+  'functiongraph',
+  'implicit',
+  'polygon',
+  'rectangle',
+  'ellipse',
+  'arc',
+  'sector',
+];
+
 let mathPromise: Promise<MathJsStatic> | undefined;
 
 const getMath = (): Promise<MathJsStatic> => {
@@ -437,13 +449,17 @@ const validateStringArray = (
   });
 };
 
+const formatReferenceKindList = (kinds: readonly GeometryReferenceKind[]): string =>
+  kinds.length === 1 ? kinds[0] : kinds.join(', ');
+
 const validateReferences = (
   errors: GeometryDiagnostic[],
   index: number,
   field: string,
   references: unknown,
-  declaredIds: Set<string>,
+  declaredObjects: Map<string, unknown>,
   expectedLength?: number,
+  expectedKinds?: readonly GeometryReferenceKind[],
 ): void => {
   if (
     !Array.isArray(references) ||
@@ -458,11 +474,24 @@ const validateReferences = (
   }
 
   references.forEach((reference, referenceIndex) => {
-    if (typeof reference !== 'string' || !declaredIds.has(reference)) {
+    const referenceField = `${field}[${referenceIndex}]`;
+    if (typeof reference !== 'string' || !declaredObjects.has(reference)) {
       errors.push({
         index,
-        field: `${field}[${referenceIndex}]`,
+        field: referenceField,
         message: `Unknown or forward reference: ${String(reference)}. Declare it with an id first.`,
+      });
+      return;
+    }
+
+    const referencedKind = declaredObjects.get(reference);
+    if (expectedKinds && !expectedKinds.includes(referencedKind as GeometryReferenceKind)) {
+      errors.push({
+        index,
+        field: referenceField,
+        message: `${referenceField} must reference ${formatReferenceKindList(
+          expectedKinds,
+        )} object ids; ${reference} is ${String(referencedKind)}.`,
       });
     }
   });
@@ -471,7 +500,7 @@ const validateReferences = (
 const validateObject = async (
   object: Record<string, unknown>,
   index: number,
-  declaredIds: Set<string>,
+  declaredObjects: Map<string, unknown>,
   errors: GeometryDiagnostic[],
 ): Promise<void> => {
   const kind = object.kind;
@@ -480,10 +509,10 @@ const validateObject = async (
   if (id !== undefined && (typeof id !== 'string' || id.trim().length === 0)) {
     errors.push({ index, field: 'id', message: 'id must be a non-empty string when provided.' });
   } else if (typeof id === 'string') {
-    if (declaredIds.has(id)) {
+    if (declaredObjects.has(id)) {
       errors.push({ index, field: 'id', message: `Duplicate object id: ${id}.` });
     } else {
-      declaredIds.add(id);
+      declaredObjects.set(id, kind);
     }
   }
 
@@ -494,12 +523,36 @@ const validateObject = async (
       break;
     case 'line':
     case 'segment':
-      validateReferences(errors, index, 'points', object.points, declaredIds, 2);
+      validateReferences(
+        errors,
+        index,
+        'points',
+        object.points,
+        declaredObjects,
+        2,
+        POINT_REFERENCE_KINDS,
+      );
       break;
     case 'circle':
-      validateReferences(errors, index, 'center', [object.center], declaredIds, 1);
+      validateReferences(
+        errors,
+        index,
+        'center',
+        [object.center],
+        declaredObjects,
+        1,
+        POINT_REFERENCE_KINDS,
+      );
       if (hasOwn(object, 'point')) {
-        validateReferences(errors, index, 'point', [object.point], declaredIds, 1);
+        validateReferences(
+          errors,
+          index,
+          'point',
+          [object.point],
+          declaredObjects,
+          1,
+          POINT_REFERENCE_KINDS,
+        );
       }
       if (hasOwn(object, 'radius')) {
         await validateExpression(errors, index, 'radius', object.radius);
@@ -513,7 +566,15 @@ const validateObject = async (
       await validateExpression(errors, index, 'expr', object.expr);
       break;
     case 'polygon':
-      validateReferences(errors, index, 'points', object.points, declaredIds);
+      validateReferences(
+        errors,
+        index,
+        'points',
+        object.points,
+        declaredObjects,
+        undefined,
+        POINT_REFERENCE_KINDS,
+      );
       if (!Array.isArray(object.points) || object.points.length < 3) {
         errors.push({
           index,
@@ -530,7 +591,15 @@ const validateObject = async (
       }
       break;
     case 'intersection':
-      validateReferences(errors, index, 'sources', object.sources, declaredIds, 2);
+      validateReferences(
+        errors,
+        index,
+        'sources',
+        object.sources,
+        declaredObjects,
+        2,
+        INTERSECTION_SOURCE_KINDS,
+      );
       break;
     case 'chart': {
       if (!['bar', 'line', 'pie', 'scatter'].includes(String(object.chartStyle))) {
@@ -616,7 +685,15 @@ const validateObject = async (
       break;
     }
     case 'arrow':
-      validateReferences(errors, index, 'points', object.points, declaredIds, 2);
+      validateReferences(
+        errors,
+        index,
+        'points',
+        object.points,
+        declaredObjects,
+        2,
+        POINT_REFERENCE_KINDS,
+      );
       break;
     case 'rectangle':
       await validateExpression(errors, index, 'x', object.x);
@@ -735,14 +812,14 @@ export const validateGeometryDoc = async (doc: unknown): Promise<GeometryValidat
     return { errors };
   }
 
-  const declaredIds = new Set<string>();
+  const declaredObjects = new Map<string, unknown>();
   for (const [index, object] of record.objects.entries()) {
     const objectRecord = asRecord(object);
     if (!objectRecord) {
       errors.push({ index, field: 'object', message: 'Geometry object must be an object.' });
       continue;
     }
-    await validateObject(objectRecord, index, declaredIds, errors);
+    await validateObject(objectRecord, index, declaredObjects, errors);
   }
 
   return { errors };
