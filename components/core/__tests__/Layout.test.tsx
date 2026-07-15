@@ -174,12 +174,6 @@ vi.mock('../../../services/tursoService', () => ({
   initializeDatabase: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../../services/embeddingService', () => ({
-  preloadEmbeddingModel: vi.fn().mockResolvedValue(undefined),
-  isEmbeddingModelLoaded: vi.fn().mockReturnValue(true),
-  generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
-}));
-
 vi.mock('../../../services/providerRegistry', () => ({
   initializeProviders: vi.fn().mockResolvedValue(undefined),
   providerManager: {

@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import QRCode from 'qrcode';
 import Modal from '../ui/Modal';
 import type { ProviderSettings, ProviderType } from '../../services/llmAdapter';
 import { CryptoService } from '../../services/cryptoService';
@@ -120,6 +119,7 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
       const payload = buildProviderSettingsPayload(settings, selectedProvider);
       const encryptedPayload = await encryptProviderSettingsPayload(payload, password);
       const url = buildProviderSettingsShareUrl(encryptedPayload);
+      const { default: QRCode } = await import('qrcode');
       const qr = await QRCode.toDataURL(url, {
         width: 512,
         margin: 2,

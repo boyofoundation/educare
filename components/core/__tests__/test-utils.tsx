@@ -36,11 +36,6 @@ interface ChatContainerProps {
   onNewMessage: (message: string) => void;
 }
 
-interface ApiSetupProps {
-  onComplete: () => void;
-  onCancel: () => void;
-}
-
 interface SettingsModalProps {
   onClose: () => void;
 }
@@ -171,14 +166,6 @@ export const mockDbService = () => {
 export const mockTursoService = () => {
   return vi.mock('../../../services/tursoService', () => ({
     canWriteToTurso: vi.fn().mockReturnValue(true),
-  }));
-};
-
-export const mockEmbeddingService = () => {
-  return vi.mock('../../../services/embeddingService', () => ({
-    preloadEmbeddingModel: vi.fn().mockResolvedValue(undefined),
-    isEmbeddingModelLoaded: vi.fn().mockReturnValue(true),
-    generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
   }));
 };
 
@@ -392,39 +379,6 @@ export const mockSharedAssistant = () => {
 };
 
 export const mockOtherComponents = () => {
-  vi.mock('../../settings/MigrationPanel', () => ({
-    default: () => {
-      const React = require('react');
-      return React.createElement('div', { 'data-testid': 'migration-panel' }, 'Migration Panel');
-    },
-  }));
-
-  vi.mock('../../settings/ApiKeySetup', () => ({
-    default: ({ onComplete, onCancel }: ApiSetupProps) => {
-      const React = require('react');
-      return React.createElement('div', { 'data-testid': 'api-key-setup' }, [
-        React.createElement(
-          'button',
-          {
-            key: 'complete',
-            onClick: onComplete,
-            'data-testid': 'api-complete',
-          },
-          'Complete',
-        ),
-        React.createElement(
-          'button',
-          {
-            key: 'cancel',
-            onClick: onCancel,
-            'data-testid': 'api-cancel',
-          },
-          'Cancel',
-        ),
-      ]);
-    },
-  }));
-
   vi.mock('../../settings/ProviderSettings', () => ({
     default: ({ onClose }: SettingsModalProps) => {
       const React = require('react');
@@ -582,7 +536,6 @@ export const setupCoreTestEnvironment = () => {
   // Mock all external dependencies
   mockDbService();
   mockTursoService();
-  mockEmbeddingService();
   mockProviderRegistry();
 
   // Mock all UI components

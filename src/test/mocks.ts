@@ -23,19 +23,6 @@ export const mockDbService = {
   ...mockTursoService,
 };
 
-export const mockEmbeddingService = {
-  isEmbeddingModelLoaded: vi.fn().mockReturnValue(false),
-  preloadEmbeddingModel: vi.fn().mockImplementation(async callback => {
-    // Simulate loading
-    const progress = { loaded: 0, total: 100 };
-    for (let i = 0; i <= 100; i += 10) {
-      progress.loaded = i;
-      callback(progress);
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-  }),
-};
-
 export const mockCryptoService = {
   encryptApiKeys: vi.fn().mockResolvedValue('encrypted-data'),
   generateRandomPassword: vi.fn().mockReturnValue('generated-password-123'),
@@ -81,10 +68,6 @@ export const setupMocks = () => {
 
   vi.mock('@/services/db', () => ({
     ...mockDbService,
-  }));
-
-  vi.mock('@/services/embeddingService', () => ({
-    ...mockEmbeddingService,
   }));
 
   vi.mock('@/services/cryptoService', () => ({

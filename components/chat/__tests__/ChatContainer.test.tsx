@@ -16,8 +16,6 @@ const {
   mockControllerStop,
   mockControllerGetInstance,
   mockControllerFlushCheckpoint,
-  mockPerformCachedRagQuery,
-  mockResultsToContextString,
   mockSetActiveProject,
   mockSetProjectWorkspaceOpen,
   mockSetProjectPreview,
@@ -38,8 +36,6 @@ const {
   mockControllerStop: vi.fn(),
   mockControllerGetInstance: vi.fn(),
   mockControllerFlushCheckpoint: vi.fn().mockResolvedValue(undefined),
-  mockPerformCachedRagQuery: vi.fn(),
-  mockResultsToContextString: vi.fn(),
   mockSetActiveProject: vi.fn(),
   mockSetProjectWorkspaceOpen: vi.fn(),
   mockSetProjectPreview: vi.fn(),
@@ -106,20 +102,6 @@ vi.mock('../../../services/geometryRenderer', () => ({
   }),
 }));
 
-vi.mock('../../../services/ragCacheManagerV2', () => ({
-  ragCacheManagerV2: {
-    performCachedRagQuery: mockPerformCachedRagQuery,
-    resultsToContextString: mockResultsToContextString,
-  },
-}));
-
-vi.mock('../../../services/ragQueryService', () => ({
-  ragQueryService: {
-    performRagQuery: vi.fn(),
-    resultsToContextString: vi.fn(),
-  },
-}));
-
 vi.mock('../../../services/ragSettingsService', () => ({
   getRagSettingsService: () => ({
     getVectorSearchLimit: () => 20,
@@ -150,10 +132,6 @@ vi.mock('react-virtuoso', () => ({
       ),
     );
   },
-}));
-
-vi.mock('../../settings', () => ({
-  RagSettingsModal: () => null,
 }));
 
 const runningState: AgentRunState = {
@@ -317,19 +295,6 @@ describe('ChatContainer', () => {
         setAgentRunState: mockSetAgentRunState,
       },
     } as unknown as ReturnType<typeof useAppContext>);
-
-    mockPerformCachedRagQuery.mockResolvedValue({
-      results: [],
-      fromCache: false,
-      queryTime: 12,
-      ragMetadata: {
-        source: 'indexeddb',
-        totalCandidates: 0,
-        filteredCandidates: 0,
-        finalResults: 0,
-      },
-    });
-    mockResultsToContextString.mockReturnValue('');
 
     // Default: emit chunks + complete, then resolve with a result.
     mockControllerRun.mockImplementation(async () => {

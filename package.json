@@ -30,7 +30,6 @@
     "create-test-data": "tsx scripts/createTestData.ts",
     "update-turso-schema": "tsx scripts/updateTursoSchema.ts",
     "cleanup-turso-schema": "tsx scripts/cleanupTursoSchema.ts",
-    "test-vector-search": "tsx scripts/testVectorSearch.ts",
     "test-sharing": "tsx scripts/testSharing.ts",
     "run-model-comparison": "tsx scripts/runModelComparison.ts",
     "demo-model-comparison": "tsx scripts/demoModelComparison.ts",
@@ -51,7 +50,6 @@
   },
   "dependencies": {
     "@google/genai": "^1.18.0",
-    "@huggingface/transformers": "4.2.0",
     "@isomorphic-git/lightning-fs": "4.6.2",
     "@libsql/client": "^0.15.15",
     "acorn": "8.17.0",

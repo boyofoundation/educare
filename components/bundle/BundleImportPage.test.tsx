@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import BundleImportPage from './BundleImportPage';
-import type { AgentBundle, BundleRecord, BundleValidationResult } from '../../types';
+import type { AgentBundle, BundleIssue, BundleRecord, BundleValidationResult } from '../../types';
 
 const { bundleService, db, locationStub } = vi.hoisted(() => ({
   bundleService: {
@@ -59,8 +59,8 @@ const validBundle = (): AgentBundle => ({
 
 const resultWith = (
   bundle: AgentBundle | null,
-  errors: any[],
-  warnings: any[] = [],
+  errors: BundleIssue[],
+  warnings: BundleIssue[] = [],
 ): BundleValidationResult => ({
   bundle,
   errors,

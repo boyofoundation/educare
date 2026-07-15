@@ -58,14 +58,6 @@ export const mockTursoService = () => {
     saveAssistantToTurso: vi.fn().mockResolvedValue(undefined),
     saveRagChunkToTurso: vi.fn().mockResolvedValue(undefined),
     getRagChunkCount: vi.fn().mockResolvedValue(0),
-    searchSimilarChunks: vi.fn().mockResolvedValue([]),
-  }));
-};
-
-export const mockEmbeddingService = () => {
-  return vi.mock('../../services/embeddingService', () => ({
-    generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
-    cosineSimilarity: vi.fn().mockReturnValue(0.8),
   }));
 };
 
@@ -143,15 +135,11 @@ export const mockIcons = () => {
   }));
 };
 
-// Mock qrcode library
-export const mockQRCode = () => {
-  vi.mock('qrcode', () => ({
-    default: {
-      toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,mocked-qr-code'),
-    },
-    toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,mocked-qr-code-direct'),
-  }));
-};
+// 注意:不要在這裡包一個 mockQRCode() helper — vi.mock 會被 Vitest hoist 到
+// 模組頂層並在 import test-utils 時註冊,覆蓋測試檔自己的 vi.mock('qrcode'),
+// 導致元件內動態 import('qrcode') 拿到另一個 mock 實例(spy 斷言全部落空)。
+// 需要 mock qrcode 的測試請在測試檔內以 vi.hoisted + vi.mock 自行定義
+// (見 ShareModal.test.tsx)。
 
 // Mock CustomSelect component
 export const mockCustomSelect = () => {

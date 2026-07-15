@@ -26,8 +26,6 @@ const {
   mockClearProjectWorkspace,
   mockSetAgentRunState,
   mockGetProject,
-  mockPerformCachedRagQuery,
-  mockResultsToContextString,
 } = vi.hoisted(() => ({
   mockUpdateSession: vi.fn().mockResolvedValue(undefined),
   mockCreateNewSession: vi.fn().mockResolvedValue(undefined),
@@ -42,8 +40,6 @@ const {
   mockClearProjectWorkspace: vi.fn(),
   mockSetAgentRunState: vi.fn(),
   mockGetProject: vi.fn().mockResolvedValue({ id: 'project-1' }),
-  mockPerformCachedRagQuery: vi.fn(),
-  mockResultsToContextString: vi.fn(),
 }));
 
 vi.mock('../../core/useAppContext', async () => {
@@ -83,20 +79,6 @@ vi.mock('../../../services/htmlProjectStore', () => ({
   },
 }));
 
-vi.mock('../../../services/ragCacheManagerV2', () => ({
-  ragCacheManagerV2: {
-    performCachedRagQuery: mockPerformCachedRagQuery,
-    resultsToContextString: mockResultsToContextString,
-  },
-}));
-
-vi.mock('../../../services/ragQueryService', () => ({
-  ragQueryService: {
-    performRagQuery: vi.fn(),
-    resultsToContextString: vi.fn(),
-  },
-}));
-
 vi.mock('../../../services/ragSettingsService', () => ({
   getRagSettingsService: () => ({
     getVectorSearchLimit: () => 20,
@@ -123,10 +105,6 @@ vi.mock('react-virtuoso', () => ({
       ),
     );
   },
-}));
-
-vi.mock('../../settings', () => ({
-  RagSettingsModal: () => null,
 }));
 
 const runningState: AgentRunState = {
@@ -247,18 +225,6 @@ describe('ChatContainer interrupted-run integration', () => {
     });
     await deleteForSession(SESSION_ID);
     mockGetProject.mockResolvedValue({ id: 'project-1' });
-    mockPerformCachedRagQuery.mockResolvedValue({
-      results: [],
-      fromCache: false,
-      queryTime: 12,
-      ragMetadata: {
-        source: 'indexeddb',
-        totalCandidates: 0,
-        filteredCandidates: 0,
-        finalResults: 0,
-      },
-    });
-    mockResultsToContextString.mockReturnValue('');
     Object.defineProperty(navigator, 'locks', {
       configurable: true,
       writable: true,

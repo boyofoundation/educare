@@ -25,12 +25,6 @@ export interface TursoRagChunk {
   createdAt: number;
 }
 
-export interface SimilarChunk {
-  fileName: string;
-  content: string;
-  similarity: number;
-}
-
 // 初始化資料庫結構
 export const initializeDatabase = async (): Promise<void> => {
   try {
@@ -131,37 +125,6 @@ export const saveRagChunkToTurso = async (
   } catch (error) {
     console.error('Failed to save RAG chunk to Turso:', error);
     throw error;
-  }
-};
-
-// 使用 Turso 向量搜尋取代原本的相似度計算
-export const searchSimilarChunks = async (
-  assistantId: string,
-  queryEmbedding: number[],
-  topK = 3,
-): Promise<SimilarChunk[]> => {
-  try {
-    const vectorString = `[${queryEmbedding.join(',')}]`;
-
-    // 使用 vector_distance_cos 函數取得實際的相似度分數
-    const result = await client.execute({
-      sql: `SELECT file_name, content, 
-                   1 - vector_distance_cos(embedding, vector(?)) AS similarity
-            FROM rag_chunks 
-            WHERE assistant_id = ?
-            ORDER BY similarity DESC 
-            LIMIT ?`,
-      args: [vectorString, assistantId, topK],
-    });
-
-    return result.rows.map(row => ({
-      fileName: row.file_name as string,
-      content: row.content as string,
-      similarity: row.similarity as number,
-    }));
-  } catch (error) {
-    console.error('Failed to search similar chunks:', error);
-    return []; // 如果搜尋失敗，回傳空陣列
   }
 };
 

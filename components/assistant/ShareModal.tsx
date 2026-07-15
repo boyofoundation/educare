@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import QRCode from 'qrcode';
 import { Assistant } from '../../types';
 import { saveAssistantToTurso } from '../../services/tursoService';
 import { generateShortUrl, buildShortUrl } from '../../services/shortUrlService';
@@ -66,6 +65,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
 
       setShareUrl(url);
 
+      const { default: QRCode } = await import('qrcode');
       const qrDataUrl = await QRCode.toDataURL(url, {
         width: 256,
         margin: 2,

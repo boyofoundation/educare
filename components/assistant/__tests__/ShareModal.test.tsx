@@ -21,9 +21,16 @@ vi.mock('../../../services/shortUrlService', () => ({
   buildShortUrl: vi.fn().mockReturnValue('https://short.url/abc123'),
 }));
 
+// ShareModal 於執行期動態 import('qrcode')，Vitest 可能為元件端另外實例化一次 mock 模組。
+// 以 vi.hoisted 建立共用 spy，讓測試檔靜態 import 與元件動態 import 拿到同一個 mock fn
+// （同 geometryRenderer.test.ts 的 jsxgraph 模式）。
+const qrCodeMocks = vi.hoisted(() => ({
+  toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,mocked-qr-code'),
+}));
+
 vi.mock('qrcode', () => ({
   default: {
-    toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,mocked-qr-code'),
+    toDataURL: qrCodeMocks.toDataURL,
   },
   toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,mocked-qr-code-direct'),
 }));

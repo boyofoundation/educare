@@ -7,7 +7,6 @@ import { AppShell } from '../AppShell';
 import { ChatSession } from '../../../types';
 import { TEST_ASSISTANTS, TEST_SESSIONS } from './test-constants';
 import * as dbMock from '../../../services/db';
-import * as embeddingMock from '../../../services/embeddingService';
 import * as providerMock from '../../../services/providerRegistry';
 import * as htmlPreviewMock from '../../../services/htmlPreviewService';
 import * as htmlProjectStoreMock from '../../../services/htmlProjectStore';
@@ -54,12 +53,6 @@ vi.mock('../../../services/db', () => ({
   getSessionsForAssistant: vi.fn().mockResolvedValue([]),
   saveSession: vi.fn().mockResolvedValue(undefined),
   deleteSession: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../../services/embeddingService', () => ({
-  preloadEmbeddingModel: vi.fn().mockResolvedValue(undefined),
-  isEmbeddingModelLoaded: vi.fn().mockReturnValue(true),
-  generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
 }));
 
 vi.mock('../../../services/providerRegistry', () => ({
@@ -351,10 +344,6 @@ beforeEach(() => {
     }),
   );
   vi.mocked(htmlProjectStoreMock.htmlProjectStore.deleteProjectsByAssistant).mockResolvedValue(0);
-
-  vi.mocked(embeddingMock.preloadEmbeddingModel).mockResolvedValue(undefined);
-  vi.mocked(embeddingMock.isEmbeddingModelLoaded).mockReturnValue(true);
-  vi.mocked(embeddingMock.generateEmbedding).mockResolvedValue([0.1, 0.2, 0.3]);
 
   vi.mocked(providerMock.initializeProviders).mockResolvedValue(undefined);
   vi.mocked(providerMock.providerManager.getAvailableProviders).mockReturnValue([
@@ -1116,8 +1105,6 @@ describe('AppShell', () => {
     });
 
     it('should show model loading overlay when embedding model loads', async () => {
-      vi.mocked(embeddingMock.isEmbeddingModelLoaded).mockReturnValue(false);
-
       render(<AppShell />);
 
       // Model loading overlay should be rendered

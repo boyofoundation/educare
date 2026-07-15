@@ -23,11 +23,6 @@ const mockProviderRegistry = vi.hoisted(() => ({
 
 vi.mock('../../../services/db', () => mockDb);
 vi.mock('../../../services/providerRegistry', () => mockProviderRegistry);
-vi.mock('../../../services/embeddingService', () => ({
-  preloadEmbeddingModel: vi.fn().mockResolvedValue(undefined),
-  isEmbeddingModelLoaded: vi.fn().mockReturnValue(true),
-  generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
-}));
 vi.mock('../../../services/shortUrlService', () => ({
   resolveShortUrl: vi.fn().mockResolvedValue(null),
   recordShortUrlClick: vi.fn().mockResolvedValue(undefined),

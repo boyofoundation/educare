@@ -54,17 +54,8 @@ export const mockLocaleTimeString = (timeString = '12:00') => {
 };
 
 // Mock external service dependencies
-export const mockEmbeddingService = () => {
-  return vi.mock('../../../services/embeddingService', () => ({
-    generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
-    cosineSimilarity: vi.fn().mockReturnValue(0.8),
-  }));
-};
-
 export const mockTursoService = () => {
-  return vi.mock('../../../services/tursoService', () => ({
-    searchSimilarChunks: vi.fn().mockResolvedValue([]),
-  }));
+  return vi.mock('../../../services/tursoService', () => ({}));
 };
 
 export const mockLLMService = () => {

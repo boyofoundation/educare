@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
-import * as pdfjsLib from 'pdfjs-dist';
-import mammoth from 'mammoth';
 import { cleanChineseSpacing } from './textChunkingService';
+
+type PdfjsModule = typeof import('pdfjs-dist');
 
 // PDF.js type interfaces
 interface PdfInfo {
@@ -34,7 +34,7 @@ interface PdfTextContent {
 }
 
 // 配置 PDF.js worker - 動態設定
-function setupPdfWorker() {
+function setupPdfWorker(pdfjsLib: PdfjsModule) {
   // 如果已經設定過，就不重複設定
   if (pdfjsLib.GlobalWorkerOptions.workerSrc) {
     return;
@@ -55,8 +55,12 @@ function setupPdfWorker() {
   pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrls[0];
 }
 
-// 初始化 worker
-setupPdfWorker();
+// 動態載入 pdfjs-dist，並在首次使用前完成 worker 設定（setupPdfWorker 具冪等性）
+async function loadPdfjs(): Promise<PdfjsModule> {
+  const pdfjsLib = await import('pdfjs-dist');
+  setupPdfWorker(pdfjsLib);
+  return pdfjsLib;
+}
 
 export interface ParsedDocument {
   content: string;
@@ -75,8 +79,8 @@ export class DocumentParserService {
     try {
       const arrayBuffer = await file.arrayBuffer();
 
-      // 確保 worker 已設定
-      setupPdfWorker();
+      // 動態載入 pdfjs 並確保 worker 已設定
+      const pdfjsLib = await loadPdfjs();
 
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
@@ -154,6 +158,7 @@ export class DocumentParserService {
   static async parseDocx(file: File): Promise<ParsedDocument> {
     try {
       const arrayBuffer = await file.arrayBuffer();
+      const { default: mammoth } = await import('mammoth');
       const result = await mammoth.extractRawText({ arrayBuffer });
 
       if (!result.value?.trim()) {

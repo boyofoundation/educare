@@ -58,15 +58,19 @@ export default defineConfig(() => {
         output: {
           // 更細緻的 chunk 分割
           manualChunks: id => {
+            // Rollup 的 commonjs helper（getDefaultExportFromCjs 等）是全域共用的虛擬模組，
+            // 必須釘在 vendor；否則會落入第一個引用它的 async chunk（如 file-processing），
+            // 使 vendor / react-vendor 反向靜態 import 該 chunk，把它拖回首屏載入路徑。
+            if (id.includes('commonjsHelpers')) {
+              return 'vendor';
+            }
+
             // React 核心
             if (id.includes('react') || id.includes('react-dom')) {
               return 'react-vendor';
             }
 
             // AI 相關 - 分別處理大型庫
-            if (id.includes('@huggingface/transformers')) {
-              return 'transformers';
-            }
             if (id.includes('@google/genai')) {
               return 'ai-libs';
             }
@@ -109,10 +113,11 @@ export default defineConfig(() => {
             if (id.includes('pdfjs-dist')) {
               return 'pdf-worker';
             }
-            // Keep mammoth with vendor bundle to avoid TDZ issues
-            // if (id.includes('mammoth') || id.includes('jszip')) {
-            //   return 'file-processing';
-            // }
+            // mammoth 現已全程動態 import（documentParserService.parseDocx），
+            // 獨立 async chunk 延遲載入；先前的 TDZ 疑慮源自靜態 import 循環，已不適用
+            if (id.includes('node_modules/mammoth') || id.includes('node_modules/jszip')) {
+              return 'file-processing';
+            }
 
             // 數據庫
             if (id.includes('@libsql/client')) {
@@ -133,8 +138,13 @@ export default defineConfig(() => {
               return 'highlight';
             }
 
+            // qrcode 全程動態 import（分享 Modal 生成 QR 時才載入），獨立 async chunk
+            if (id.includes('node_modules/qrcode')) {
+              return 'qrcode';
+            }
+
             // 其他工具
-            if (id.includes('qrcode') || id.includes('idb')) {
+            if (id.includes('idb')) {
               return 'utils';
             }
 
@@ -157,7 +167,7 @@ export default defineConfig(() => {
     },
     optimizeDeps: {
       exclude: ['fsevents'],
-      include: ['react', 'react-dom', '@google/genai', 'qrcode', 'highlight.js', 'idb', 'mammoth'],
+      include: ['react', 'react-dom', '@google/genai', 'qrcode', 'highlight.js', 'idb'],
     },
 
     // 啟用 tree-shaking

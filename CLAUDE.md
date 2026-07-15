@@ -49,8 +49,7 @@ This is EduCare - an Educational AI Assistant application - a React-based web ap
 - **services/agentRunController.ts**: Multi-turn agent runs (auto-continue, checkpoint/resume, abort)
 - **services/knowledgeSearchService.ts**: `searchKnowledgeBase` text-search tool over knowledge chunks (normalization + CJK bigram tokenization + scoring)
 - **services/knowledgeGatherService.ts**: Hidden first-turn background gatherer that uses the same search tool to produce ragContext + citations
-- **services/documentParserService.ts + textChunkingService.ts**: PDF/DOCX/MD parsing and text chunking (pure text chunks, no vectorization)
-- **LEGACY — not in the chat path, do not use for new features**: `embeddingService.ts`, `ragQueryService.ts`, `ragCacheManagerV2.ts`, `queryCacheService.ts` (embedding-era chain; only referenced by the cache-management settings UI)
+- **services/documentParserService.ts + textChunkingService.ts**: PDF/DOCX/MD parsing and text chunking (pure text chunks, no vectorization); heavy parsers (pdfjs-dist, mammoth) are dynamically imported on demand
 
 ### Key Architecture Patterns
 
@@ -80,7 +79,7 @@ This is EduCare - an Educational AI Assistant application - a React-based web ap
 ### Build System
 
 - **TypeScript + React**: Modern React 19.1.1 with TypeScript, using Vite for bundling
-- **Dependencies**: Core libraries include @google/genai, @huggingface/transformers, @libsql/client, mammoth, pdfjs-dist, qrcode
+- **Dependencies**: Core libraries include @google/genai, @libsql/client, mammoth, pdfjs-dist, qrcode (mammoth/pdfjs-dist/qrcode are lazy-loaded via dynamic import)
 - **Development Tools**: ESLint, Prettier, Vitest, Husky, lint-staged for quality assurance
 - **Database Scripts**: Custom Turso DB management and migration scripts
 - **Path Aliases**: `@/*` maps to project root for imports
@@ -124,7 +123,7 @@ This is EduCare - an Educational AI Assistant application - a React-based web ap
 
 ### Recent Architectural Changes
 
-- **RAG Evolution (2026)**: Replaced embedding/vector similarity search with agent-driven text search — `searchKnowledgeBase` tool + `gatherKnowledge` background gatherer. The embedding chain (`embeddingService` → `ragQueryService` → `ragCacheManagerV2` → `queryCacheService`) is legacy and off the chat path; new features must not depend on it
+- **RAG Evolution (2026)**: Replaced embedding/vector similarity search with agent-driven text search — `searchKnowledgeBase` tool + `gatherKnowledge` background gatherer. The legacy embedding chain (`embeddingService` → `ragQueryService` → `ragCacheManagerV2` → `queryCacheService`, plus the dead cache-management settings UI and `@huggingface/transformers`) was fully removed in 2026-07; only `RagChunk.vector` remains as an optional field for import compatibility
 - **Multi-Provider LLM Adapter**: Replaced the single Gemini service with a provider registry (7 providers incl. local LLMs via Ollama / LM Studio)
 - **Local-First Storage**: Assistants/sessions live in IndexedDB (`services/db.ts`); Turso serves shared assistants and short links
 - **Agentic Harness**: Multi-turn agent runs with checkpoint/resume, HTML project workspace (Canvas) with tool packs and local git (isomorphic-git), assistant routing/handoff, subagent delegation

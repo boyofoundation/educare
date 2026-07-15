@@ -6,12 +6,7 @@ import { useAppContext } from '../useAppContext';
 import { htmlProjectStore } from '../../../services/htmlProjectStore';
 import { htmlPreviewService } from '../../../services/htmlPreviewService';
 import { htmlProjectImportService } from '../../../services/htmlProjectImportService';
-import {
-  createMockModelLoadingProgress,
-  TEST_ASSISTANTS,
-  TEST_SESSIONS,
-  RESPONSIVE_BREAKPOINTS,
-} from './test-utils';
+import { TEST_ASSISTANTS, TEST_SESSIONS, RESPONSIVE_BREAKPOINTS } from './test-utils';
 
 const { TEST_HTML_PROJECT, TEST_PROJECT_PREVIEW, TEST_IMPORTED_PROJECT } = vi.hoisted(() => ({
   TEST_HTML_PROJECT: {
@@ -61,12 +56,6 @@ const mockDb = vi.hoisted(() => ({
   saveSession: vi.fn().mockResolvedValue(undefined),
   deleteSession: vi.fn().mockResolvedValue(undefined),
 }));
-const mockEmbedding = vi.hoisted(() => ({
-  __esModule: true,
-  preloadEmbeddingModel: vi.fn().mockResolvedValue(undefined),
-  isEmbeddingModelLoaded: vi.fn().mockReturnValue(true),
-  generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
-}));
 const mockProviderRegistry = vi.hoisted(() => ({
   initializeProviders: vi.fn().mockResolvedValue(undefined),
   providerManager: {
@@ -75,7 +64,6 @@ const mockProviderRegistry = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../services/db', () => mockDb);
-vi.mock('../../../services/embeddingService', () => mockEmbedding);
 vi.mock('../../../services/providerRegistry', () => mockProviderRegistry);
 vi.mock('../../../services/cryptoService', () => ({
   CryptoService: {
@@ -342,10 +330,6 @@ describe('AppContext', () => {
     mockDb.getSessionsForAssistant.mockResolvedValue([]);
     mockDb.saveSession.mockResolvedValue(undefined);
     mockDb.deleteSession.mockResolvedValue(undefined);
-
-    // Re-establish embedding service defaults
-    mockEmbedding.isEmbeddingModelLoaded.mockReturnValue(true);
-    mockEmbedding.preloadEmbeddingModel.mockResolvedValue(undefined);
 
     // Re-establish provider registry defaults
     mockProviderRegistry.initializeProviders.mockResolvedValue(undefined);
@@ -1169,15 +1153,6 @@ describe('AppContext', () => {
 
   describe('Model Loading', () => {
     it('should handle embedding model preloading', async () => {
-      mockEmbedding.isEmbeddingModelLoaded.mockReturnValue(false);
-      mockEmbedding.preloadEmbeddingModel.mockImplementation(
-        async (progressCallback: ((p: unknown) => void) | undefined) => {
-          // Simulate progress updates
-          const progress = createMockModelLoadingProgress();
-          progressCallback && progressCallback(progress);
-        },
-      );
-
       render(
         <AppProvider>
           <TestConsumer />
@@ -1194,8 +1169,6 @@ describe('AppContext', () => {
     });
 
     it('should skip model preloading when already loaded', async () => {
-      mockEmbedding.isEmbeddingModelLoaded.mockReturnValue(true);
-
       render(
         <AppProvider>
           <TestConsumer />
@@ -1206,7 +1179,6 @@ describe('AppContext', () => {
         expect(screen.getByTestId('is-loading')).toHaveTextContent('false');
       });
 
-      expect(mockEmbedding.preloadEmbeddingModel).not.toHaveBeenCalled();
       expect(screen.getByTestId('is-model-loading')).toHaveTextContent('false');
     });
   });
@@ -1228,9 +1200,6 @@ describe('AppContext', () => {
     });
 
     it('should handle model loading errors', async () => {
-      mockEmbedding.isEmbeddingModelLoaded.mockReturnValue(false);
-      mockEmbedding.preloadEmbeddingModel.mockRejectedValue(new Error('Model loading failed'));
-
       render(
         <AppProvider>
           <TestConsumer />
