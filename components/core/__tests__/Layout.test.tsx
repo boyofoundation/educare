@@ -208,6 +208,7 @@ import { Layout, formatRelativeTime } from '../Layout';
 import { AppProvider } from '../AppContext';
 import { useAppContext } from '../useAppContext';
 import {
+  createMockChatSession,
   setupCoreTestEnvironment,
   TEST_ASSISTANTS,
   TEST_SESSIONS,
@@ -229,6 +230,33 @@ function SearchStateSeed() {
   React.useEffect(() => {
     dispatch({ type: 'SET_ASSISTANTS', payload: [TEST_ASSISTANTS.basic, TEST_ASSISTANTS.withRag] });
   }, [dispatch]);
+  return null;
+}
+
+function SidebarStateSeed({ sessionCount = 8 }: { sessionCount?: number }) {
+  const { dispatch } = useAppContext();
+  const sessions = React.useMemo(
+    () =>
+      Array.from({ length: sessionCount }, (_, index) =>
+        createMockChatSession({
+          id: `sidebar-session-${index + 1}`,
+          assistantId: TEST_ASSISTANTS.basic.id,
+          title: `側欄對話 ${index + 1}`,
+          createdAt: Date.now() - index * 60_000,
+          lastOpenedAt: Date.now() - index * 60_000,
+        }),
+      ),
+    [sessionCount],
+  );
+
+  React.useEffect(() => {
+    dispatch({ type: 'SET_ASSISTANTS', payload: [TEST_ASSISTANTS.basic] });
+    dispatch({ type: 'SET_CURRENT_ASSISTANT', payload: TEST_ASSISTANTS.basic });
+    dispatch({ type: 'SET_SESSIONS', payload: sessions });
+    dispatch({ type: 'SET_CURRENT_SESSION', payload: sessions[0] ?? null });
+    dispatch({ type: 'SET_VIEW_MODE', payload: 'chat' });
+  }, [dispatch, sessions]);
+
   return null;
 }
 
@@ -401,6 +429,7 @@ describe('Layout', () => {
         { timeout: 3000 },
       );
 
+      fireEvent.click(screen.getByRole('button', { name: '工作區' }));
       const entry = screen.getByRole('button', { name: '匯入協作包' });
       expect(entry).toBeInTheDocument();
       // Clicking must not throw and should be keyboard-focusable.
@@ -408,6 +437,29 @@ describe('Layout', () => {
       await act(async () => {
         fireEvent.click(entry);
       });
+    });
+
+    it('keeps secondary workspace tools collapsed until requested', async () => {
+      render(
+        <AppProvider>
+          <SidebarStateSeed sessionCount={1} />
+          <Layout>
+            <TestLayoutContent />
+          </Layout>
+        </AppProvider>,
+      );
+
+      const workspaceToggle = await screen.findByRole('button', { name: '工作區' });
+      expect(workspaceToggle).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByRole('button', { name: '備課與練習' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '資料管理' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '匯入協作包' })).not.toBeInTheDocument();
+
+      fireEvent.click(workspaceToggle);
+
+      expect(screen.getByRole('button', { name: '備課與練習' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '資料管理' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '匯入協作包' })).toBeInTheDocument();
     });
 
     it('should render children content correctly', () => {
@@ -913,6 +965,7 @@ describe('Layout', () => {
       const toggle = screen.getByTestId('sidebar-collapse-toggle');
       expect(toggle).toHaveAttribute('aria-expanded', 'true');
       expect(toggle).toHaveAccessibleName('收折側邊欄');
+      expect(toggle).toHaveClass('h-11', 'w-11');
     });
 
     it('should collapse to icon rail (w-20 / pl-20) when toggle is clicked', async () => {
@@ -1141,6 +1194,44 @@ describe('Layout', () => {
   });
 
   describe('Session List', () => {
+    it('shows six recent conversations by default and can reveal the full list', async () => {
+      render(
+        <AppProvider>
+          <SidebarStateSeed />
+          <Layout>
+            <TestLayoutContent />
+          </Layout>
+        </AppProvider>,
+      );
+
+      const conversationsToggle = await screen.findByRole('button', { name: '對話' });
+      expect(conversationsToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getAllByRole('button', { name: /開啟聊天 側欄對話/ })).toHaveLength(6);
+
+      fireEvent.click(screen.getByRole('button', { name: '顯示全部 8 個對話' }));
+
+      expect(screen.getAllByRole('button', { name: /開啟聊天 側欄對話/ })).toHaveLength(8);
+    });
+
+    it('uses sibling session controls instead of nested interactive elements', async () => {
+      render(
+        <AppProvider>
+          <SidebarStateSeed sessionCount={1} />
+          <Layout>
+            <TestLayoutContent />
+          </Layout>
+        </AppProvider>,
+      );
+
+      const sessionButton = await screen.findByRole('button', {
+        name: '開啟聊天 側欄對話 1',
+      });
+      expect(sessionButton.tagName).toBe('BUTTON');
+
+      const conversations = screen.getByRole('region', { name: '對話清單' });
+      expect(conversations.querySelector('[role="button"] button')).not.toBeInTheDocument();
+    });
+
     it('should render session list when assistant is selected', async () => {
       render(
         <TestLayoutWrapper>

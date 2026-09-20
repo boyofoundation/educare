@@ -93,10 +93,8 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   const isTouch = state.isMobile || state.isTablet;
 
   const [isTokenUsageOpen, setIsTokenUsageOpen] = useState(false);
-  const [railPopoverTop, setRailPopoverTop] = useState(96);
   const tokenPopoverRef = useRef<HTMLDivElement | null>(null);
   const expandedTokenBtnRef = useRef<globalThis.HTMLButtonElement | null>(null);
-  const railTokenBtnRef = useRef<globalThis.HTMLButtonElement | null>(null);
   const drawerCloseButtonRef = useRef<globalThis.HTMLButtonElement | null>(null);
   const drawerTriggerRef = useRef<globalThis.HTMLButtonElement | null>(null);
   const previouslyFocusedRef = useRef<globalThis.HTMLElement | null>(null);
@@ -110,6 +108,12 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   const [sessionTitleDraft, setSessionTitleDraft] = useState('');
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
   const [retrySessionAction, setRetrySessionAction] = useState<(() => void) | null>(null);
+  const [isConversationsExpanded, setIsConversationsExpanded] = useState(true);
+  const [isWorkspaceExpanded, setIsWorkspaceExpanded] = useState(false);
+  const [showAllSessions, setShowAllSessions] = useState(false);
+  const [openSessionMenuId, setOpenSessionMenuId] = useState<string | null>(null);
+  const sessionMenuRef = useRef<globalThis.HTMLDivElement | null>(null);
+  const sessionMenuTriggerRef = useRef<globalThis.HTMLButtonElement | null>(null);
 
   const orderedSessions = useMemo(
     () =>
@@ -122,6 +126,11 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
         return rightTime - leftTime;
       }),
     [state.sessions],
+  );
+
+  const visibleSessions = useMemo(
+    () => orderedSessions.slice(0, collapsed ? 5 : showAllSessions ? orderedSessions.length : 6),
+    [collapsed, orderedSessions, showAllSessions],
   );
 
   const drawerInteractive = !isTouch || state.isSidebarOpen;
@@ -179,6 +188,49 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
     void actions.openSession(sessionId);
     closeDrawerIfMobile();
   };
+
+  useEffect(() => {
+    setShowAllSessions(false);
+    setOpenSessionMenuId(null);
+    setEditingSessionId(null);
+  }, [state.currentAssistant?.id]);
+
+  useEffect(() => {
+    if (['practice', 'data_management', 'bundle_import'].includes(state.viewMode)) {
+      setIsWorkspaceExpanded(true);
+    }
+  }, [state.viewMode]);
+
+  useEffect(() => {
+    if (!openSessionMenuId) {
+      return;
+    }
+
+    const handlePointerDown = (event: globalThis.MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        !sessionMenuRef.current?.contains(target) &&
+        !sessionMenuTriggerRef.current?.contains(target)
+      ) {
+        setOpenSessionMenuId(null);
+      }
+    };
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      setOpenSessionMenuId(null);
+      sessionMenuTriggerRef.current?.focus();
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [openSessionMenuId]);
 
   useEffect(() => {
     if (!isTouch || !state.isSidebarOpen) {
@@ -301,9 +353,6 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
       if (expandedTokenBtnRef.current?.contains(target)) {
         return;
       }
-      if (railTokenBtnRef.current?.contains(target)) {
-        return;
-      }
       setIsTokenUsageOpen(false);
     };
     const handleKeyDown = (e: globalThis.KeyboardEvent) => {
@@ -329,19 +378,6 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
     if (state.isMobile || state.isTablet) {
       actions.setSidebarOpen(false);
     }
-  };
-
-  const toggleRailTokenUsage = () => {
-    if (!isTokenUsageOpen && typeof window !== 'undefined') {
-      const rect = railTokenBtnRef.current?.getBoundingClientRect();
-      if (rect) {
-        const estimatedHeight = Math.min(window.innerHeight * 0.6, 460);
-        setRailPopoverTop(
-          Math.max(16, Math.min(rect.top, window.innerHeight - estimatedHeight - 16)),
-        );
-      }
-    }
-    setIsTokenUsageOpen(prev => !prev);
   };
 
   // In shared / bundle / standalone bundle-import mode, render a simplified layout without sidebar
@@ -536,7 +572,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   ) : null;
 
   return (
-    <div className='relative flex min-h-[100svh] h-[100dvh] overflow-hidden bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 font-sans'>
+    <div className='app-shell relative flex min-h-[100svh] h-[100dvh] overflow-hidden bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 font-sans'>
       {/* Sidebar Overlay for Mobile and Tablet */}
       {(state.isMobile || state.isTablet) && state.isSidebarOpen && (
         <div
@@ -548,7 +584,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
 
       {/* Sidebar */}
       <div
-        className={`${state.isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 h-[100dvh] z-50 ${
+        className={`app-sidebar ${state.isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 h-[100dvh] z-50 ${
           state.isMobile || state.isTablet ? 'w-80' : collapsed ? 'w-20' : 'w-72'
         } bg-gray-900/95 backdrop-blur-sm flex flex-col overflow-hidden ${
           collapsed
@@ -566,25 +602,27 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             type='button'
             data-testid='sidebar-collapse-toggle'
             onClick={actions.toggleSidebarCollapse}
-            className='absolute top-24 -right-3 z-50 flex w-6 h-6 items-center justify-center rounded-full bg-gray-700 border border-gray-600 text-gray-300 hover:bg-gray-600 hover:text-white shadow-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+            className='sidebar-collapse-toggle absolute top-[5.25rem] -right-[1.375rem] z-50 flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
             aria-label={collapsed ? '展開側邊欄' : '收折側邊欄'}
             aria-expanded={!collapsed}
             title={collapsed ? '展開側邊欄' : '收折側邊欄'}
           >
-            <svg className='w-3.5 h-3.5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-              <path
-                strokeLinecap='round'
-                strokeLinejoin='round'
-                strokeWidth={2.5}
-                d={collapsed ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'}
-              />
-            </svg>
+            <span className='sidebar-collapse-toggle__glyph flex h-6 w-6 items-center justify-center rounded-full border bg-gray-700 shadow-md'>
+              <svg className='h-3.5 w-3.5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                <path
+                  strokeLinecap='round'
+                  strokeLinejoin='round'
+                  strokeWidth={2.5}
+                  d={collapsed ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'}
+                />
+              </svg>
+            </span>
           </button>
         )}
 
         {/* Brand area — 收折模式只顯示 logo；mobile/tablet 時右側附關閉鈕 */}
         <div
-          className={`flex items-center border-b border-gray-700/50 ${
+          className={`sidebar-brand flex items-center border-b border-gray-700/50 ${
             collapsed ? 'justify-center pb-3 mb-3' : 'justify-between gap-2 px-1 pb-3.5 mb-4'
           }`}
         >
@@ -592,10 +630,10 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             <BrandMark className='h-8 w-8 flex-shrink-0' />
             {!collapsed && (
               <div className='min-w-0 leading-tight'>
-                <div className='truncate text-base font-bold tracking-tight text-white'>
+                <div className='sidebar-brand__title truncate text-base font-bold tracking-tight text-white'>
                   EduCare
                 </div>
-                <div className='text-[10px] font-medium uppercase tracking-[0.18em] text-cyan-400/90'>
+                <div className='sidebar-brand__subtitle text-[10px] font-medium uppercase tracking-[0.18em] text-cyan-400/90'>
                   AI 教學助理
                 </div>
               </div>
@@ -605,7 +643,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             <button
               ref={drawerCloseButtonRef}
               onClick={() => actions.setSidebarOpen(false)}
-              className='flex min-h-11 min-w-11 items-center justify-center p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 flex-shrink-0'
+              className='sidebar-close flex min-h-11 min-w-11 items-center justify-center p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 flex-shrink-0'
               aria-label='關閉選單'
               title='關閉選單'
             >
@@ -680,8 +718,8 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             onClick={() => setIsSearchOpen(previous => !previous)}
             className={
               collapsed
-                ? 'flex h-11 w-11 items-center justify-center rounded-xl border border-gray-600/40 bg-gray-800/60 text-gray-300 transition hover:border-cyan-500/50 hover:text-cyan-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                : 'flex w-full items-center gap-2 rounded-lg border border-gray-700/60 bg-gray-800/50 px-3 py-2 text-left text-sm text-gray-300 transition hover:border-cyan-500/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                ? 'sidebar-search-toggle flex h-11 w-11 items-center justify-center rounded-xl border border-gray-600/40 bg-gray-800/60 text-gray-300 transition hover:border-cyan-500/50 hover:text-cyan-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                : 'sidebar-search-toggle flex min-h-11 w-full items-center gap-2 rounded-lg border bg-gray-800/50 px-3 py-2 text-left text-sm text-gray-300 transition hover:border-cyan-500/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
             }
             aria-expanded={isSearchOpen}
             aria-controls='sidebar-local-search'
@@ -715,7 +753,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                 value={searchQuery}
                 onChange={event => setSearchQuery(event.target.value)}
                 placeholder='搜尋名稱、訊息或檔案…'
-                className='w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
+                className='sidebar-search-input w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
                 aria-label='搜尋本機內容'
               />
               {searchError && (
@@ -741,7 +779,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                   <p className='px-2 text-xs text-gray-500'>找不到符合的本機內容。</p>
                 )}
               {searchResults.length > 0 && (
-                <div className='max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700/60 bg-gray-950/50 p-1'>
+                <div className='sidebar-search-results max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700/60 bg-gray-950/50 p-1'>
                   {searchResults.map(result => (
                     <button
                       type='button'
@@ -752,7 +790,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                         setIsSearchOpen(false);
                         closeDrawerIfMobile();
                       }}
-                      className='w-full rounded-md px-2.5 py-2 text-left transition hover:bg-cyan-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                      className='sidebar-search-result w-full rounded-md px-2.5 py-2 text-left transition hover:bg-cyan-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
                     >
                       <div className='flex items-center gap-2'>
                         <span className='rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200'>
@@ -773,87 +811,17 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           )}
         </div>
 
-        <div className={collapsed ? 'mb-4 flex flex-col items-center gap-2' : 'mb-4 px-3'}>
-          <button
-            type='button'
-            onClick={() => {
-              requestNavigation({ viewMode: 'bundle_import' });
-            }}
-            className={
-              collapsed
-                ? 'flex w-12 h-12 items-center justify-center rounded-xl bg-fuchsia-600/15 text-fuchsia-300 border border-fuchsia-500/30 hover:bg-fuchsia-500/25 hover:text-fuchsia-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60'
-                : 'flex w-full items-center justify-center gap-2 rounded-xl border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-sm font-medium text-fuchsia-100 transition hover:bg-fuchsia-500/20'
-            }
-            title='匯入協作包'
-            aria-label='匯入協作包'
-          >
-            <svg
-              className={collapsed ? 'w-5 h-5' : 'w-4 h-4'}
-              fill='none'
-              stroke='currentColor'
-              viewBox='0 0 24 24'
-              aria-hidden='true'
-            >
-              <path
-                strokeLinecap='round'
-                strokeLinejoin='round'
-                strokeWidth={2}
-                d='M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
-              />
-            </svg>
-            {!collapsed && <span>匯入協作包</span>}
-          </button>
-        </div>
-
-        {state.currentAssistant &&
-          state.currentSession &&
-          !state.currentAssistant.mathToolsEnabled &&
-          !state.currentAssistant.webSpeechToolsEnabled && (
-            <ProjectPicker
-              assistantId={state.currentAssistant.id}
-              activeProjectId={state.activeProjectId}
-              onCreateProject={async () => {
-                await actions.createProjectForCurrentSession();
-                closeDrawerIfMobile();
-              }}
-              onOpenProject={async projectId => {
-                await actions.openProjectForCurrentSession(projectId);
-                closeDrawerIfMobile();
-              }}
-              onRenameProject={actions.renameProjectForCurrentSession}
-              onUploadProjectFiles={actions.uploadFilesToProjectForCurrentSession}
-              onImportProjectZip={async file => {
-                await actions.importProjectZipForCurrentSession(file);
-                closeDrawerIfMobile();
-              }}
-              onDeleteProject={actions.deleteProjectForCurrentSession}
-              variant={collapsed ? 'sidebar-collapsed' : 'sidebar'}
-            />
-          )}
-
         {sessionActionFeedback}
 
-        {/* Session List */}
+        {/* Conversation list */}
         {state.currentAssistant &&
           (collapsed ? (
             <div
-              className='flex-1 overflow-y-auto chat-scroll flex flex-col items-center gap-1.5 py-2'
-              role='navigation'
+              className='chat-scroll flex flex-1 flex-col items-center gap-1.5 overflow-y-auto py-2'
               aria-label='聊天記錄'
             >
               <button
                 type='button'
-                ref={railTokenBtnRef}
-                onClick={toggleRailTokenUsage}
-                className='flex w-11 h-11 items-center justify-center rounded-xl border border-gray-600/30 bg-gray-800/60 text-gray-300 transition-colors hover:border-gray-500/50 hover:bg-gray-700/70 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                title='檢視 token 用量'
-                aria-label='檢視 token 用量'
-                aria-expanded={isTokenUsageOpen}
-                aria-haspopup='dialog'
-              >
-                <span className='text-[10px] font-bold tracking-wide'>TK</span>
-              </button>
-              <button
                 onClick={() => {
                   if (
                     actions.navigate({
@@ -864,29 +832,30 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                     closeDrawerIfMobile();
                   }
                 }}
-                className='flex w-11 h-11 items-center justify-center rounded-xl bg-cyan-600 text-white shadow-lg shadow-cyan-600/25 transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70'
+                className='sidebar-primary-action flex h-11 w-11 items-center justify-center rounded-xl bg-cyan-600 text-white shadow-lg shadow-cyan-600/25 transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70'
                 title='新增聊天'
                 aria-label='新增聊天'
               >
-                <PlusIcon className='w-4 h-4' />
+                <PlusIcon className='h-4 w-4' />
               </button>
-              <div className='w-8 border-t border-gray-700/40 my-1' />
-              <div className='flex flex-col items-center gap-1.5 w-full'>
-                {orderedSessions.map((sess: ChatSession) => {
+              <div className='sidebar-divider my-1 w-8 border-t border-gray-700/40' />
+              <div className='flex w-full flex-col items-center gap-1.5'>
+                {visibleSessions.map((sess: ChatSession) => {
                   const isActive = state.currentSession?.id === sess.id;
                   return (
                     <div key={sess.id} className='relative flex w-full justify-center'>
                       {isActive && (
                         <span
                           aria-hidden='true'
-                          className='absolute left-1 top-1/2 h-6 w-1 -translate-y-1/2 rounded-full bg-cyan-400'
+                          className='sidebar-active-spine absolute left-1 top-1/2 h-6 w-1 -translate-y-1/2 rounded-full bg-cyan-400'
                         />
                       )}
                       <button
+                        type='button'
                         onClick={() => {
                           openSessionFromSidebar(sess.id);
                         }}
-                        className={`flex w-11 h-11 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
+                        className={`sidebar-session-avatar flex h-11 w-11 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
                           isActive
                             ? 'bg-cyan-500 text-white shadow-lg shadow-cyan-500/30 ring-2 ring-cyan-300/50'
                             : 'bg-gray-800/40 text-gray-300 hover:bg-gray-700/60 hover:text-white'
@@ -900,228 +869,399 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                     </div>
                   );
                 })}
+                {orderedSessions.length > visibleSessions.length && (
+                  <button
+                    type='button'
+                    onClick={actions.toggleSidebarCollapse}
+                    className='sidebar-quiet-action flex h-11 w-11 items-center justify-center rounded-xl text-gray-400 transition-colors hover:bg-gray-700/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                    aria-label='展開以查看更多聊天'
+                    title='展開以查看更多聊天'
+                  >
+                    <span aria-hidden='true' className='text-lg leading-none'>
+                      ···
+                    </span>
+                  </button>
+                )}
               </div>
             </div>
           ) : (
-            <div className='flex min-h-0 flex-1 flex-col' role='navigation' aria-label='聊天記錄'>
-              {/* 區段標題 + Token 用量 popover 錨點 */}
-              <div className='relative mb-2 flex items-center justify-between gap-2 px-1'>
-                <h2 className='text-xs font-semibold uppercase tracking-wider text-gray-400'>
-                  聊天記錄
-                </h2>
+            <section className='sidebar-section flex min-h-0 flex-1 flex-col' aria-label='聊天記錄'>
+              <div className='relative mb-2 flex items-center gap-1 px-1'>
+                <button
+                  type='button'
+                  onClick={() => setIsConversationsExpanded(expanded => !expanded)}
+                  className='sidebar-section-toggle flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-left text-sm font-semibold text-gray-300 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                  aria-label='對話'
+                  aria-controls='sidebar-conversation-list'
+                  aria-expanded={isConversationsExpanded}
+                >
+                  <svg
+                    aria-hidden='true'
+                    className={`h-4 w-4 flex-shrink-0 transition-transform ${isConversationsExpanded ? 'rotate-90' : ''}`}
+                    fill='none'
+                    stroke='currentColor'
+                    viewBox='0 0 24 24'
+                  >
+                    <path
+                      d='m9 5 7 7-7 7'
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                      strokeWidth={2}
+                    />
+                  </svg>
+                  <span className='min-w-0 flex-1'>對話</span>
+                  <span className='sidebar-count text-xs font-normal text-gray-500'>
+                    {orderedSessions.length}
+                  </span>
+                </button>
                 <button
                   type='button'
                   ref={expandedTokenBtnRef}
                   onClick={() => setIsTokenUsageOpen(prev => !prev)}
-                  className='inline-flex items-center rounded-md border border-gray-600/40 bg-gray-800/60 px-2 py-1 text-[11px] font-medium text-gray-300 transition-colors hover:border-gray-500/60 hover:bg-gray-700/70 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                  className='sidebar-quiet-action inline-flex h-11 w-11 items-center justify-center rounded-lg text-[10px] font-bold tracking-wide text-gray-400 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
                   aria-expanded={isTokenUsageOpen}
                   aria-haspopup='dialog'
                   aria-label='檢視 token 用量'
                   title='檢視 token 用量'
                 >
-                  Token 用量
+                  TK
                 </button>
                 {isTokenUsageOpen && (
                   <div
                     ref={tokenPopoverRef}
                     role='dialog'
                     aria-label='Token 用量詳細資訊'
-                    className='absolute right-0 top-full z-30 mt-2 w-64 rounded-xl border border-gray-700/60 bg-gray-900 shadow-2xl shadow-black/50'
+                    className='sidebar-popover absolute right-0 top-full z-30 mt-2 w-64 rounded-xl border border-gray-700/60 bg-gray-900 shadow-2xl shadow-black/50'
                   >
                     {tokenUsagePopoverPanel}
                   </div>
                 )}
               </div>
-              <button
-                onClick={() => {
-                  if (
-                    actions.navigate({
-                      viewMode: 'chat',
-                      newSessionAssistantId: state.currentAssistant!.id,
-                    }).allowed
-                  ) {
-                    closeDrawerIfMobile();
-                  }
-                }}
-                className='mb-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-cyan-600 py-2 text-sm font-semibold text-white shadow-lg shadow-cyan-600/25 transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70'
-              >
-                <PlusIcon className='w-4 h-4' />
-                新增聊天
-              </button>
-              <div className='min-h-0 flex-1 space-y-0.5 overflow-y-auto chat-scroll pb-1'>
-                {state.sessions.length === 0 && (
-                  <p className='px-2 py-3 text-xs text-gray-500'>
-                    尚無聊天記錄，點擊上方「新增聊天」開始。
-                  </p>
-                )}
-                {orderedSessions.map((sess: ChatSession) => {
-                  const isActive = state.currentSession?.id === sess.id;
-                  const openSession = () => {
-                    openSessionFromSidebar(sess.id);
-                  };
-                  return (
-                    <div
-                      key={sess.id}
-                      role='button'
-                      tabIndex={0}
-                      aria-current={isActive ? 'true' : undefined}
-                      className={`group relative flex cursor-pointer items-center gap-2 rounded-lg py-2 pl-3 pr-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
-                        isActive
-                          ? 'bg-cyan-500/10 text-white'
-                          : 'text-gray-300 hover:bg-gray-800/60 hover:text-white'
-                      }`}
-                      onClick={openSession}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          openSession();
-                        }
-                      }}
-                    >
-                      {isActive && (
-                        <span
-                          aria-hidden='true'
-                          className='absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-cyan-400'
-                        />
-                      )}
-                      {editingSessionId === sess.id ? (
-                        <input
-                          autoFocus
-                          value={sessionTitleDraft}
-                          onChange={event => setSessionTitleDraft(event.target.value)}
-                          onClick={event => event.stopPropagation()}
-                          onKeyDown={event => {
-                            event.stopPropagation();
-                            if (event.key === 'Enter') {
-                              event.preventDefault();
-                              void commitRenameSession(sess.id);
-                            } else if (event.key === 'Escape') {
-                              event.preventDefault();
-                              setEditingSessionId(null);
-                            }
-                          }}
-                          className='min-w-0 flex-1 rounded border border-cyan-500/60 bg-gray-900 px-2 py-1 text-sm text-white outline-none focus:ring-2 focus:ring-cyan-500/20'
-                          aria-label={`重新命名聊天 ${sess.title}`}
-                        />
-                      ) : (
-                        <span
-                          className={`min-w-0 flex-1 truncate text-sm ${isActive ? 'font-medium' : ''}`}
+              {isConversationsExpanded && (
+                <div className='flex min-h-0 flex-1 flex-col'>
+                  <button
+                    type='button'
+                    onClick={() => {
+                      if (
+                        actions.navigate({
+                          viewMode: 'chat',
+                          newSessionAssistantId: state.currentAssistant!.id,
+                        }).allowed
+                      ) {
+                        closeDrawerIfMobile();
+                      }
+                    }}
+                    className='sidebar-primary-action mb-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-cyan-600 px-3 py-2 text-sm font-semibold text-white shadow-lg shadow-cyan-600/25 transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70'
+                  >
+                    <PlusIcon className='h-4 w-4' />
+                    新增聊天
+                  </button>
+                  <div
+                    id='sidebar-conversation-list'
+                    className='chat-scroll min-h-0 flex-1 space-y-1 overflow-y-auto pb-1'
+                    role='region'
+                    aria-label='對話清單'
+                  >
+                    {orderedSessions.length === 0 && (
+                      <p className='px-2 py-3 text-xs text-gray-500'>
+                        尚無聊天記錄，點擊上方「新增聊天」開始。
+                      </p>
+                    )}
+                    {visibleSessions.map((sess: ChatSession) => {
+                      const isActive = state.currentSession?.id === sess.id;
+                      const isMenuOpen = openSessionMenuId === sess.id;
+                      return (
+                        <div
+                          key={sess.id}
+                          className={`session-row group relative flex items-center gap-1 rounded-lg ${
+                            isActive ? 'session-row--active bg-cyan-500/10' : ''
+                          }`}
                         >
-                          {sess.title}
-                        </span>
-                      )}
+                          {isActive && (
+                            <span
+                              aria-hidden='true'
+                              className='sidebar-active-spine absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-cyan-400'
+                            />
+                          )}
+                          {editingSessionId === sess.id ? (
+                            <input
+                              autoFocus
+                              value={sessionTitleDraft}
+                              onChange={event => setSessionTitleDraft(event.target.value)}
+                              onKeyDown={event => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  commitRenameSession(sess.id);
+                                } else if (event.key === 'Escape') {
+                                  event.preventDefault();
+                                  setEditingSessionId(null);
+                                }
+                              }}
+                              className='session-row__rename ml-2 min-h-10 min-w-0 flex-1 rounded-lg border border-cyan-500/60 bg-gray-900 px-2 text-sm text-white outline-none focus:ring-2 focus:ring-cyan-500/20'
+                              aria-label={`重新命名聊天 ${sess.title}`}
+                            />
+                          ) : (
+                            <button
+                              ref={isMenuOpen ? sessionMenuTriggerRef : undefined}
+                              type='button'
+                              onClick={() => openSessionFromSidebar(sess.id)}
+                              className={`session-row__open flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg py-2 pl-3 pr-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
+                                isActive
+                                  ? 'font-medium text-white'
+                                  : 'text-gray-300 hover:bg-gray-800/60 hover:text-white'
+                              }`}
+                              aria-current={isActive ? 'page' : undefined}
+                              aria-label={`開啟聊天 ${sess.title}`}
+                            >
+                              <ChatIcon className='h-4 w-4 flex-shrink-0' />
+                              <span className='min-w-0 flex-1 truncate text-sm'>{sess.title}</span>
+                              <span
+                                aria-hidden='true'
+                                className='flex-shrink-0 text-[11px] tabular-nums text-gray-500'
+                              >
+                                {formatRelativeTime(
+                                  sess.lastOpenedAt ?? sess.updatedAt ?? sess.createdAt,
+                                )}
+                              </span>
+                            </button>
+                          )}
+                          <div className='relative flex-shrink-0'>
+                            <button
+                              type='button'
+                              data-session-menu-trigger={sess.id}
+                              onClick={() =>
+                                setOpenSessionMenuId(current =>
+                                  current === sess.id ? null : sess.id,
+                                )
+                              }
+                              className='session-row__menu-trigger flex h-11 w-9 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-700/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                              aria-label={`對話選項 ${sess.title}`}
+                              aria-expanded={isMenuOpen}
+                              aria-haspopup='true'
+                              title='對話選項'
+                            >
+                              <span aria-hidden='true' className='text-lg leading-none'>
+                                ···
+                              </span>
+                            </button>
+                            {isMenuOpen && (
+                              <div
+                                ref={sessionMenuRef}
+                                aria-label={`管理對話 ${sess.title}`}
+                                className='session-menu absolute right-0 top-full z-40 mt-1 w-52 rounded-xl border border-gray-700/60 bg-gray-900 p-1.5 shadow-2xl shadow-black/40'
+                              >
+                                <button
+                                  type='button'
+                                  onClick={() => {
+                                    setOpenSessionMenuId(null);
+                                    runSessionAction(() => actions.toggleSessionPinned(sess.id));
+                                  }}
+                                  className='session-menu__item flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-gray-200 transition-colors hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                                  aria-label={
+                                    sess.isPinned ? `取消置頂 ${sess.title}` : `置頂 ${sess.title}`
+                                  }
+                                >
+                                  <span aria-hidden='true'>{sess.isPinned ? '★' : '☆'}</span>
+                                  <span>{sess.isPinned ? '取消置頂' : '置頂聊天'}</span>
+                                </button>
+                                <button
+                                  type='button'
+                                  onClick={() => {
+                                    setOpenSessionMenuId(null);
+                                    beginRenameSession(sess);
+                                  }}
+                                  className='session-menu__item flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-gray-200 transition-colors hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                                  aria-label={`重新命名聊天 ${sess.title}`}
+                                >
+                                  <span aria-hidden='true'>✎</span>
+                                  <span>重新命名</span>
+                                </button>
+                                <label className='session-menu__field block px-3 py-2 text-xs text-gray-400'>
+                                  <span>分類</span>
+                                  <select
+                                    value={sess.category ?? ''}
+                                    onChange={event =>
+                                      runSessionAction(() =>
+                                        actions.setSessionCategory(sess.id, event.target.value),
+                                      )
+                                    }
+                                    className='mt-1 min-h-10 w-full rounded-lg border border-gray-700/60 bg-gray-950 px-2 text-sm text-gray-200 outline-none focus:border-cyan-500/60'
+                                    aria-label={`設定聊天分類 ${sess.title}`}
+                                  >
+                                    <option value=''>未分類</option>
+                                    {sess.category &&
+                                      !['課程', '研究', '工作', '其他'].includes(sess.category) && (
+                                        <option value={sess.category}>{sess.category}</option>
+                                      )}
+                                    <option value='課程'>課程</option>
+                                    <option value='研究'>研究</option>
+                                    <option value='工作'>工作</option>
+                                    <option value='其他'>其他</option>
+                                  </select>
+                                </label>
+                                <div className='sidebar-divider my-1 border-t border-gray-700/60' />
+                                <button
+                                  type='button'
+                                  onClick={() => {
+                                    setOpenSessionMenuId(null);
+                                    runSessionAction(() => actions.deleteSession(sess.id));
+                                  }}
+                                  className='session-menu__item session-menu__item--danger flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-red-300 transition-colors hover:bg-red-500/15 hover:text-red-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60'
+                                  aria-label={`刪除聊天 ${sess.title}`}
+                                >
+                                  <TrashIcon className='h-4 w-4' />
+                                  <span>刪除聊天</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {orderedSessions.length > 6 && (
                       <button
                         type='button'
-                        onClick={event => {
-                          event.stopPropagation();
-                          runSessionAction(() => actions.toggleSessionPinned(sess.id));
-                        }}
-                        className={`flex-shrink-0 rounded p-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
-                          sess.isPinned ? 'text-amber-300' : 'text-gray-600 hover:text-gray-300'
-                        }`}
-                        aria-label={sess.isPinned ? `取消置頂 ${sess.title}` : `置頂 ${sess.title}`}
-                        aria-pressed={Boolean(sess.isPinned)}
-                        title={sess.isPinned ? '取消置頂' : '置頂聊天'}
+                        onClick={() => setShowAllSessions(show => !show)}
+                        className='sidebar-show-all mt-1 flex min-h-11 w-full items-center justify-center rounded-lg px-3 text-sm font-medium text-gray-400 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                        aria-label={
+                          showAllSessions
+                            ? '僅顯示近期 6 個對話'
+                            : `顯示全部 ${orderedSessions.length} 個對話`
+                        }
                       >
-                        ★
+                        {showAllSessions
+                          ? '收起較早對話'
+                          : `顯示全部 ${orderedSessions.length} 個對話`}
                       </button>
-                      {editingSessionId !== sess.id && (
-                        <button
-                          type='button'
-                          onClick={event => {
-                            event.stopPropagation();
-                            beginRenameSession(sess);
-                          }}
-                          className='flex-shrink-0 rounded p-1 text-xs text-gray-600 transition-colors hover:text-cyan-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                          aria-label={`重新命名聊天 ${sess.title}`}
-                          title='重新命名聊天'
-                        >
-                          ✎
-                        </button>
-                      )}
-                      <select
-                        value={sess.category ?? ''}
-                        onChange={event => {
-                          event.stopPropagation();
-                          runSessionAction(() =>
-                            actions.setSessionCategory(sess.id, event.target.value),
-                          );
-                        }}
-                        onClick={event => event.stopPropagation()}
-                        className='max-w-[4.5rem] rounded border border-gray-700/60 bg-gray-900/70 px-1 py-1 text-[10px] text-gray-400 outline-none focus:border-cyan-500/60'
-                        aria-label={`設定聊天分類 ${sess.title}`}
-                      >
-                        <option value=''>分類</option>
-                        {sess.category &&
-                          !['課程', '研究', '工作', '其他'].includes(sess.category) && (
-                            <option value={sess.category}>{sess.category}</option>
-                          )}
-                        <option value='課程'>課程</option>
-                        <option value='研究'>研究</option>
-                        <option value='工作'>工作</option>
-                        <option value='其他'>其他</option>
-                      </select>
-                      <span className='flex-shrink-0 text-[11px] tabular-nums text-gray-500'>
-                        {formatRelativeTime(sess.lastOpenedAt ?? sess.updatedAt ?? sess.createdAt)}
-                      </span>
-                      <button
-                        onClick={e => {
-                          e.stopPropagation();
-                          actions.deleteSession(sess.id);
-                        }}
-                        className={`${
-                          isTouch
-                            ? 'opacity-100'
-                            : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100'
-                        } pointer-coarse:opacity-100 flex-shrink-0 rounded-md p-1.5 text-gray-500 transition-all duration-200 hover:bg-red-500/15 hover:text-red-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60`}
-                        title='刪除聊天'
-                        aria-label={`刪除聊天 ${sess.title}`}
-                      >
-                        <TrashIcon className='w-4 h-4' />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
           ))}
 
-        {/* Settings */}
-        <div className='mt-auto pt-3'>
-          {(
-            [
-              ['practice', '備課與練習', '習'],
-              ['data_management', '資料管理', '存'],
-            ] as const
-          ).map(([viewMode, label, abbreviation]) => (
+        {!collapsed && (
+          <section className='sidebar-section sidebar-workspace mt-2 border-t border-gray-700/50 pt-2'>
             <button
-              key={viewMode}
               type='button'
-              onClick={() => requestNavigation({ viewMode })}
-              className={`ui-control mb-1 flex min-h-11 items-center gap-2 rounded-lg px-2 py-2 text-sm ${
-                collapsed ? 'mx-auto w-11 justify-center' : 'w-full'
-              }`}
-              title={label}
-              aria-label={label}
-              aria-current={state.viewMode === viewMode ? 'page' : undefined}
+              onClick={() => setIsWorkspaceExpanded(expanded => !expanded)}
+              className='sidebar-section-toggle flex min-h-11 w-full items-center gap-2 rounded-lg px-2 text-left text-sm font-semibold text-gray-300 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+              aria-label='工作區'
+              aria-controls='sidebar-workspace-tools'
+              aria-expanded={isWorkspaceExpanded}
             >
-              <span aria-hidden='true' className='text-xs'>
-                {abbreviation}
-              </span>
-              {!collapsed && <span>{label}</span>}
+              <svg
+                aria-hidden='true'
+                className={`h-4 w-4 flex-shrink-0 transition-transform ${isWorkspaceExpanded ? 'rotate-90' : ''}`}
+                fill='none'
+                stroke='currentColor'
+                viewBox='0 0 24 24'
+              >
+                <path
+                  d='m9 5 7 7-7 7'
+                  strokeLinecap='round'
+                  strokeLinejoin='round'
+                  strokeWidth={2}
+                />
+              </svg>
+              <span>工作區</span>
             </button>
-          ))}
+
+            {isWorkspaceExpanded && (
+              <div
+                id='sidebar-workspace-tools'
+                className='mt-1 space-y-1'
+                role='region'
+                aria-label='工作區工具'
+              >
+                {state.currentAssistant &&
+                  state.currentSession &&
+                  !state.currentAssistant.mathToolsEnabled &&
+                  !state.currentAssistant.webSpeechToolsEnabled && (
+                    <ProjectPicker
+                      assistantId={state.currentAssistant.id}
+                      activeProjectId={state.activeProjectId}
+                      onCreateProject={async () => {
+                        await actions.createProjectForCurrentSession();
+                        closeDrawerIfMobile();
+                      }}
+                      onOpenProject={async projectId => {
+                        await actions.openProjectForCurrentSession(projectId);
+                        closeDrawerIfMobile();
+                      }}
+                      onRenameProject={actions.renameProjectForCurrentSession}
+                      onUploadProjectFiles={actions.uploadFilesToProjectForCurrentSession}
+                      onImportProjectZip={async file => {
+                        await actions.importProjectZipForCurrentSession(file);
+                        closeDrawerIfMobile();
+                      }}
+                      onDeleteProject={actions.deleteProjectForCurrentSession}
+                      variant='sidebar'
+                    />
+                  )}
+                {(
+                  [
+                    ['practice', '備課與練習', '習'],
+                    ['data_management', '資料管理', '存'],
+                  ] as const
+                ).map(([viewMode, label, abbreviation]) => (
+                  <button
+                    key={viewMode}
+                    type='button'
+                    onClick={() => requestNavigation({ viewMode })}
+                    className='ui-control sidebar-tool-link flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-sm'
+                    title={label}
+                    aria-label={label}
+                    aria-current={state.viewMode === viewMode ? 'page' : undefined}
+                  >
+                    <span aria-hidden='true' className='text-xs font-semibold'>
+                      {abbreviation}
+                    </span>
+                    <span>{label}</span>
+                  </button>
+                ))}
+                <button
+                  type='button'
+                  onClick={() => requestNavigation({ viewMode: 'bundle_import' })}
+                  className='sidebar-tool-link flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                  title='匯入協作包'
+                  aria-label='匯入協作包'
+                >
+                  <svg
+                    className='h-4 w-4'
+                    fill='none'
+                    stroke='currentColor'
+                    viewBox='0 0 24 24'
+                    aria-hidden='true'
+                  >
+                    <path
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                      strokeWidth={2}
+                      d='M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
+                    />
+                  </svg>
+                  <span>匯入協作包</span>
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Settings stays persistent while secondary tools remain grouped above. */}
+        <div className='mt-auto pt-2'>
           <div
             className={`border-t border-gray-700/50 pt-2.5 ${collapsed ? 'flex justify-center' : ''}`}
           >
             <button
+              type='button'
               onClick={() => {
                 requestNavigation({ viewMode: 'settings' });
               }}
               className={
                 collapsed
-                  ? 'flex w-11 h-11 items-center justify-center text-gray-400 hover:text-white rounded-lg hover:bg-gray-700/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                  : 'flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-gray-400 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                  ? 'sidebar-settings flex w-11 h-11 items-center justify-center text-gray-400 hover:text-white rounded-lg hover:bg-gray-700/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                  : 'sidebar-settings flex min-h-11 w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-gray-400 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
               }
               title='設定'
               aria-label='設定'
@@ -1133,24 +1273,11 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
         </div>
       </div>
 
-      {/* 收折 rail 的 token 用量 popover：開在 rail 右側（sidebar overflow-hidden，故置於其外） */}
-      {collapsed && isTokenUsageOpen && (
-        <div
-          ref={tokenPopoverRef}
-          role='dialog'
-          aria-label='Token 用量詳細資訊'
-          style={{ top: railPopoverTop }}
-          className='fixed left-[5.5rem] z-[60] w-72 rounded-xl border border-gray-700/60 bg-gray-900 shadow-2xl shadow-black/50'
-        >
-          {tokenUsagePopoverPanel}
-        </div>
-      )}
-
       {collapsed && isSearchOpen && (
         <div
           id='sidebar-local-search'
           data-testid='navigation-search-results'
-          className='fixed left-[5.5rem] top-4 z-[60] w-80 rounded-xl border border-gray-700/60 bg-gray-900 p-3 shadow-2xl shadow-black/50'
+          className='sidebar-search-popover fixed left-[5.5rem] top-4 z-[60] w-80 rounded-xl border border-gray-700/60 bg-gray-900 p-3 shadow-2xl shadow-black/50'
         >
           <input
             type='search'
@@ -1158,7 +1285,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             value={searchQuery}
             onChange={event => setSearchQuery(event.target.value)}
             placeholder='搜尋名稱、訊息或檔案…'
-            className='w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
+            className='sidebar-search-input w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
             aria-label='搜尋本機內容'
           />
           {searchError && (
@@ -1181,7 +1308,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             <p className='mt-2 px-2 text-xs text-gray-500'>找不到符合的本機內容。</p>
           )}
           {searchResults.length > 0 && (
-            <div className='mt-2 max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700/60 bg-gray-950/50 p-1'>
+            <div className='sidebar-search-results mt-2 max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700/60 bg-gray-950/50 p-1'>
               {searchResults.map(result => (
                 <button
                   type='button'
@@ -1191,7 +1318,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                     setSearchQuery('');
                     setIsSearchOpen(false);
                   }}
-                  className='w-full rounded-md px-2.5 py-2 text-left transition hover:bg-cyan-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                  className='sidebar-search-result w-full rounded-md px-2.5 py-2 text-left transition hover:bg-cyan-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
                 >
                   <div className='flex items-center gap-2'>
                     <span className='rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200'>
@@ -1213,7 +1340,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
 
       {/* Main Content */}
       <main
-        className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-gray-800 to-gray-900 backdrop-blur-sm transition-all duration-300 ease-in-out ${mainOffset}`}
+        className={`app-main relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-gray-800 to-gray-900 backdrop-blur-sm transition-all duration-300 ease-in-out ${mainOffset}`}
         aria-hidden={isTouch && state.isSidebarOpen}
         inert={isTouch && state.isSidebarOpen}
       >

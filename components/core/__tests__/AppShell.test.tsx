@@ -413,11 +413,20 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+const expandWorkspaceTools = async (): Promise<void> => {
+  const workspaceToggle = await screen.findByRole('button', { name: '工作區' });
+  if (workspaceToggle.getAttribute('aria-expanded') !== 'true') {
+    fireEvent.click(workspaceToggle);
+  }
+  await waitFor(() => expect(workspaceToggle).toHaveAttribute('aria-expanded', 'true'));
+};
+
 describe('AppShell', () => {
   describe('Local workspace navigation', () => {
     it('opens backup management without showing the empty assistant prompt', async () => {
       render(<AppShell />);
       await screen.findByTestId('assistant-editor');
+      await expandWorkspaceTools();
       fireEvent.click(screen.getByRole('button', { name: '資料管理' }));
       expect(await screen.findByTestId('workspace-data-management')).toBeInTheDocument();
       expect(screen.queryByText('新增您的第一個助理')).not.toBeInTheDocument();
@@ -431,6 +440,7 @@ describe('AppShell', () => {
     it('opens offline practice from an otherwise empty local workspace', async () => {
       render(<AppShell />);
       await screen.findByTestId('assistant-editor');
+      await expandWorkspaceTools();
       fireEvent.click(screen.getByRole('button', { name: '備課與練習' }));
       expect(await screen.findByTestId('practice-workspace')).toBeInTheDocument();
       expect(screen.queryByText('新增您的第一個助理')).not.toBeInTheDocument();
@@ -713,6 +723,8 @@ describe('AppShell', () => {
 
       render(<AppShell />);
 
+      await expandWorkspaceTools();
+
       const openPickerButton = await screen.findByRole('button', {
         name: 'HTML Projects',
       });
@@ -759,6 +771,8 @@ describe('AppShell', () => {
       } as never);
 
       render(<AppShell />);
+
+      await expandWorkspaceTools();
 
       const openPickerButton = await screen.findByRole('button', {
         name: 'HTML Projects',
@@ -852,6 +866,8 @@ describe('AppShell', () => {
       await waitFor(() => {
         expect(screen.getByText('Workspace: project-42')).toBeInTheDocument();
       });
+
+      await expandWorkspaceTools();
 
       const managerButton = screen.getByRole('button', { name: 'HTML Projects' });
       expect(managerButton).toBeInTheDocument();
@@ -1027,9 +1043,10 @@ describe('AppShell', () => {
         expect(screen.getByText('Workspace: project-42')).toBeInTheDocument();
       });
 
-      await act(async () => {
-        fireEvent.click(screen.getByTitle('刪除聊天'));
-      });
+      fireEvent.click(screen.getByRole('button', { name: `對話選項 ${projectSession.title}` }));
+      fireEvent.click(
+        await screen.findByRole('button', { name: `刪除聊天 ${projectSession.title}` }),
+      );
 
       await waitFor(() => {
         expect(dbMock.deleteSession).toHaveBeenCalledWith(projectSession.id);
@@ -1040,8 +1057,10 @@ describe('AppShell', () => {
             assistantId: TEST_ASSISTANTS.basic.id,
           }),
         );
-        expect(screen.getByTestId('html-project-picker')).toBeInTheDocument();
       });
+
+      await expandWorkspaceTools();
+      expect(screen.getByTestId('html-project-picker')).toBeInTheDocument();
 
       expect(
         htmlProjectStoreMock.htmlProjectStore.deleteProjectsByAssistant,
@@ -1108,6 +1127,8 @@ describe('AppShell', () => {
       await waitFor(() => {
         expect(screen.getByText('Workspace: project-42')).toBeInTheDocument();
       });
+
+      await expandWorkspaceTools();
 
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'HTML Projects' }));
