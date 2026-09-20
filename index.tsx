@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { initializeOffline } from './services/offlineService';
 import { ErrorBoundary } from './components/core';
 import {
   applyAppearancePreferences,
@@ -11,6 +12,7 @@ import {
 // palette or reading scale. The preview iframe has its own document and is intentionally
 // unaffected by these root attributes.
 applyAppearancePreferences(loadAppearancePreferences());
+void initializeOffline();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

@@ -4,12 +4,13 @@ import tailwindcss from '@tailwindcss/vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { defineConfig } from 'vite';
 import { visualizer } from 'rollup-plugin-visualizer';
+import { offlineBuildPlugin } from './scripts/offlineBuildPlugin';
 
 export default defineConfig(() => {
   const useHttps = process.env.VITE_DEV_HTTPS === 'true';
 
   return {
-    plugins: [tailwindcss(), ...(useHttps ? [basicSsl()] : [])],
+    plugins: [tailwindcss(), ...(useHttps ? [basicSsl()] : []), offlineBuildPlugin()],
     test: {
       globals: true,
       deps: {

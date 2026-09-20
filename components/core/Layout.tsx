@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppContext } from './useAppContext';
+import { OfflineStatusBanner } from './OfflineStatusBanner';
 import { AssistantList } from '../assistant';
 import { ProjectPicker } from '../canvas';
 import { ChatIcon, TrashIcon, SettingsIcon, PlusIcon } from '../ui/Icons';
@@ -1189,6 +1190,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
         aria-hidden={isTouch && state.isSidebarOpen}
         inert={isTouch && state.isSidebarOpen}
       >
+        <OfflineStatusBanner />
         {/* Top Bar with Hamburger Menu */}
         {(state.isMobile || state.isTablet) && !state.isSidebarOpen && (
           <div className='flex items-center justify-between gap-3 border-b border-gray-700/50 bg-gray-800/80 px-4 py-3 backdrop-blur-sm'>
