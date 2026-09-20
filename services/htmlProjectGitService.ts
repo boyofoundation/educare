@@ -16,6 +16,11 @@
  * 人工修復方式:把 ref 寫回最近一個有效 commit oid。
  */
 import type { HtmlProjectFileKind } from '../types';
+import {
+  isWorkspaceOperationTokenActive,
+  type WorkspaceOperationToken,
+  withWorkspaceWrite,
+} from './workspaceOperationService';
 
 // --- 動態 import 型別 (避免把 isomorphic-git/lightning-fs 拉入靜態依賴圖) ---
 type FsInstance = {
@@ -45,6 +50,25 @@ function toBytes(content: Uint8Array | void): Uint8Array {
 }
 
 type GitModule = typeof import('isomorphic-git');
+
+export interface WorkspaceWriteOptions {
+  /** Opaque capability issued by the active workspace archive operation. */
+  operationToken?: WorkspaceOperationToken;
+}
+
+const withWorkspaceWriteIfNeeded = <T>(
+  options: WorkspaceWriteOptions | undefined,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  const operationToken = options?.operationToken;
+  if (operationToken !== undefined) {
+    if (!isWorkspaceOperationTokenActive(operationToken)) {
+      throw new Error('Workspace operation token is no longer active.');
+    }
+    return operation();
+  }
+  return withWorkspaceWrite(operation);
+};
 
 const HTML_FS_NAME = 'educare-html-projects-fs';
 const PROJECTS_ROOT = '/projects';
@@ -117,9 +141,15 @@ export function __setFsInstanceForTesting(fs: FsInstance | null): void {
  * user-visible save/migration boundary must await this explicitly before a
  * reload can observe the complete tree.
  */
-export async function flush(): Promise<void> {
+/** Raw flush for callers that already hold the workspace write gate. */
+export async function flushUnsafe(): Promise<void> {
   const fs = await getFs();
   await fs.promises.flush();
+}
+
+/** Flush the LightningFS superblock, validating archive capabilities when supplied. */
+export async function flush(options: WorkspaceWriteOptions = {}): Promise<void> {
+  await withWorkspaceWriteIfNeeded(options, flushUnsafe);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -267,6 +297,8 @@ export interface GitCommitSummary {
 }
 
 export interface CommitAllOptions {
+  /** Opaque capability issued by the active workspace archive operation. */
+  operationToken?: WorkspaceOperationToken;
   /** 當下 previewVersion,附為 Preview-Version trailer。 */
   previewVersion?: number;
   /** 是否為 snapshot commit (createSnapshot 呼叫點)。 */
@@ -303,9 +335,17 @@ async function ensureContext(projectId: string) {
   return { fs, promises, git, dir, gitdir };
 }
 
-/** 確保 repo 存在 (公開入口,供 store createProject 呼叫)。 */
-export async function ensureRepo(projectId: string): Promise<void> {
+/** Raw repo initialization for callers that already hold the workspace gate. */
+export async function ensureRepoUnsafe(projectId: string): Promise<void> {
   await ensureContext(projectId);
+}
+
+/** 確保 repo 存在 (公開入口,供 store createProject 呼叫)。 */
+export async function ensureRepo(
+  projectId: string,
+  options: WorkspaceWriteOptions = {},
+): Promise<void> {
+  await withWorkspaceWriteIfNeeded(options, () => ensureRepoUnsafe(projectId));
 }
 
 /**
@@ -358,7 +398,8 @@ async function hasCommits(
  * - 無變更時:allowEmpty=false 回傳 null;allowEmpty=true 以 HEAD tree 建立 commit (run-start 語意)。
  * - unborn HEAD: 全部工作樹檔案視為 added,建立 root commit。
  */
-export async function commitAll(
+/** Raw commit path for store operations that already hold the workspace gate. */
+export async function commitAllUnsafe(
   projectId: string,
   message: string,
   options: CommitAllOptions = {},
@@ -446,6 +487,14 @@ export async function commitAll(
   });
   await promises.flush();
   return oid;
+}
+
+export async function commitAll(
+  projectId: string,
+  message: string,
+  options: CommitAllOptions = {},
+): Promise<string | null> {
+  return withWorkspaceWriteIfNeeded(options, () => commitAllUnsafe(projectId, message, options));
 }
 
 /** 收集 commit tree 的 path → blob oid (供 content-based 變更比對;排除 .git/.educare)。 */
@@ -600,7 +649,8 @@ export async function resolveVersion(
  * - 刪除工作樹中不在該 tree 的多餘檔案。
  * - 不動 HEAD ref / 不建立新 commit (revert 由 store 層於寫回後再 commitAll)。
  */
-export async function restoreCommitTree(
+/** Raw restore path for store operations that already hold the workspace gate. */
+export async function restoreCommitTreeUnsafe(
   projectId: string,
   oid: string,
 ): Promise<{ filesRestored: number }> {
@@ -659,6 +709,57 @@ export async function restoreCommitTree(
   // 使用者可見檔案數 (排除 .educare/.git)
   const filesRestored = Array.from(targetFiles).filter(f => !isReservedPath(f)).length;
   return { filesRestored };
+}
+
+export async function restoreCommitTree(
+  projectId: string,
+  oid: string,
+  options: WorkspaceWriteOptions = {},
+): Promise<{ filesRestored: number }> {
+  return withWorkspaceWriteIfNeeded(options, () => restoreCommitTreeUnsafe(projectId, oid));
+}
+
+export interface HtmlProjectGitTreeFile {
+  /** Relative path from the commit tree root (includes `.educare` metadata). */
+  path: string;
+  data: Uint8Array;
+}
+
+/**
+ * Read every blob from a commit tree without changing the working tree.  The
+ * migration verifier uses this to compare every legacy snapshot byte and its
+ * generated metadata before removing the legacy IndexedDB records.
+ */
+export async function readCommitTree(
+  projectId: string,
+  oid: string,
+): Promise<HtmlProjectGitTreeFile[]> {
+  const { fs, git, dir, gitdir } = await ensureContext(projectId);
+  try {
+    await git.readCommit({ fs: fs as AnyFs, dir, gitdir, oid });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cannot read commit ${oid} (object missing or corrupt): ${message}`);
+  }
+
+  const files: HtmlProjectGitTreeFile[] = [];
+  await git.walk({
+    fs: fs as AnyFs,
+    dir,
+    gitdir,
+    trees: [git.TREE({ ref: oid })],
+    map: async (filepath, [entry]) => {
+      if (!entry || isGitInternalPath(filepath)) {
+        return undefined;
+      }
+      if ((await entry.type()) !== 'blob') {
+        return undefined;
+      }
+      files.push({ path: filepath, data: toBytes(await entry.content()) });
+      return undefined;
+    },
+  });
+  return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 /** 列舉工作樹所有檔案 (含 .educare,排除 .git) — restore 用。 */
@@ -921,15 +1022,25 @@ export async function listBranches(projectId: string): Promise<string[]> {
   return git.listBranches({ fs: fs as AnyFs, dir, gitdir });
 }
 
-export async function createBranch(projectId: string, ref: string): Promise<void> {
+/** Raw branch creation for callers that already hold the workspace gate. */
+export async function createBranchUnsafe(projectId: string, ref: string): Promise<void> {
   const { fs, git, dir, gitdir } = await ensureContext(projectId);
   await git.branch({ fs: fs as AnyFs, dir, gitdir, ref, checkout: false });
+}
+
+export async function createBranch(
+  projectId: string,
+  ref: string,
+  options: WorkspaceWriteOptions = {},
+): Promise<void> {
+  await withWorkspaceWriteIfNeeded(options, () => createBranchUnsafe(projectId, ref));
 }
 
 /**
  * 切換分支。switch 前檢查 working tree clean,dirty 時拋錯要求先 commit (D 風險表)。
  */
-export async function switchBranch(projectId: string, ref: string): Promise<void> {
+/** Raw branch switching for callers that already hold the workspace gate. */
+export async function switchBranchUnsafe(projectId: string, ref: string): Promise<void> {
   const current = await status(projectId);
   if (!current.clean) {
     throw new Error(
@@ -940,14 +1051,407 @@ export async function switchBranch(projectId: string, ref: string): Promise<void
   await git.checkout({ fs: fs as AnyFs, dir, gitdir, ref });
 }
 
+export async function switchBranch(
+  projectId: string,
+  ref: string,
+  options: WorkspaceWriteOptions = {},
+): Promise<void> {
+  await withWorkspaceWriteIfNeeded(options, () => switchBranchUnsafe(projectId, ref));
+}
+
 export async function currentBranch(projectId: string): Promise<string | null> {
   const { fs, git, dir, gitdir } = await ensureContext(projectId);
   const branch = await git.currentBranch({ fs: fs as AnyFs, dir, gitdir, fullname: false });
   return branch ?? null;
 }
 
+/**
+ * Versioned raw repository payload used by the workspace archive layer.
+ *
+ * The entries intentionally include `.git` and `.educare` rather than only
+ * user-visible files.  Copying the repository bytes (instead of rebuilding a
+ * commit from the working tree) preserves object ids, parent links, branches,
+ * the index, uncommitted files, and the metadata sidecar exactly.
+ */
+export interface HtmlProjectGitArchiveEntry {
+  /** Relative path below `/projects/<projectId>` (never starts with `/`). */
+  path: string;
+  data: Uint8Array;
+}
+
+export interface HtmlProjectGitArchive {
+  schemaVersion: 1;
+  /** Source project id. Import may copy this archive under another id. */
+  projectId: string;
+  entries: HtmlProjectGitArchiveEntry[];
+  currentBranch: string | null;
+  headOid: string | null;
+  byteCount: number;
+}
+
+export interface ImportHtmlProjectGitArchiveOptions {
+  /** Reserved for an explicit future overwrite flow; overwrite is forbidden now. */
+  overwrite?: false;
+  /** Opaque capability issued by the active workspace archive operation. */
+  operationToken?: WorkspaceOperationToken;
+}
+
+export interface ImportHtmlProjectGitArchiveResult {
+  projectId: string;
+  filesImported: number;
+  bytesImported: number;
+  currentBranch: string | null;
+  headOid: string | null;
+}
+
+const ARCHIVE_PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const MAX_ARCHIVE_ENTRY_COUNT = 5_000;
+const MAX_ARCHIVE_BYTE_COUNT = 50 * 1024 * 1024;
+
+function validateArchiveProjectId(projectId: string): void {
+  if (!ARCHIVE_PROJECT_ID_PATTERN.test(projectId)) {
+    throw new Error(
+      `Project id is not safe for repository archive: ${projectId}. Expected only letters, digits, dot, underscore, and hyphen.`,
+    );
+  }
+}
+
+/**
+ * Serialize imports for one project inside this runtime.  The Web Locks path
+ * extends the same guarantee across browser contexts; the in-memory queue is
+ * still needed for test environments and runtimes without navigator.locks.
+ */
+const repositoryImportLocks = new Map<string, Promise<void>>();
+
+async function withRepositoryImportLock<T>(
+  projectId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const runInProcessLock = async (): Promise<T> => {
+    const previous = repositoryImportLocks.get(projectId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const queued = previous.then(() => current);
+    repositoryImportLocks.set(projectId, queued);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (repositoryImportLocks.get(projectId) === queued) {
+        repositoryImportLocks.delete(projectId);
+      }
+    }
+  };
+
+  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+    return navigator.locks.request(
+      `educare-html-project-repository-import:${projectId}`,
+      runInProcessLock,
+    );
+  }
+  return runInProcessLock();
+}
+
+/**
+ * Validate a raw repository entry before any destination write.  A ZIP layer
+ * performs its own archive validation, but this boundary must remain safe when
+ * called directly (and when a future importer uses a different container).
+ */
+function validateArchiveEntryPath(filepath: unknown): asserts filepath is string {
+  if (typeof filepath !== 'string' || filepath.length === 0) {
+    throw new Error('Repository archive entry path is required.');
+  }
+  if (
+    Array.from(filepath).some(character => {
+      const code = character.charCodeAt(0);
+      return code <= 31 || code === 127;
+    })
+  ) {
+    throw new Error(`Repository archive entry path contains a control character: ${filepath}`);
+  }
+  if (
+    filepath.startsWith('/') ||
+    filepath.includes('\\') ||
+    filepath.includes('\u0000') ||
+    filepath.split('/').some(segment => !segment || segment === '.' || segment === '..')
+  ) {
+    throw new Error(`Repository archive entry path is unsafe: ${filepath}`);
+  }
+}
+
+async function listRepositoryFiles(
+  promises: FsInstance['promises'],
+  base: string,
+  relative = '',
+): Promise<string[]> {
+  const entries = await promises.readdir(base);
+  const results: string[] = [];
+  for (const entry of entries) {
+    const rel = relative ? `${relative}/${entry}` : entry;
+    const absolute = `${base}/${entry}`;
+    const stat = await promises.stat(absolute);
+    if (stat.isDirectory()) {
+      results.push(...(await listRepositoryFiles(promises, absolute, rel)));
+    } else {
+      results.push(rel);
+    }
+  }
+  return results.sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Export the complete raw LightningFS repository for a project.
+ *
+ * This is deliberately a byte-level export.  In particular, it does not use
+ * `log()`/`restoreCommitTree()` and does not synthesize a replacement commit;
+ * the archive therefore retains all object ids, parent links, refs/branches,
+ * the index, metadata, binary assets, and any uncommitted working-tree files.
+ */
+/** Raw repository export for callers that already hold the workspace gate. */
+export async function exportProjectRepositoryUnsafe(
+  projectId: string,
+): Promise<HtmlProjectGitArchive> {
+  validateArchiveProjectId(projectId);
+  const fs = await getFs();
+  const promises = fs.promises;
+  const git = await getGit();
+  const dir = dirFor(projectId);
+  const gitdir = gitdirFor(projectId);
+  if (!(await pathExists(promises, dir)) || !(await pathExists(promises, gitdir))) {
+    throw new Error(`Project repository ${projectId} does not exist; export cannot initialize it.`);
+  }
+  const paths = await listRepositoryFiles(promises, dir);
+  const entries: HtmlProjectGitArchiveEntry[] = [];
+  let byteCount = 0;
+  for (const filepath of paths) {
+    const data = new Uint8Array(await promises.readFile(`${dir}/${filepath}`));
+    entries.push({ path: filepath, data });
+    byteCount += data.byteLength;
+  }
+
+  const born = await hasCommits(git, fs, dir, gitdir);
+  const branch = await git.currentBranch({
+    fs: fs as AnyFs,
+    dir,
+    gitdir,
+    fullname: false,
+  });
+  const headOid = born ? await git.resolveRef({ fs: fs as AnyFs, dir, gitdir, ref: 'HEAD' }) : null;
+
+  return {
+    schemaVersion: 1,
+    projectId,
+    entries,
+    currentBranch: branch ?? null,
+    headOid,
+    byteCount,
+  };
+}
+
+export async function exportProjectRepository(
+  projectId: string,
+  options: WorkspaceWriteOptions = {},
+): Promise<HtmlProjectGitArchive> {
+  return withWorkspaceWriteIfNeeded(options, () => exportProjectRepositoryUnsafe(projectId));
+}
+
+/**
+ * Import a raw repository under a new project id without overwriting data.
+ *
+ * Every entry is validated before the destination is created.  If writing or
+ * repository validation fails, the newly-created destination is removed so a
+ * caller can retry safely.  The caller still owns any surrounding IndexedDB
+ * journal/transaction; this primitive only owns the LightningFS tree.
+ */
+/** Raw repository import for callers that already hold the workspace gate. */
+export async function importProjectRepositoryUnsafe(
+  projectId: string,
+  archive: HtmlProjectGitArchive,
+  options: ImportHtmlProjectGitArchiveOptions = {},
+): Promise<ImportHtmlProjectGitArchiveResult> {
+  validateArchiveProjectId(projectId);
+  if (options.overwrite) {
+    throw new Error('Repository import cannot overwrite an existing project.');
+  }
+  if (!archive || archive.schemaVersion !== 1 || !Array.isArray(archive.entries)) {
+    throw new Error('Unsupported or malformed project repository archive.');
+  }
+
+  const sourceEntries = archive.entries.map(entry => {
+    validateArchiveEntryPath(entry?.path);
+    if (!(entry.data instanceof Uint8Array)) {
+      throw new Error(`Repository archive entry data is not binary: ${entry.path}`);
+    }
+    return { path: entry.path, data: entry.data };
+  });
+  const paths = new Set<string>();
+  let bytesImported = 0;
+  for (const entry of sourceEntries) {
+    if (paths.has(entry.path)) {
+      throw new Error(`Repository archive contains duplicate entry: ${entry.path}`);
+    }
+    paths.add(entry.path);
+    bytesImported += entry.data.byteLength;
+  }
+  if (sourceEntries.length > MAX_ARCHIVE_ENTRY_COUNT) {
+    throw new Error(
+      `Repository archive contains too many entries: ${sourceEntries.length}; maximum is ${MAX_ARCHIVE_ENTRY_COUNT}.`,
+    );
+  }
+  if (bytesImported > MAX_ARCHIVE_BYTE_COUNT) {
+    throw new Error(
+      `Repository archive is too large: ${bytesImported} bytes; maximum is ${MAX_ARCHIVE_BYTE_COUNT}.`,
+    );
+  }
+  const sortedPaths = [...paths].sort((a, b) => a.localeCompare(b));
+  for (let index = 1; index < sortedPaths.length; index += 1) {
+    const previous = sortedPaths[index - 1];
+    const current = sortedPaths[index];
+    if (current.startsWith(`${previous}/`)) {
+      throw new Error(
+        `Repository archive contains a file/directory prefix collision: ${previous} and ${current}.`,
+      );
+    }
+  }
+  if (typeof archive.byteCount !== 'number' || archive.byteCount !== bytesImported) {
+    throw new Error(
+      `Repository archive byte count mismatch: expected ${archive.byteCount}, received ${bytesImported}.`,
+    );
+  }
+  if (!paths.has('.git/HEAD')) {
+    throw new Error('Repository archive is missing .git/HEAD.');
+  }
+  // Clone only after all structural, count, and byte-size preflight checks;
+  // a rejected archive cannot force an unnecessary full-buffer copy first.
+  const entries = sourceEntries.map(entry => ({
+    path: entry.path,
+    data: new Uint8Array(entry.data),
+  }));
+
+  return withRepositoryImportLock(projectId, async () => {
+    const fs = await getFs();
+    const promises = fs.promises;
+    const git = await getGit();
+    const dir = dirFor(projectId);
+    const gitdir = gitdirFor(projectId);
+    if (await pathExists(promises, dir)) {
+      throw new Error(
+        `Project repository ${projectId} already exists; import will not overwrite it.`,
+      );
+    }
+
+    let destinationCreated = false;
+    try {
+      // Create the project root as one atomic operation after checking it.  A
+      // racing importer therefore receives the existing-project error and,
+      // importantly, does not own or remove the winner's destination.
+      await mkdirp(promises, PROJECTS_ROOT);
+      try {
+        await promises.mkdir(dir);
+      } catch (error) {
+        if (await pathExists(promises, dir)) {
+          throw new Error(
+            `Project repository ${projectId} already exists; import will not overwrite it.`,
+          );
+        }
+        throw error;
+      }
+      destinationCreated = true;
+      for (const entry of entries) {
+        const parentSegments = entry.path.split('/').slice(0, -1);
+        if (parentSegments.length > 0) {
+          await mkdirp(promises, `${dir}/${parentSegments.join('/')}`);
+        }
+        await promises.writeFile(`${dir}/${entry.path}`, entry.data);
+      }
+      await promises.flush();
+
+      // Read/validate every branch ref so a damaged copied object store cannot
+      // be reported as a successful archive restore.  This also validates HEAD
+      // and the commit parent chain for the checked-out branch.
+      const branches = await git.listBranches({ fs: fs as AnyFs, dir, gitdir });
+      const born = await hasCommits(git, fs, dir, gitdir);
+      const current = await git.currentBranch({
+        fs: fs as AnyFs,
+        dir,
+        gitdir,
+        fullname: false,
+      });
+      const currentBranchName = current ?? null;
+      let headOid: string | null = null;
+      if (born) {
+        headOid = await git.resolveRef({ fs: fs as AnyFs, dir, gitdir, ref: 'HEAD' });
+        for (const branch of branches) {
+          await git.log({ fs: fs as AnyFs, dir, gitdir, ref: branch });
+        }
+      }
+      if (archive.currentBranch !== currentBranchName) {
+        throw new Error(
+          `Repository archive branch mismatch: expected ${String(archive.currentBranch)}, received ${String(currentBranchName)}.`,
+        );
+      }
+      if (archive.headOid !== headOid) {
+        throw new Error(
+          `Repository archive HEAD mismatch: expected ${String(archive.headOid)}, received ${String(headOid)}.`,
+        );
+      }
+
+      return {
+        projectId,
+        filesImported: entries.length,
+        bytesImported,
+        currentBranch: currentBranchName,
+        headOid,
+      };
+    } catch (error) {
+      if (destinationCreated) {
+        try {
+          await removeAllRecursive(promises, dir);
+          await promises.flush();
+        } catch (cleanupError) {
+          const original = error instanceof Error ? error.message : String(error);
+          const cleanup =
+            cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+          throw new Error(
+            `Repository import failed (${original}); cleanup also failed (${cleanup}).`,
+          );
+        }
+      }
+      throw error;
+    }
+  });
+}
+
+export async function importProjectRepository(
+  projectId: string,
+  archive: HtmlProjectGitArchive,
+  options: ImportHtmlProjectGitArchiveOptions = {},
+): Promise<ImportHtmlProjectGitArchiveResult> {
+  return withWorkspaceWriteIfNeeded(options, () =>
+    importProjectRepositoryUnsafe(projectId, archive, options),
+  );
+}
+
+/** Remove a raw repository tree for archive journal rollback. */
+export async function removeProjectRepository(
+  projectId: string,
+  options: WorkspaceWriteOptions = {},
+): Promise<void> {
+  validateArchiveProjectId(projectId);
+  await withWorkspaceWriteIfNeeded(options, () => removeProjectRepositoryUnsafe(projectId));
+}
+
+/** Raw repository removal for callers that already hold the workspace gate. */
+export async function removeProjectRepositoryUnsafe(projectId: string): Promise<void> {
+  validateArchiveProjectId(projectId);
+  await deleteProjectDirUnsafe(projectId);
+}
+
 /** 遞迴刪除專案目錄 (含 .git) — store deleteProjectRecords 共用路徑 (D9/驗收 10)。 */
-export async function deleteProjectDir(projectId: string): Promise<void> {
+export async function deleteProjectDirUnsafe(projectId: string): Promise<void> {
   const fs = await getFs();
   const promises = fs.promises;
   const dir = dirFor(projectId);
@@ -961,12 +1465,24 @@ export async function deleteProjectDir(projectId: string): Promise<void> {
   await promises.flush();
 }
 
+export async function deleteProjectDir(
+  projectId: string,
+  options: WorkspaceWriteOptions = {},
+): Promise<void> {
+  await withWorkspaceWriteIfNeeded(options, () => deleteProjectDirUnsafe(projectId));
+}
+
 async function removeAllRecursive(promises: FsInstance['promises'], target: string): Promise<void> {
   let stat;
   try {
     stat = await promises.stat(target);
-  } catch {
-    return;
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    const message = error instanceof Error ? error.message : String(error);
+    if (code === 'ENOENT' || /(?:not found|no such file|does not exist)/i.test(message)) {
+      return;
+    }
+    throw error;
   }
   if (stat.isDirectory()) {
     const entries = await promises.readdir(target);
@@ -983,7 +1499,8 @@ async function removeAllRecursive(promises: FsInstance['promises'], target: stri
  * 寫入單一檔案到專案工作樹 (供 store writeFiles 等使用),自動建立父目錄。
  * data 為 Uint8Array (二進位) 或 string (utf-8)。
  */
-export async function writeProjectFile(
+/** Raw file write for callers that already hold the workspace gate. */
+export async function writeProjectFileUnsafe(
   projectId: string,
   filepath: string,
   data: Uint8Array | string,
@@ -995,6 +1512,17 @@ export async function writeProjectFile(
     await mkdirp(promises, `${dir}/${parentSegments.join('/')}`);
   }
   await promises.writeFile(absolute, data);
+}
+
+export async function writeProjectFile(
+  projectId: string,
+  filepath: string,
+  data: Uint8Array | string,
+  options: WorkspaceWriteOptions = {},
+): Promise<void> {
+  await withWorkspaceWriteIfNeeded(options, () =>
+    writeProjectFileUnsafe(projectId, filepath, data),
+  );
 }
 
 /** 讀取專案工作樹檔案 (bytes)。不存在回傳 null。 */
@@ -1011,7 +1539,11 @@ export async function readProjectFile(
 }
 
 /** 刪除專案工作樹檔案。不存在視為成功 (回傳 false)。 */
-export async function deleteProjectFile(projectId: string, filepath: string): Promise<boolean> {
+/** Raw file deletion for callers that already hold the workspace gate. */
+export async function deleteProjectFileUnsafe(
+  projectId: string,
+  filepath: string,
+): Promise<boolean> {
   const { promises, dir } = await ensureContext(projectId);
   try {
     await promises.unlink(`${dir}/${filepath}`);
@@ -1021,8 +1553,17 @@ export async function deleteProjectFile(projectId: string, filepath: string): Pr
   }
 }
 
+export async function deleteProjectFile(
+  projectId: string,
+  filepath: string,
+  options: WorkspaceWriteOptions = {},
+): Promise<boolean> {
+  return withWorkspaceWriteIfNeeded(options, () => deleteProjectFileUnsafe(projectId, filepath));
+}
+
 /** 重新命名/移動專案工作樹檔案。 */
-export async function renameProjectFile(
+/** Raw file rename for callers that already hold the workspace gate. */
+export async function renameProjectFileUnsafe(
   projectId: string,
   oldFilepath: string,
   newFilepath: string,
@@ -1033,6 +1574,17 @@ export async function renameProjectFile(
     await mkdirp(promises, `${dir}/${newParentSegments.join('/')}`);
   }
   await promises.rename(`${dir}/${oldFilepath}`, `${dir}/${newFilepath}`);
+}
+
+export async function renameProjectFile(
+  projectId: string,
+  oldFilepath: string,
+  newFilepath: string,
+  options: WorkspaceWriteOptions = {},
+): Promise<void> {
+  await withWorkspaceWriteIfNeeded(options, () =>
+    renameProjectFileUnsafe(projectId, oldFilepath, newFilepath),
+  );
 }
 
 // --- metadata (/.educare/meta.json) 讀寫 (D1) ---
@@ -1067,10 +1619,22 @@ export async function readMeta(projectId: string): Promise<HtmlProjectFileMetaMa
 }
 
 /** 寫入 /.educare/meta.json (覆寫整份)。 */
-export async function writeMeta(projectId: string, meta: HtmlProjectFileMetaMap): Promise<void> {
+/** Raw metadata write for callers that already hold the workspace gate. */
+export async function writeMetaUnsafe(
+  projectId: string,
+  meta: HtmlProjectFileMetaMap,
+): Promise<void> {
   const { promises, dir } = await ensureContext(projectId);
   await mkdirp(promises, `${dir}/${META_DIR}`);
   await promises.writeFile(`${dir}/${metaPath()}`, JSON.stringify(meta, null, 2), 'utf8');
+}
+
+export async function writeMeta(
+  projectId: string,
+  meta: HtmlProjectFileMetaMap,
+  options: WorkspaceWriteOptions = {},
+): Promise<void> {
+  await withWorkspaceWriteIfNeeded(options, () => writeMetaUnsafe(projectId, meta));
 }
 
 // --- 測試 helper ---

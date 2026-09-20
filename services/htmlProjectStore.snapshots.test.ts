@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+/* global IDBObjectStore */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDB } from 'idb';
 import {
   __resetGitServiceForTesting,
@@ -6,6 +7,7 @@ import {
   commitAll as gitCommitAll,
   createIsolatedFs,
   log as gitLog,
+  readCommitTree,
 } from './htmlProjectGitService';
 import { htmlProjectStore } from './htmlProjectStore';
 import type { HtmlProjectFile } from '../types';
@@ -234,6 +236,7 @@ describe('htmlProjectStore snapshots + migration (US-003)', () => {
           note: 'old1',
           fileEntries: [
             { path: '/index.html', kind: 'html', content: '<html>v1</html>', encoding: 'utf-8' },
+            { path: '/retired.css', kind: 'css', content: 'old{}', encoding: 'utf-8' },
           ],
         },
         {
@@ -257,6 +260,19 @@ describe('htmlProjectStore snapshots + migration (US-003)', () => {
     const fullLog = await gitLog(project.id);
     expect(fullLog.length).toBe(3);
     expect(fullLog.some(c => c.note === 'Migrated to git storage')).toBe(true);
+    // Each snapshot is a complete tree, not a patch layered on earlier files.
+    const firstSnapshot = fullLog.find(c => c.isSnapshot && c.previewVersion === 1)!;
+    const secondSnapshot = fullLog.find(c => c.isSnapshot && c.previewVersion === 2)!;
+    const migration = fullLog.find(c => c.note === 'Migrated to git storage')!;
+    expect((await readCommitTree(project.id, firstSnapshot.oid)).map(file => file.path)).toContain(
+      'retired.css',
+    );
+    expect(
+      (await readCommitTree(project.id, secondSnapshot.oid)).map(file => file.path),
+    ).not.toContain('retired.css');
+    expect((await readCommitTree(project.id, migration.oid)).map(file => file.path).sort()).toEqual(
+      ['.educare/meta.json', 'index.html'],
+    );
 
     // 工作目錄 = 當前檔案 (legacyFiles 最新狀態)
     const index = await htmlProjectStore.readFile(project.id, '/index.html');
@@ -266,6 +282,77 @@ describe('htmlProjectStore snapshots + migration (US-003)', () => {
     const counts = await readLegacyCounts(project.id);
     expect(counts.files).toBe(0);
     expect(counts.snapshots).toBe(0);
+  });
+
+  it('retains legacy records when an omitted-file deletion fails and can retry', async () => {
+    const project = await createProject();
+    await seedLegacy(
+      project.id,
+      [{ path: '/index.html', kind: 'html', content: '<html>current</html>' }],
+      [
+        {
+          version: 1,
+          createdAt: 2000,
+          fileEntries: [{ path: '/retired.css', kind: 'css', content: 'old{}', encoding: 'utf-8' }],
+        },
+      ],
+    );
+    const deletion = vi
+      .spyOn(await import('./htmlProjectGitService'), 'deleteProjectFileUnsafe')
+      .mockResolvedValueOnce(false);
+    try {
+      await expect(htmlProjectStore.listSnapshots(project.id)).rejects.toThrow(
+        'could not remove omitted file /retired.css',
+      );
+      expect(await readLegacyCounts(project.id)).toEqual({ files: 1, snapshots: 1 });
+    } finally {
+      deletion.mockRestore();
+    }
+    expect((await htmlProjectStore.listSnapshots(project.id)).snapshots).toHaveLength(1);
+    expect(await readLegacyCounts(project.id)).toEqual({ files: 0, snapshots: 0 });
+    expect((await htmlProjectStore.readFile(project.id, '/index.html'))?.content).toBe(
+      '<html>current</html>',
+    );
+  });
+
+  it('rolls back all legacy cleanup when a later store delete aborts, preserving retry history', async () => {
+    const project = await createProject();
+    await seedLegacy(
+      project.id,
+      [{ path: '/index.html', kind: 'html', content: '<html>current</html>' }],
+      [
+        {
+          version: 1,
+          createdAt: 2000,
+          fileEntries: [
+            { path: '/index.html', kind: 'html', content: '<html>old</html>', encoding: 'utf-8' },
+          ],
+        },
+      ],
+    );
+    const originalDelete = IDBObjectStore.prototype.delete;
+    const deletion = vi.spyOn(IDBObjectStore.prototype, 'delete').mockImplementation(function (
+      this: IDBObjectStore,
+      key,
+    ) {
+      const request = originalDelete.call(this, key);
+      if (this.name === 'htmlProjectSnapshots') {
+        this.transaction.abort();
+      }
+      return request;
+    });
+    try {
+      await expect(htmlProjectStore.listSnapshots(project.id)).rejects.toThrow();
+      expect(await readLegacyCounts(project.id)).toEqual({ files: 1, snapshots: 1 });
+    } finally {
+      deletion.mockRestore();
+    }
+    expect((await htmlProjectStore.listSnapshots(project.id)).snapshots).toHaveLength(1);
+    expect(await readLegacyCounts(project.id)).toEqual({ files: 0, snapshots: 0 });
+    expect((await htmlProjectStore.readFile(project.id, '/index.html'))?.content).toBe(
+      '<html>current</html>',
+    );
+    expect(await gitLog(project.id)).toHaveLength(2);
   });
 
   it('遷移冪等:中斷重試 (.git 已存在 idb 未清空) 不產生重複 commits', async () => {

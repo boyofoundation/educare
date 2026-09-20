@@ -16,6 +16,11 @@ import {
 } from '../types';
 import * as gitService from './htmlProjectGitService';
 import type { HtmlProjectFileMeta, HtmlProjectFileMetaMap } from './htmlProjectGitService';
+import {
+  isWorkspaceOperationTokenActive,
+  type WorkspaceOperationToken,
+  withWorkspaceWrite,
+} from './workspaceOperationService';
 
 // --- encoding 邊界 (D2):API 維持 string,FS 存 bytes ---
 // base64 ↔ Uint8Array (byte-exact, 供 asset 二進位資產);utf-8 ↔ Uint8Array (TextEncoder/Decoder)。
@@ -40,6 +45,18 @@ const bytesToBase64 = (bytes: Uint8Array): string => {
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder('utf-8', { fatal: false });
+
+const bytesEqual = (left: Uint8Array, right: Uint8Array): boolean => {
+  if (left.byteLength !== right.byteLength) {
+    return false;
+  }
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+};
 
 /** 將 API string content 依 encoding 編碼為 bytes 寫入 FS。回傳 byte 數 (size)。 */
 const encodeContent = (content: string, encoding: 'utf-8' | 'base64'): Uint8Array =>
@@ -192,7 +209,152 @@ export interface UpdateHtmlProjectTodoInput {
   order?: number;
 }
 
+/** Versioned project-level payload consumed by the workspace archive service. */
+export interface HtmlProjectArchive {
+  schemaVersion: 1;
+  project: HtmlProject;
+  repository: gitService.HtmlProjectGitArchive;
+  todos: HtmlProjectTodo[];
+}
+
+export interface ImportHtmlProjectArchiveOptions {
+  /** Copy the project under a new id; imports never overwrite an existing id. */
+  projectId?: string;
+  /** Explicit assistant foreign-key remap supplied by the outer importer. */
+  assistantId?: string;
+  /** Explicit session foreign-key remap; set to null to detach from a session. */
+  sessionId?: string | null;
+  /** Explicitly preserve the source assistant/session relationship. */
+  preserveForeignKeys?: boolean;
+  /** Archive import journal id used to keep staged records hidden until publish. */
+  importId?: string;
+  /** Staged imports are hidden from project readers until the journal receipt exists. */
+  visibility?: 'hidden' | 'visible';
+  /** Opaque capability issued by the active workspace archive operation. */
+  operationToken?: WorkspaceOperationToken;
+}
+
+export interface HtmlProjectListOptions {
+  /** Include records staged by an in-progress workspace archive import. */
+  includeHidden?: boolean;
+}
+
+export interface ImportedProjectCleanupResult {
+  removedIds: string[];
+}
+
+export const WORKSPACE_ARCHIVE_IMPORT_ID_FIELD = '__educareWorkspaceArchiveImportId';
+const WORKSPACE_ARCHIVE_PUBLICATION_RECEIPTS_KEY = 'educare.workspace.archive-publications.v1';
+
+type StagedHtmlProject = HtmlProject & { [WORKSPACE_ARCHIVE_IMPORT_ID_FIELD]?: string };
+type StagedHtmlProjectTodo = HtmlProjectTodo & {
+  [WORKSPACE_ARCHIVE_IMPORT_ID_FIELD]?: string;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const readPublicationReceipts = (): Record<string, number> => {
+  try {
+    const raw = globalThis.localStorage?.getItem(WORKSPACE_ARCHIVE_PUBLICATION_RECEIPTS_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => typeof value === 'number'),
+    ) as Record<string, number>;
+  } catch {
+    return {};
+  }
+};
+
+const isWorkspaceArchiveImportPublished = (importId: string): boolean =>
+  typeof readPublicationReceipts()[importId] === 'number';
+
+const stagedImportId = (record: unknown): string | undefined => {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  const value = record[WORKSPACE_ARCHIVE_IMPORT_ID_FIELD];
+  return typeof value === 'string' ? value : undefined;
+};
+
+const isVisibleWorkspaceProject = (record: unknown): boolean => {
+  const importId = stagedImportId(record);
+  return importId === undefined || isWorkspaceArchiveImportPublished(importId);
+};
+
+const stripWorkspaceArchiveVisibility = <T>(record: T): T => {
+  if (!isRecord(record) || !(WORKSPACE_ARCHIVE_IMPORT_ID_FIELD in record)) {
+    return record;
+  }
+  const visible = { ...record };
+  delete visible[WORKSPACE_ARCHIVE_IMPORT_ID_FIELD];
+  return visible as T;
+};
+
+const tagWorkspaceArchiveRecord = <T extends object>(record: T, importId: string): T =>
+  ({ ...record, [WORKSPACE_ARCHIVE_IMPORT_ID_FIELD]: importId }) as T;
+
+const withWorkspaceWriteIfNeeded = <T>(
+  operationToken: WorkspaceOperationToken | undefined,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  if (operationToken !== undefined) {
+    if (!isWorkspaceOperationTokenActive(operationToken)) {
+      throw new Error('Workspace operation token is no longer active.');
+    }
+    return operation();
+  }
+  return withWorkspaceWrite(operation);
+};
+
 let dbPromise: Promise<IDBPDatabase<HtmlProjectDB>> | null = null;
+
+/**
+ * Serialize a full project archive import, including the repository and the
+ * IndexedDB metadata transaction.  Keeping the lock around both layers means
+ * a losing concurrent import cannot remove the winner's repository during
+ * rollback.  Web Locks extend the guarantee across browser contexts; the
+ * in-memory queue covers tests and runtimes without navigator.locks.
+ */
+const projectArchiveImportLocks = new Map<string, Promise<void>>();
+
+const withProjectArchiveImportLock = async <T>(
+  projectId: string,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  const runInProcessLock = async (): Promise<T> => {
+    const previous = projectArchiveImportLocks.get(projectId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const queued = previous.then(() => current);
+    projectArchiveImportLocks.set(projectId, queued);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (projectArchiveImportLocks.get(projectId) === queued) {
+        projectArchiveImportLocks.delete(projectId);
+      }
+    }
+  };
+
+  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+    return navigator.locks.request(
+      `educare-html-project-archive-import:${projectId}`,
+      runInProcessLock,
+    );
+  }
+  return runInProcessLock();
+};
 
 const now = (): number => Date.now();
 const HTML_PROJECT_PATH_GUIDANCE =
@@ -370,10 +532,21 @@ const requireProject = async (
   projectId: string,
 ): Promise<HtmlProject> => {
   const project = await db.get(PROJECTS_STORE, projectId);
+  if (!project || !isVisibleWorkspaceProject(project)) {
+    throw new Error(`HTML project ${projectId} not found.`);
+  }
+  return stripWorkspaceArchiveVisibility(project);
+};
+
+const requireStoredProject = async (
+  db: IDBPDatabase<HtmlProjectDB>,
+  projectId: string,
+): Promise<StagedHtmlProject> => {
+  const project = await db.get(PROJECTS_STORE, projectId);
   if (!project) {
     throw new Error(`HTML project ${projectId} not found.`);
   }
-  return project;
+  return project as StagedHtmlProject;
 };
 
 const updateProjectRecord = async (
@@ -452,44 +625,195 @@ const getLineAndColumn = (
 
 class HtmlProjectStore {
   async createProject(input: CreateHtmlProjectInput): Promise<HtmlProject> {
-    const db = await getDb();
-    const timestamp = now();
-    const project: HtmlProject = {
-      id: `project-${timestamp}-${Math.random().toString(36).slice(2, 9)}`,
-      assistantId: input.assistantId,
-      sessionId: input.sessionId ?? null,
-      name: input.name,
-      description: input.description,
-      entryFile: normalizePath(input.entryFile || '/index.html'),
-      status: 'draft',
-      previewVersion: 0,
-      assetPaths: [],
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      lastPrompt: input.lastPrompt,
-      lastBuildError: null,
-      tags: input.tags,
-    };
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      const timestamp = now();
+      const project: HtmlProject = {
+        id: `project-${timestamp}-${Math.random().toString(36).slice(2, 9)}`,
+        assistantId: input.assistantId,
+        sessionId: input.sessionId ?? null,
+        name: input.name,
+        description: input.description,
+        entryFile: normalizePath(input.entryFile || '/index.html'),
+        status: 'draft',
+        previewVersion: 0,
+        assetPaths: [],
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        lastPrompt: input.lastPrompt,
+        lastBuildError: null,
+        tags: input.tags,
+      };
 
-    await db.put(PROJECTS_STORE, project);
+      await db.put(PROJECTS_STORE, project);
 
-    // D1: 專案目錄 + git repo 就地 init (檔案內容存 LightningFS /projects/<id>/)。
-    // initial commit 由首次寫入後或 run-start/createSnapshot 觸發 (D4)。
-    await gitService.ensureRepo(project.id).catch(error => {
-      // best-effort:repo 初始化失敗不阻斷專案建立 (後續寫入會重試 ensureContext)。
-      console.warn(`[htmlProjectStore] ensureRepo failed for ${project.id}:`, error);
+      // D1: 專案目錄 + git repo 就地 init (檔案內容存 LightningFS /projects/<id>/)。
+      // initial commit 由首次寫入後或 run-start/createSnapshot 觸發 (D4)。
+      await gitService.ensureRepoUnsafe(project.id).catch(error => {
+        // best-effort:repo 初始化失敗不阻斷專案建立 (後續寫入會重試 ensureContext)。
+        console.warn(`[htmlProjectStore] ensureRepo failed for ${project.id}:`, error);
+      });
+      return project;
     });
-    return project;
   }
 
-  async getProject(projectId: string): Promise<HtmlProject | undefined> {
+  async getProject(
+    projectId: string,
+    options: HtmlProjectListOptions = {},
+  ): Promise<HtmlProject | undefined> {
     const db = await getDb();
-    return db.get(PROJECTS_STORE, projectId);
+    const project = await db.get(PROJECTS_STORE, projectId);
+    if (!project || (!options.includeHidden && !isVisibleWorkspaceProject(project))) {
+      return undefined;
+    }
+    return stripWorkspaceArchiveVisibility(project);
+  }
+
+  /**
+   * Export a project record, its complete raw git repository, and todos.
+   * `ensureMigrated` runs first so legacy IndexedDB files/snapshots are
+   * represented in the exported repository rather than silently omitted.
+   */
+  async exportProjectArchive(
+    projectId: string,
+    options: Pick<ImportHtmlProjectArchiveOptions, 'operationToken'> = {},
+  ): Promise<HtmlProjectArchive> {
+    return withWorkspaceWriteIfNeeded(options.operationToken, async () => {
+      const db = await getDb();
+      // Validate the DB record before migration, then capture all three layers
+      // after migration has settled and LightningFS has flushed.  The workspace
+      // archive coordinator owns the outer write barrier; this method deliberately
+      // does not acquire a nested barrier of its own when an operation token is supplied.
+      await requireProject(db, projectId);
+      await this.ensureMigratedRaw(projectId);
+      await gitService.flushUnsafe();
+      const project = await requireProject(db, projectId);
+      const repository = await gitService.exportProjectRepositoryUnsafe(projectId);
+      const todos = await db.getAllFromIndex(PROJECT_TODOS_STORE, 'by-project', projectId);
+      return {
+        schemaVersion: 1,
+        project: { ...project },
+        repository,
+        todos: todos
+          .filter(isVisibleWorkspaceProject)
+          .map(todo => stripWorkspaceArchiveVisibility({ ...todo })),
+      };
+    });
+  }
+
+  /**
+   * Import a project archive as a new project record and repository.  This
+   * operation is intentionally non-overwriting; the outer workspace journal
+   * can call it with a remapped id and remove the newly-created id on rollback.
+   */
+  async importProjectArchive(
+    archive: HtmlProjectArchive,
+    options: ImportHtmlProjectArchiveOptions = {},
+  ): Promise<HtmlProject> {
+    if (!archive || archive.schemaVersion !== 1 || !archive.project || !archive.repository) {
+      throw new Error('Unsupported or malformed HTML project archive.');
+    }
+    if (archive.repository.projectId !== archive.project.id) {
+      throw new Error('HTML project archive record and repository ids do not match.');
+    }
+    if (!Array.isArray(archive.todos)) {
+      throw new Error('HTML project archive todos must be an array.');
+    }
+
+    const hasAssistantRemap = typeof options.assistantId === 'string';
+    const hasSessionRemap = Object.prototype.hasOwnProperty.call(options, 'sessionId');
+    if (!options.preserveForeignKeys && (!hasAssistantRemap || !hasSessionRemap)) {
+      throw new Error(
+        'HTML project archive import requires explicit assistantId/sessionId remaps or preserveForeignKeys:true.',
+      );
+    }
+
+    const visibility = options.visibility ?? 'visible';
+    if (visibility === 'hidden' && !options.importId) {
+      throw new Error('Hidden HTML project archive imports require an importId.');
+    }
+    const projectId = options.projectId ?? archive.project.id;
+    return withWorkspaceWriteIfNeeded(options.operationToken, () =>
+      withProjectArchiveImportLock(projectId, async () => {
+        const db = await getDb();
+        if (await db.get(PROJECTS_STORE, projectId)) {
+          throw new Error(
+            `HTML project ${projectId} already exists; import will not overwrite it.`,
+          );
+        }
+
+        const importedProjectBase: HtmlProject = {
+          ...archive.project,
+          id: projectId,
+          assistantId: options.assistantId ?? archive.project.assistantId,
+          sessionId: Object.prototype.hasOwnProperty.call(options, 'sessionId')
+            ? options.sessionId
+            : archive.project.sessionId,
+        };
+        const importedProject: StagedHtmlProject =
+          visibility === 'hidden'
+            ? tagWorkspaceArchiveRecord(importedProjectBase, options.importId as string)
+            : importedProjectBase;
+        if (!importedProject.name.trim()) {
+          throw new Error('HTML project archive name is required.');
+        }
+
+        const todoIds = new Set<string>();
+        const importedTodos: StagedHtmlProjectTodo[] = archive.todos.map(todo => {
+          if (!todo || typeof todo.id !== 'string' || todo.id.trim() === '') {
+            throw new Error('HTML project archive contains a todo without an id.');
+          }
+          if (todoIds.has(todo.id)) {
+            throw new Error(`HTML project archive contains duplicate todo id: ${todo.id}`);
+          }
+          todoIds.add(todo.id);
+          const importedTodo = { ...todo, projectId };
+          return visibility === 'hidden'
+            ? tagWorkspaceArchiveRecord(importedTodo, options.importId as string)
+            : importedTodo;
+        });
+
+        let repositoryImported = false;
+        try {
+          await gitService.importProjectRepositoryUnsafe(projectId, {
+            ...archive.repository,
+            projectId,
+          });
+          repositoryImported = true;
+
+          // Add the project and every todo in one IndexedDB transaction.  `add`
+          // (rather than `put`) makes the no-overwrite guarantee atomic, while
+          // transaction abort leaves no rows for rollback to accidentally delete
+          // from another concurrent import.
+          const transaction = db.transaction([PROJECTS_STORE, PROJECT_TODOS_STORE], 'readwrite');
+          await transaction.objectStore(PROJECTS_STORE).add(importedProject);
+          const todoStore = transaction.objectStore(PROJECT_TODOS_STORE);
+          for (const todo of importedTodos) {
+            await todoStore.add(todo);
+          }
+          await transaction.done;
+          return importedProject;
+        } catch (error) {
+          if (repositoryImported) {
+            try {
+              await gitService.removeProjectRepositoryUnsafe(projectId);
+            } catch (cleanupError) {
+              const original = error instanceof Error ? error.message : String(error);
+              const cleanup =
+                cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+              throw new Error(
+                `HTML project import failed (${original}); cleanup also failed (${cleanup}).`,
+              );
+            }
+          }
+          throw error;
+        }
+      }),
+    );
   }
 
   async assertProjectOwnership(projectId: string, assistantId: string): Promise<HtmlProject> {
-    const db = await getDb();
-    const project = await db.get(PROJECTS_STORE, projectId);
+    const project = await this.getProject(projectId);
 
     if (!project || project.assistantId !== assistantId) {
       throw new Error(`HTML project ${projectId} not found.`);
@@ -499,31 +823,51 @@ class HtmlProjectStore {
   }
 
   async renameProject(projectId: string, assistantId: string, name: string): Promise<HtmlProject> {
-    const db = await getDb();
-    const project = await this.assertProjectOwnership(projectId, assistantId);
-    const trimmedName = name.trim();
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      const project = await this.assertProjectOwnership(projectId, assistantId);
+      const trimmedName = name.trim();
 
-    if (!trimmedName) {
-      throw new Error('Project name is required.');
-    }
+      if (!trimmedName) {
+        throw new Error('Project name is required.');
+      }
 
-    const nextProject: HtmlProject = {
-      ...project,
-      name: trimmedName,
-      updatedAt: now(),
-    };
+      const nextProject: HtmlProject = {
+        ...project,
+        name: trimmedName,
+        updatedAt: now(),
+      };
 
-    await updateProjectRecord(db, nextProject);
-    return nextProject;
+      await updateProjectRecord(db, nextProject);
+      return nextProject;
+    });
   }
 
   async listProjectsByAssistant(assistantId: string): Promise<HtmlProject[]> {
     const db = await getDb();
     const projects = await db.getAllFromIndex(PROJECTS_STORE, 'by-assistant', assistantId);
-    return projects.sort((a, b) => b.updatedAt - a.updatedAt);
+    return projects
+      .filter(isVisibleWorkspaceProject)
+      .map(project => stripWorkspaceArchiveVisibility(project))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  async listProjects(options: HtmlProjectListOptions = {}): Promise<HtmlProject[]> {
+    const db = await getDb();
+    const projects = await db.getAll(PROJECTS_STORE);
+    return projects
+      .filter(project => options.includeHidden || isVisibleWorkspaceProject(project))
+      .map(project => stripWorkspaceArchiveVisibility(project))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  async listProjectIds(options: HtmlProjectListOptions = {}): Promise<string[]> {
+    return (await this.listProjects(options)).map(project => project.id);
   }
 
   async listFiles(projectId: string): Promise<HtmlProjectFileDescriptor[]> {
+    const db = await getDb();
+    await requireProject(db, projectId);
     await this.ensureMigrated(projectId);
     const meta = await gitService.readMeta(projectId);
     return Object.entries(meta)
@@ -533,6 +877,8 @@ class HtmlProjectStore {
   }
 
   async listProjectFiles(projectId: string): Promise<HtmlProjectFile[]> {
+    const db = await getDb();
+    await requireProject(db, projectId);
     await this.ensureMigrated(projectId);
     const meta = await gitService.readMeta(projectId);
     const entries = Object.entries(meta).filter(([path]) => !isReservedMetaPath(path));
@@ -558,6 +904,8 @@ class HtmlProjectStore {
 
   async readFile(projectId: string, path: string): Promise<HtmlProjectFile | undefined> {
     const normalizedPath = normalizePath(path);
+    const db = await getDb();
+    await requireProject(db, projectId);
     await this.ensureMigrated(projectId);
     const meta = await gitService.readMeta(projectId);
     const entry = meta[normalizedPath];
@@ -595,54 +943,56 @@ class HtmlProjectStore {
       throw new Error('writeFiles requires a non-empty files array.');
     }
 
-    const db = await getDb();
-    const project = await requireProject(db, projectId);
-    await this.ensureMigrated(projectId);
-    const timestamp = now();
-    const updatedPaths: string[] = [];
-    const assetPaths = new Set(project.assetPaths);
-    const meta = await gitService.readMeta(projectId);
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      const project = await requireProject(db, projectId);
+      await this.ensureMigratedRaw(projectId);
+      const timestamp = now();
+      const updatedPaths: string[] = [];
+      const assetPaths = new Set(project.assetPaths);
+      const meta = await gitService.readMeta(projectId);
 
-    for (const file of files) {
-      const normalizedPath = normalizePath(file.path); // 含 reserved-path 防護 (D6)
-      const encoding = file.encoding || 'utf-8';
-      const bytes = encodeContent(file.content, encoding); // D2: string → bytes
+      for (const file of files) {
+        const normalizedPath = normalizePath(file.path); // 含 reserved-path 防護 (D6)
+        const encoding = file.encoding || 'utf-8';
+        const bytes = encodeContent(file.content, encoding); // D2: string → bytes
 
-      await gitService.writeProjectFile(projectId, normalizedPath, bytes);
-      meta[normalizedPath] = {
-        kind: file.kind,
-        encoding,
-        dependencies: inferDependencies(file.kind, file.content),
-        size: bytes.length, // D2: 位元組數
-        updatedAt: timestamp,
-      };
-      updatedPaths.push(normalizedPath);
+        await gitService.writeProjectFileUnsafe(projectId, normalizedPath, bytes);
+        meta[normalizedPath] = {
+          kind: file.kind,
+          encoding,
+          dependencies: inferDependencies(file.kind, file.content),
+          size: bytes.length, // D2: 位元組數
+          updatedAt: timestamp,
+        };
+        updatedPaths.push(normalizedPath);
 
-      if (file.kind === 'asset') {
-        assetPaths.add(normalizedPath);
-      } else {
-        assetPaths.delete(normalizedPath);
+        if (file.kind === 'asset') {
+          assetPaths.add(normalizedPath);
+        } else {
+          assetPaths.delete(normalizedPath);
+        }
       }
-    }
 
-    await gitService.writeMeta(projectId, meta);
-    await gitService.flush();
+      await gitService.writeMetaUnsafe(projectId, meta);
+      await gitService.flushUnsafe();
 
-    const nextProject: HtmlProject = {
-      ...project,
-      assetPaths: Array.from(assetPaths).sort(),
-      updatedAt: timestamp,
-      previewVersion: project.previewVersion + 1,
-      status: 'draft',
-      lastBuildError: null,
-    };
+      const nextProject: HtmlProject = {
+        ...project,
+        assetPaths: Array.from(assetPaths).sort(),
+        updatedAt: timestamp,
+        previewVersion: project.previewVersion + 1,
+        status: 'draft',
+        lastBuildError: null,
+      };
 
-    await updateProjectRecord(db, nextProject);
+      await updateProjectRecord(db, nextProject);
 
-    return {
-      updated: updatedPaths,
-      previewVersion: nextProject.previewVersion,
-    };
+      return {
+        updated: updatedPaths,
+        previewVersion: nextProject.previewVersion,
+      };
+    });
   }
 
   async copyFile(
@@ -650,60 +1000,62 @@ class HtmlProjectStore {
     sourcePath: string,
     destinationPath: string,
   ): Promise<{ sourcePath: string; destinationPath: string; previewVersion: number }> {
-    const db = await getDb();
-    const project = await requireProject(db, projectId);
-    await this.ensureMigrated(projectId);
-    const normalizedSourcePath = normalizePath(sourcePath);
-    const normalizedDestinationPath = normalizePath(destinationPath);
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      const project = await requireProject(db, projectId);
+      await this.ensureMigratedRaw(projectId);
+      const normalizedSourcePath = normalizePath(sourcePath);
+      const normalizedDestinationPath = normalizePath(destinationPath);
 
-    if (normalizedSourcePath === normalizedDestinationPath) {
-      throw new Error('Source and destination paths must be different.');
-    }
+      if (normalizedSourcePath === normalizedDestinationPath) {
+        throw new Error('Source and destination paths must be different.');
+      }
 
-    const meta = await gitService.readMeta(projectId);
-    const sourceMeta = meta[normalizedSourcePath];
-    if (!sourceMeta) {
-      throw new Error(`Project file ${normalizedSourcePath} not found.`);
-    }
-    if (meta[normalizedDestinationPath]) {
-      throw new Error(`Project file ${normalizedDestinationPath} already exists.`);
-    }
+      const meta = await gitService.readMeta(projectId);
+      const sourceMeta = meta[normalizedSourcePath];
+      if (!sourceMeta) {
+        throw new Error(`Project file ${normalizedSourcePath} not found.`);
+      }
+      if (meta[normalizedDestinationPath]) {
+        throw new Error(`Project file ${normalizedDestinationPath} already exists.`);
+      }
 
-    const sourceBytes = await gitService.readProjectFile(projectId, normalizedSourcePath);
-    if (!sourceBytes) {
-      throw new Error(`Project file ${normalizedSourcePath} not found.`);
-    }
+      const sourceBytes = await gitService.readProjectFile(projectId, normalizedSourcePath);
+      if (!sourceBytes) {
+        throw new Error(`Project file ${normalizedSourcePath} not found.`);
+      }
 
-    const timestamp = now();
-    await gitService.writeProjectFile(projectId, normalizedDestinationPath, sourceBytes);
-    meta[normalizedDestinationPath] = {
-      ...sourceMeta,
-      updatedAt: timestamp,
-    };
-    await gitService.writeMeta(projectId, meta);
-    await gitService.flush();
+      const timestamp = now();
+      await gitService.writeProjectFileUnsafe(projectId, normalizedDestinationPath, sourceBytes);
+      meta[normalizedDestinationPath] = {
+        ...sourceMeta,
+        updatedAt: timestamp,
+      };
+      await gitService.writeMetaUnsafe(projectId, meta);
+      await gitService.flushUnsafe();
 
-    const assetPaths = new Set(project.assetPaths);
-    if (sourceMeta.kind === 'asset') {
-      assetPaths.add(normalizedDestinationPath);
-    }
+      const assetPaths = new Set(project.assetPaths);
+      if (sourceMeta.kind === 'asset') {
+        assetPaths.add(normalizedDestinationPath);
+      }
 
-    const nextProject: HtmlProject = {
-      ...project,
-      assetPaths: Array.from(assetPaths).sort(),
-      updatedAt: timestamp,
-      previewVersion: project.previewVersion + 1,
-      status: 'draft',
-      lastBuildError: null,
-    };
+      const nextProject: HtmlProject = {
+        ...project,
+        assetPaths: Array.from(assetPaths).sort(),
+        updatedAt: timestamp,
+        previewVersion: project.previewVersion + 1,
+        status: 'draft',
+        lastBuildError: null,
+      };
 
-    await updateProjectRecord(db, nextProject);
+      await updateProjectRecord(db, nextProject);
 
-    return {
-      sourcePath: normalizedSourcePath,
-      destinationPath: normalizedDestinationPath,
-      previewVersion: nextProject.previewVersion,
-    };
+      return {
+        sourcePath: normalizedSourcePath,
+        destinationPath: normalizedDestinationPath,
+        previewVersion: nextProject.previewVersion,
+      };
+    });
   }
 
   async renameFile(
@@ -711,56 +1063,64 @@ class HtmlProjectStore {
     sourcePath: string,
     destinationPath: string,
   ): Promise<{ sourcePath: string; destinationPath: string; previewVersion: number }> {
-    const db = await getDb();
-    const project = await requireProject(db, projectId);
-    await this.ensureMigrated(projectId);
-    const normalizedSourcePath = normalizePath(sourcePath);
-    const normalizedDestinationPath = normalizePath(destinationPath);
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      const project = await requireProject(db, projectId);
+      await this.ensureMigratedRaw(projectId);
+      const normalizedSourcePath = normalizePath(sourcePath);
+      const normalizedDestinationPath = normalizePath(destinationPath);
 
-    if (normalizedSourcePath === normalizedDestinationPath) {
-      throw new Error('Source and destination paths must be different.');
-    }
+      if (normalizedSourcePath === normalizedDestinationPath) {
+        throw new Error('Source and destination paths must be different.');
+      }
 
-    const meta = await gitService.readMeta(projectId);
-    const sourceMeta = meta[normalizedSourcePath];
-    if (!sourceMeta) {
-      throw new Error(`Project file ${normalizedSourcePath} not found.`);
-    }
-    if (meta[normalizedDestinationPath]) {
-      throw new Error(`Project file ${normalizedDestinationPath} already exists.`);
-    }
+      const meta = await gitService.readMeta(projectId);
+      const sourceMeta = meta[normalizedSourcePath];
+      if (!sourceMeta) {
+        throw new Error(`Project file ${normalizedSourcePath} not found.`);
+      }
+      if (meta[normalizedDestinationPath]) {
+        throw new Error(`Project file ${normalizedDestinationPath} already exists.`);
+      }
 
-    const timestamp = now();
-    await gitService.renameProjectFile(projectId, normalizedSourcePath, normalizedDestinationPath);
-    meta[normalizedDestinationPath] = { ...sourceMeta, updatedAt: timestamp };
-    delete meta[normalizedSourcePath];
-    await gitService.writeMeta(projectId, meta);
-    await gitService.flush();
+      const timestamp = now();
+      await gitService.renameProjectFileUnsafe(
+        projectId,
+        normalizedSourcePath,
+        normalizedDestinationPath,
+      );
+      meta[normalizedDestinationPath] = { ...sourceMeta, updatedAt: timestamp };
+      delete meta[normalizedSourcePath];
+      await gitService.writeMetaUnsafe(projectId, meta);
+      await gitService.flushUnsafe();
 
-    const assetPaths = new Set(project.assetPaths);
-    if (sourceMeta.kind === 'asset') {
-      assetPaths.delete(normalizedSourcePath);
-      assetPaths.add(normalizedDestinationPath);
-    }
+      const assetPaths = new Set(project.assetPaths);
+      if (sourceMeta.kind === 'asset') {
+        assetPaths.delete(normalizedSourcePath);
+        assetPaths.add(normalizedDestinationPath);
+      }
 
-    const nextProject: HtmlProject = {
-      ...project,
-      entryFile:
-        project.entryFile === normalizedSourcePath ? normalizedDestinationPath : project.entryFile,
-      assetPaths: Array.from(assetPaths).sort(),
-      updatedAt: timestamp,
-      previewVersion: project.previewVersion + 1,
-      status: 'draft',
-      lastBuildError: null,
-    };
+      const nextProject: HtmlProject = {
+        ...project,
+        entryFile:
+          project.entryFile === normalizedSourcePath
+            ? normalizedDestinationPath
+            : project.entryFile,
+        assetPaths: Array.from(assetPaths).sort(),
+        updatedAt: timestamp,
+        previewVersion: project.previewVersion + 1,
+        status: 'draft',
+        lastBuildError: null,
+      };
 
-    await updateProjectRecord(db, nextProject);
+      await updateProjectRecord(db, nextProject);
 
-    return {
-      sourcePath: normalizedSourcePath,
-      destinationPath: normalizedDestinationPath,
-      previewVersion: nextProject.previewVersion,
-    };
+      return {
+        sourcePath: normalizedSourcePath,
+        destinationPath: normalizedDestinationPath,
+        previewVersion: nextProject.previewVersion,
+      };
+    });
   }
 
   async searchFiles(
@@ -863,61 +1223,65 @@ class HtmlProjectStore {
     projectId: string,
     path: string,
   ): Promise<{ deleted: boolean; previewVersion: number }> {
-    const db = await getDb();
-    const project = await requireProject(db, projectId);
-    await this.ensureMigrated(projectId);
-    const normalizedPath = normalizePath(path);
-    const meta = await gitService.readMeta(projectId);
-    const existingMeta = meta[normalizedPath];
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      const project = await requireProject(db, projectId);
+      await this.ensureMigratedRaw(projectId);
+      const normalizedPath = normalizePath(path);
+      const meta = await gitService.readMeta(projectId);
+      const existingMeta = meta[normalizedPath];
 
-    if (!existingMeta) {
-      return {
-        deleted: false,
-        previewVersion: project.previewVersion,
+      if (!existingMeta) {
+        return {
+          deleted: false,
+          previewVersion: project.previewVersion,
+        };
+      }
+
+      await gitService.deleteProjectFileUnsafe(projectId, normalizedPath);
+      delete meta[normalizedPath];
+      await gitService.writeMetaUnsafe(projectId, meta);
+      await gitService.flushUnsafe();
+
+      const nextProject: HtmlProject = {
+        ...project,
+        assetPaths: project.assetPaths.filter(assetPath => assetPath !== normalizedPath),
+        updatedAt: now(),
+        previewVersion: project.previewVersion + 1,
+        status: normalizedPath === project.entryFile ? 'error' : 'draft',
+        lastBuildError:
+          normalizedPath === project.entryFile
+            ? 'Entrypoint file was deleted.'
+            : project.lastBuildError,
       };
-    }
 
-    await gitService.deleteProjectFile(projectId, normalizedPath);
-    delete meta[normalizedPath];
-    await gitService.writeMeta(projectId, meta);
-    await gitService.flush();
+      await updateProjectRecord(db, nextProject);
 
-    const nextProject: HtmlProject = {
-      ...project,
-      assetPaths: project.assetPaths.filter(assetPath => assetPath !== normalizedPath),
-      updatedAt: now(),
-      previewVersion: project.previewVersion + 1,
-      status: normalizedPath === project.entryFile ? 'error' : 'draft',
-      lastBuildError:
-        normalizedPath === project.entryFile
-          ? 'Entrypoint file was deleted.'
-          : project.lastBuildError,
-    };
-
-    await updateProjectRecord(db, nextProject);
-
-    return {
-      deleted: true,
-      previewVersion: nextProject.previewVersion,
-    };
+      return {
+        deleted: true,
+        previewVersion: nextProject.previewVersion,
+      };
+    });
   }
 
   async setEntrypoint(projectId: string, path: string): Promise<HtmlProject> {
-    const db = await getDb();
-    const project = await requireProject(db, projectId);
-    const normalizedPath = normalizePath(path);
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      const project = await requireProject(db, projectId);
+      const normalizedPath = normalizePath(path);
 
-    const nextProject: HtmlProject = {
-      ...project,
-      entryFile: normalizedPath,
-      updatedAt: now(),
-      previewVersion: project.previewVersion + 1,
-      status: 'draft',
-      lastBuildError: null,
-    };
+      const nextProject: HtmlProject = {
+        ...project,
+        entryFile: normalizedPath,
+        updatedAt: now(),
+        previewVersion: project.previewVersion + 1,
+        status: 'draft',
+        lastBuildError: null,
+      };
 
-    await updateProjectRecord(db, nextProject);
-    return nextProject;
+      await updateProjectRecord(db, nextProject);
+      return nextProject;
+    });
   }
 
   /**
@@ -927,18 +1291,20 @@ class HtmlProjectStore {
    * 其餘情況 (工作樹有變更,或尚無此 version 的 snapshot) 照常建立 snapshot。
    */
   async createRunStartSnapshot(projectId: string, note: string): Promise<HtmlProjectSnapshot> {
-    const db = await getDb();
-    await this.ensureMigrated(projectId);
-    const project = await requireProject(db, projectId);
-    const treeStatus = await gitService.status(projectId);
-    if (treeStatus.clean) {
-      const existing = await this.listSnapshots(projectId);
-      const match = existing.snapshots.find(snap => snap.version === project.previewVersion);
-      if (match) {
-        return match; // D4 去重:clean + 同 version snapshot 已存在 → 重用既有 snapshot
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      await this.ensureMigratedRaw(projectId);
+      const project = await requireProject(db, projectId);
+      const treeStatus = await gitService.status(projectId);
+      if (treeStatus.clean) {
+        const existing = await this.listSnapshotsRaw(projectId);
+        const match = existing.snapshots.find(snap => snap.version === project.previewVersion);
+        if (match) {
+          return match; // D4 去重:clean + 同 version snapshot 已存在 → 重用既有 snapshot
+        }
       }
-    }
-    return this.createSnapshot(projectId, note);
+      return this.createSnapshotRaw(projectId, note);
+    });
   }
 
   /**
@@ -946,12 +1312,22 @@ class HtmlProjectStore {
    * 回傳型別 HtmlProjectSnapshot 不變;version = 當下 previewVersion。
    * isSnapshot:true 隱含 allowEmpty (快照一律記錄當前狀態)。
    */
-  async createSnapshot(projectId: string, note?: string): Promise<HtmlProjectSnapshot> {
+  async createSnapshot(
+    projectId: string,
+    note?: string,
+    options: Pick<ImportHtmlProjectArchiveOptions, 'operationToken'> = {},
+  ): Promise<HtmlProjectSnapshot> {
+    return withWorkspaceWriteIfNeeded(options.operationToken, () =>
+      this.createSnapshotRaw(projectId, note),
+    );
+  }
+
+  private async createSnapshotRaw(projectId: string, note?: string): Promise<HtmlProjectSnapshot> {
     const db = await getDb();
-    await this.ensureMigrated(projectId);
+    await this.ensureMigratedRaw(projectId);
     const project = await requireProject(db, projectId);
     const timestamp = now();
-    await gitService.commitAll(projectId, note?.trim() || 'Snapshot', {
+    await gitService.commitAllUnsafe(projectId, note?.trim() || 'Snapshot', {
       previewVersion: project.previewVersion,
       isSnapshot: true,
       timestamp,
@@ -972,10 +1348,19 @@ class HtmlProjectStore {
    * 以 trailer 還原 version,同 version 取最新 (commits 已新到舊),上限 20,每筆含 oid。
    * initial/run-end/ZIP/revert/gitCommit commit (無 snapshot trailer) 不會漏入。
    */
-  async listSnapshots(projectId: string): Promise<HtmlProjectListSnapshotsResult> {
+  async listSnapshots(
+    projectId: string,
+    options: Pick<ImportHtmlProjectArchiveOptions, 'operationToken'> = {},
+  ): Promise<HtmlProjectListSnapshotsResult> {
+    return withWorkspaceWriteIfNeeded(options.operationToken, () =>
+      this.listSnapshotsRaw(projectId),
+    );
+  }
+
+  private async listSnapshotsRaw(projectId: string): Promise<HtmlProjectListSnapshotsResult> {
     const db = await getDb();
     await requireProject(db, projectId);
-    await this.ensureMigrated(projectId);
+    await this.ensureMigratedRaw(projectId);
     const commits = await gitService.log(projectId);
     const byVersion = new Map<number, gitService.GitCommitSummary>();
     for (const commit of commits) {
@@ -1013,46 +1398,48 @@ class HtmlProjectStore {
     projectId: string,
     version: number,
   ): Promise<HtmlProjectRevertToSnapshotResult> {
-    const db = await getDb();
-    await this.ensureMigrated(projectId);
-    const project = await requireProject(db, projectId);
-    const oid = await gitService.resolveVersion(projectId, version);
-    if (!oid) {
-      throw new Error(`Project snapshot version ${version} not found.`);
-    }
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      await this.ensureMigratedRaw(projectId);
+      const project = await requireProject(db, projectId);
+      const oid = await gitService.resolveVersion(projectId, version);
+      if (!oid) {
+        throw new Error(`Project snapshot version ${version} not found.`);
+      }
 
-    const { filesRestored } = await gitService.restoreCommitTree(projectId, oid);
-    const nextPreviewVersion = project.previewVersion + 1;
-    await gitService.commitAll(projectId, `Revert to version ${version}`, {
-      previewVersion: nextPreviewVersion,
-      allowEmpty: true,
+      const { filesRestored } = await gitService.restoreCommitTreeUnsafe(projectId, oid);
+      const nextPreviewVersion = project.previewVersion + 1;
+      await gitService.commitAllUnsafe(projectId, `Revert to version ${version}`, {
+        previewVersion: nextPreviewVersion,
+        allowEmpty: true,
+      });
+
+      // 從還原後的 meta 重建 assetPaths (restoreCommitTree 已還原 .educare/meta.json)
+      const meta = await gitService.readMeta(projectId);
+      const assetPaths = Object.entries(meta)
+        .filter(([path, entry]) => !isReservedMetaPath(path) && entry.kind === 'asset')
+        .map(([path]) => path)
+        .sort();
+
+      const nextProject: HtmlProject = {
+        ...project,
+        assetPaths,
+        updatedAt: now(),
+        previewVersion: nextPreviewVersion,
+        status: 'draft',
+        lastBuildError: null,
+      };
+
+      await updateProjectRecord(db, nextProject);
+
+      return {
+        projectId,
+        revertedToVersion: version,
+        previewVersion: nextProject.previewVersion,
+        runtimeDiagnosticsCleared: true,
+        filesRestored,
+      };
     });
-
-    // 從還原後的 meta 重建 assetPaths (restoreCommitTree 已還原 .educare/meta.json)
-    const meta = await gitService.readMeta(projectId);
-    const assetPaths = Object.entries(meta)
-      .filter(([path, entry]) => !isReservedMetaPath(path) && entry.kind === 'asset')
-      .map(([path]) => path)
-      .sort();
-
-    const nextProject: HtmlProject = {
-      ...project,
-      assetPaths,
-      updatedAt: now(),
-      previewVersion: nextPreviewVersion,
-      status: 'draft',
-      lastBuildError: null,
-    };
-
-    await updateProjectRecord(db, nextProject);
-
-    return {
-      projectId,
-      revertedToVersion: version,
-      previewVersion: nextProject.previewVersion,
-      runtimeDiagnosticsCleared: true,
-      filesRestored,
-    };
   }
 
   // --- Phase 3/4 git 版本歷史 (供 AgentRunPanel UI) ---
@@ -1082,25 +1469,27 @@ class HtmlProjectStore {
    * 成功後 previewVersion +1 (維持單調遞增)。無變更時 committed=false。
    */
   async commitChanges(projectId: string, message: string): Promise<HtmlProjectGitCommitResult> {
-    const db = await getDb();
-    await this.ensureMigrated(projectId);
-    const project = await requireProject(db, projectId);
-    const trimmed = (message ?? '').trim();
-    if (!trimmed) {
-      throw new Error('Commit message is required.');
-    }
-    const oid = await gitService.commitAll(projectId, trimmed, {
-      previewVersion: project.previewVersion,
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      await this.ensureMigratedRaw(projectId);
+      const project = await requireProject(db, projectId);
+      const trimmed = (message ?? '').trim();
+      if (!trimmed) {
+        throw new Error('Commit message is required.');
+      }
+      const oid = await gitService.commitAllUnsafe(projectId, trimmed, {
+        previewVersion: project.previewVersion,
+      });
+      if (oid) {
+        const nextProject: HtmlProject = {
+          ...project,
+          updatedAt: now(),
+          previewVersion: project.previewVersion + 1,
+        };
+        await updateProjectRecord(db, nextProject);
+      }
+      return { projectId, committed: oid !== null, oid, message: trimmed };
     });
-    if (oid) {
-      const nextProject: HtmlProject = {
-        ...project,
-        updatedAt: now(),
-        previewVersion: project.previewVersion + 1,
-      };
-      await updateProjectRecord(db, nextProject);
-    }
-    return { projectId, committed: oid !== null, oid, message: trimmed };
   }
 
   /**
@@ -1112,15 +1501,33 @@ class HtmlProjectStore {
    */
   private migrationPromises = new Map<string, Promise<void>>();
 
-  async ensureMigrated(projectId: string): Promise<void> {
+  async ensureMigrated(
+    projectId: string,
+    options: Pick<ImportHtmlProjectArchiveOptions, 'operationToken'> = {},
+  ): Promise<void> {
+    const operationToken = options.operationToken;
+    if (operationToken !== undefined && !isWorkspaceOperationTokenActive(operationToken)) {
+      throw new Error('Workspace operation token is no longer active.');
+    }
+    if (operationToken !== undefined) {
+      return this.ensureMigratedRaw(projectId);
+    }
+    return withWorkspaceWrite(() => this.ensureMigratedRaw(projectId));
+  }
+
+  private async ensureMigratedRaw(projectId: string): Promise<void> {
     const existing = this.migrationPromises.get(projectId);
     if (existing) {
       return existing;
     }
-    const promise = this.runMigrationLocked(projectId).finally(() => {
-      this.migrationPromises.delete(projectId);
-    });
+    const promise = this.runMigrationLocked(projectId);
     this.migrationPromises.set(projectId, promise);
+    const clearEntry = (): void => {
+      if (this.migrationPromises.get(projectId) === promise) {
+        this.migrationPromises.delete(projectId);
+      }
+    };
+    void promise.then(clearEntry, clearEntry);
     return promise;
   }
 
@@ -1158,19 +1565,41 @@ class HtmlProjectStore {
     }
 
     // replay 冪等:先清空 /projects/<id> 再重建 (中斷重試不會產生重複/交錯 commits)
-    await gitService.deleteProjectDir(projectId).catch(error => {
-      console.warn(`[htmlProjectStore] migrate: clear dir failed for ${projectId}:`, error);
-    });
-    await gitService.ensureRepo(projectId);
+    // Cleanup failures must abort migration; replaying and deleting the legacy
+    // records after a partial clear would make the source data unrecoverable.
+    await gitService.deleteProjectDirUnsafe(projectId);
+    await gitService.ensureRepoUnsafe(projectId);
+
+    // Legacy snapshots describe complete trees. Remove paths omitted by the
+    // next tree before replaying it, including the final current-files tree.
+    // A failed deletion must leave legacy IndexedDB records available to retry.
+    let previousPaths = new Set<string>();
+    const removeOmittedFiles = async (paths: string[]): Promise<void> => {
+      const nextPaths = new Set(paths);
+      for (const path of previousPaths) {
+        if (!nextPaths.has(path) && !(await gitService.deleteProjectFileUnsafe(projectId, path))) {
+          throw new Error(
+            `Migration failed for ${projectId}: could not remove omitted file ${path}.`,
+          );
+        }
+      }
+      previousPaths = nextPaths;
+    };
 
     // 依 createdAt 升序 replay 舊 snapshots (fileEntries undefined → 空 tree commit)
     const sortedSnapshots = [...legacySnapshots].sort((a, b) => a.createdAt - b.createdAt);
+    const replayedSnapshots: Array<{
+      source: HtmlProjectSnapshotRecord;
+      oid: string;
+      meta: HtmlProjectFileMetaMap;
+    }> = [];
     for (const snapshot of sortedSnapshots) {
       const entries = snapshot.fileEntries ?? [];
+      await removeOmittedFiles(entries.map(entry => entry.path));
       const meta: HtmlProjectFileMetaMap = {};
       for (const entry of entries) {
         const bytes = encodeContent(entry.content, entry.encoding);
-        await gitService.writeProjectFile(projectId, entry.path, bytes);
+        await gitService.writeProjectFileUnsafe(projectId, entry.path, bytes);
         meta[entry.path] = {
           kind: entry.kind,
           encoding: entry.encoding,
@@ -1179,21 +1608,28 @@ class HtmlProjectStore {
           updatedAt: snapshot.createdAt,
         };
       }
-      await gitService.writeMeta(projectId, meta);
-      await gitService.commitAll(projectId, snapshot.note?.trim() || 'Snapshot', {
+      await gitService.writeMetaUnsafe(projectId, meta);
+      const oid = await gitService.commitAllUnsafe(projectId, snapshot.note?.trim() || 'Snapshot', {
         previewVersion: snapshot.version,
         isSnapshot: true,
         allowEmpty: true,
         timestamp: snapshot.createdAt,
       });
+      if (!oid) {
+        throw new Error(
+          `Migration failed for ${projectId}: snapshot ${snapshot.version} was not committed.`,
+        );
+      }
+      replayedSnapshots.push({ source: snapshot, oid, meta });
     }
 
     // 寫入當前檔案 (legacyFiles = 最新狀態) + migration commit
+    await removeOmittedFiles(legacyFiles.map(file => file.path));
     const currentMeta: HtmlProjectFileMetaMap = {};
     for (const file of legacyFiles) {
       const encoding = file.encoding || 'utf-8';
       const bytes = encodeContent(file.content, encoding);
-      await gitService.writeProjectFile(projectId, file.path, bytes);
+      await gitService.writeProjectFileUnsafe(projectId, file.path, bytes);
       currentMeta[file.path] = {
         kind: file.kind,
         encoding,
@@ -1202,40 +1638,170 @@ class HtmlProjectStore {
         updatedAt: file.updatedAt,
       };
     }
-    await gitService.writeMeta(projectId, currentMeta);
-    await gitService.commitAll(projectId, 'Migrated to git storage', { allowEmpty: true });
+    await gitService.writeMetaUnsafe(projectId, currentMeta);
+    const migrationOid = await gitService.commitAllUnsafe(projectId, 'Migrated to git storage', {
+      allowEmpty: true,
+    });
+    if (!migrationOid) {
+      throw new Error(`Migration failed for ${projectId}: current files were not committed.`);
+    }
 
     // 驗證 (F1):replay 應產出 ≥ (N snapshot + 1 migration) 個 commit,且 snapshot commit
     // 數量相符。若 replay 中途部分失敗仍可能通過單純「log 非空」檢查,導致刪 idb 後資料
-    // 永久遺失 — 故嚴格校驗數量 + 抽樣比對當前檔案內容,失敗則保留 idb 供下次重試。
-    const expectedMinCommits = sortedSnapshots.length + 1; // N snapshot + 1 migration
+    // 永久遺失 — 故嚴格校驗數量 + 完整比對每個快照/當前檔案位元組與 metadata,
+    // 失敗則保留 idb 供下次重試。
+    const expectedMinCommits = replayedSnapshots.length + 1; // N snapshot + 1 migration
     const verifyLog = await gitService.log(projectId);
     const verifySnapshotCommits = verifyLog.filter(commit => commit.isSnapshot);
     if (
       verifyLog.length < expectedMinCommits ||
-      verifySnapshotCommits.length < sortedSnapshots.length
+      verifySnapshotCommits.length < replayedSnapshots.length ||
+      !verifyLog.some(commit => commit.oid === migrationOid)
     ) {
       throw new Error(
-        `Migration verification failed for ${projectId}: expected >= ${expectedMinCommits} commits (${sortedSnapshots.length} snapshots + migration), got ${verifyLog.length} commits / ${verifySnapshotCommits.length} snapshots.`,
+        `Migration verification failed for ${projectId}: expected >= ${expectedMinCommits} commits (${replayedSnapshots.length} snapshots + migration), got ${verifyLog.length} commits / ${verifySnapshotCommits.length} snapshots.`,
       );
     }
-    if (legacyFiles.length > 0) {
-      const sample = legacyFiles[0];
-      const sampleBytes = await gitService.readProjectFile(projectId, sample.path);
-      const expectedBytes = encodeContent(sample.content, sample.encoding || 'utf-8');
-      if (!sampleBytes || sampleBytes.length !== expectedBytes.length) {
+
+    const normalizeMeta = (meta: HtmlProjectFileMetaMap): string =>
+      JSON.stringify(
+        Object.keys(meta)
+          .sort()
+          .map(path => {
+            const entry = meta[path];
+            return [
+              path,
+              {
+                kind: entry.kind,
+                encoding: entry.encoding,
+                dependencies: entry.dependencies ?? [],
+                size: entry.size,
+                updatedAt: entry.updatedAt,
+              },
+            ];
+          }),
+      );
+    const verifyTree = async (
+      oid: string,
+      expectedFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }>,
+      expectedMeta: HtmlProjectFileMetaMap,
+      label: string,
+    ): Promise<void> => {
+      const actualFiles = await gitService.readCommitTree(projectId, oid);
+      const actualByPath = new Map(actualFiles.map(file => [file.path, file.data]));
+      const expectedByPath = new Map<string, Uint8Array>();
+      for (const file of expectedFiles) {
+        expectedByPath.set(
+          file.path.replace(/^\/+/, ''),
+          encodeContent(file.content, file.encoding),
+        );
+      }
+      expectedByPath.set(
+        '.educare/meta.json',
+        textEncoder.encode(JSON.stringify(expectedMeta, null, 2)),
+      );
+      if (actualByPath.size !== expectedByPath.size) {
         throw new Error(
-          `Migration verification failed for ${projectId}: current file ${sample.path} content mismatch.`,
+          `Migration verification failed for ${projectId}: ${label} file count mismatch.`,
+        );
+      }
+      for (const [path, expected] of expectedByPath) {
+        const actual = actualByPath.get(path);
+        if (!actual || !bytesEqual(actual, expected)) {
+          throw new Error(
+            `Migration verification failed for ${projectId}: ${label} file ${path} content mismatch.`,
+          );
+        }
+      }
+      const actualMetaBytes = actualByPath.get('.educare/meta.json');
+      if (!actualMetaBytes) {
+        throw new Error(
+          `Migration verification failed for ${projectId}: ${label} metadata is missing.`,
+        );
+      }
+      let actualMeta: HtmlProjectFileMetaMap;
+      try {
+        actualMeta = JSON.parse(
+          new TextDecoder().decode(actualMetaBytes),
+        ) as HtmlProjectFileMetaMap;
+      } catch (error) {
+        throw new Error(
+          `Migration verification failed for ${projectId}: ${label} metadata is invalid (${String(error)}).`,
+        );
+      }
+      if (normalizeMeta(actualMeta) !== normalizeMeta(expectedMeta)) {
+        throw new Error(
+          `Migration verification failed for ${projectId}: ${label} metadata mismatch.`,
+        );
+      }
+    };
+
+    for (const replayed of replayedSnapshots) {
+      const commit = verifyLog.find(entry => entry.oid === replayed.oid);
+      if (
+        !commit ||
+        !commit.isSnapshot ||
+        commit.previewVersion !== replayed.source.version ||
+        commit.note !== (replayed.source.note?.trim() || 'Snapshot') ||
+        Math.floor(commit.timestamp / 1000) !== Math.floor(replayed.source.createdAt / 1000)
+      ) {
+        throw new Error(
+          `Migration verification failed for ${projectId}: snapshot ${replayed.source.version} metadata mismatch.`,
+        );
+      }
+      await verifyTree(
+        replayed.oid,
+        replayed.source.fileEntries ?? [],
+        replayed.meta,
+        `snapshot ${replayed.source.version}`,
+      );
+    }
+
+    for (const file of legacyFiles) {
+      const actual = await gitService.readProjectFile(projectId, file.path);
+      const expected = encodeContent(file.content, file.encoding || 'utf-8');
+      if (!actual || !bytesEqual(actual, expected)) {
+        throw new Error(
+          `Migration verification failed for ${projectId}: current file ${file.path} content mismatch.`,
         );
       }
     }
-
-    // 驗證後才刪 idb legacy 記錄 (失敗則保留 idb,下次重試)
-    for (const file of legacyFiles) {
-      await db.delete(PROJECT_FILES_STORE, [projectId, file.path]);
+    const actualMeta = await gitService.readMeta(projectId);
+    if (normalizeMeta(actualMeta) !== normalizeMeta(currentMeta)) {
+      throw new Error(`Migration verification failed for ${projectId}: current metadata mismatch.`);
     }
-    for (const snapshot of legacySnapshots) {
-      await db.delete(PROJECT_SNAPSHOTS_STORE, [projectId, snapshot.version]);
+    await verifyTree(
+      migrationOid,
+      legacyFiles.map(file => ({
+        path: file.path,
+        content: file.content,
+        encoding: file.encoding || 'utf-8',
+      })),
+      currentMeta,
+      'current migration',
+    );
+
+    // Delete the verified source records atomically. Partial cleanup would make
+    // a retry rebuild Git from an incomplete source and lose snapshot history.
+    const cleanup = db.transaction([PROJECT_FILES_STORE, PROJECT_SNAPSHOTS_STORE], 'readwrite');
+    try {
+      await Promise.all([
+        ...legacyFiles.map(file =>
+          cleanup.objectStore(PROJECT_FILES_STORE).delete([projectId, file.path]),
+        ),
+        ...legacySnapshots.map(snapshot =>
+          cleanup.objectStore(PROJECT_SNAPSHOTS_STORE).delete([projectId, snapshot.version]),
+        ),
+        cleanup.done,
+      ]);
+    } catch (error) {
+      try {
+        cleanup.abort();
+      } catch {
+        // Request errors may already have aborted the transaction.
+      }
+      await cleanup.done.catch(() => undefined);
+      throw error;
     }
   }
 
@@ -1243,7 +1809,10 @@ class HtmlProjectStore {
     const db = await getDb();
     await requireProject(db, projectId);
     const todos = await db.getAllFromIndex(PROJECT_TODOS_STORE, 'by-project', projectId);
-    return todos.sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
+    return todos
+      .filter(isVisibleWorkspaceProject)
+      .map(todo => stripWorkspaceArchiveVisibility(todo))
+      .sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
   }
 
   async getTodoSummary(projectId: string): Promise<HtmlProjectTodoSummary> {
@@ -1254,36 +1823,38 @@ class HtmlProjectStore {
     projectId: string,
     items: ReplaceHtmlProjectTodosInput[],
   ): Promise<{ todos: HtmlProjectTodo[]; summary: HtmlProjectTodoSummary }> {
-    const db = await getDb();
-    await requireProject(db, projectId);
-    const existingTodos = await db.getAllFromIndex(PROJECT_TODOS_STORE, 'by-project', projectId);
-    for (const todo of existingTodos) {
-      await db.delete(PROJECT_TODOS_STORE, [projectId, todo.id]);
-    }
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      await requireProject(db, projectId);
+      const existingTodos = await db.getAllFromIndex(PROJECT_TODOS_STORE, 'by-project', projectId);
+      for (const todo of existingTodos) {
+        await db.delete(PROJECT_TODOS_STORE, [projectId, todo.id]);
+      }
 
-    const timestamp = now();
-    const todos: HtmlProjectTodo[] = [];
-    for (const [index, item] of items.entries()) {
-      const todo: HtmlProjectTodo = {
-        projectId,
-        id: item.id?.trim() || `todo-${timestamp}-${index}`,
-        title: item.title,
-        description: item.description,
-        status: normalizeTodoStatus(item.status),
-        order: item.order ?? index,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        completedAt: normalizeTodoStatus(item.status) === 'completed' ? timestamp : null,
+      const timestamp = now();
+      const todos: HtmlProjectTodo[] = [];
+      for (const [index, item] of items.entries()) {
+        const todo: HtmlProjectTodo = {
+          projectId,
+          id: item.id?.trim() || `todo-${timestamp}-${index}`,
+          title: item.title,
+          description: item.description,
+          status: normalizeTodoStatus(item.status),
+          order: item.order ?? index,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          completedAt: normalizeTodoStatus(item.status) === 'completed' ? timestamp : null,
+        };
+        await db.put(PROJECT_TODOS_STORE, todo);
+        todos.push(todo);
+      }
+
+      const normalizedTodos = todos.sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
+      return {
+        todos: normalizedTodos,
+        summary: buildTodoSummary(projectId, normalizedTodos),
       };
-      await db.put(PROJECT_TODOS_STORE, todo);
-      todos.push(todo);
-    }
-
-    const normalizedTodos = todos.sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
-    return {
-      todos: normalizedTodos,
-      summary: buildTodoSummary(projectId, normalizedTodos),
-    };
+    });
   }
 
   async updateTodo(
@@ -1291,53 +1862,166 @@ class HtmlProjectStore {
     todoId: string,
     patch: UpdateHtmlProjectTodoInput,
   ): Promise<{ todo: HtmlProjectTodo; summary: HtmlProjectTodoSummary }> {
-    const db = await getDb();
-    await requireProject(db, projectId);
-    const todo = await db.get(PROJECT_TODOS_STORE, [projectId, todoId]);
-    if (!todo) {
-      throw new Error(`Project todo ${todoId} not found.`);
-    }
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      await requireProject(db, projectId);
+      const todo = await db.get(PROJECT_TODOS_STORE, [projectId, todoId]);
+      if (!todo) {
+        throw new Error(`Project todo ${todoId} not found.`);
+      }
 
-    const timestamp = now();
-    const nextStatus = patch.status ?? todo.status;
-    const nextTodo: HtmlProjectTodo = {
-      ...todo,
-      title: typeof patch.title === 'undefined' ? todo.title : patch.title,
-      description: typeof patch.description === 'undefined' ? todo.description : patch.description,
-      status: nextStatus,
-      order: typeof patch.order === 'undefined' ? todo.order : patch.order,
-      updatedAt: timestamp,
-      completedAt:
-        nextStatus === 'completed'
-          ? todo.status === 'completed' && todo.completedAt
-            ? todo.completedAt
-            : timestamp
-          : null,
-    };
+      const timestamp = now();
+      const nextStatus = patch.status ?? todo.status;
+      const nextTodo: HtmlProjectTodo = {
+        ...todo,
+        title: typeof patch.title === 'undefined' ? todo.title : patch.title,
+        description:
+          typeof patch.description === 'undefined' ? todo.description : patch.description,
+        status: nextStatus,
+        order: typeof patch.order === 'undefined' ? todo.order : patch.order,
+        updatedAt: timestamp,
+        completedAt:
+          nextStatus === 'completed'
+            ? todo.status === 'completed' && todo.completedAt
+              ? todo.completedAt
+              : timestamp
+            : null,
+      };
 
-    await db.put(PROJECT_TODOS_STORE, nextTodo);
-    return {
-      todo: nextTodo,
-      summary: await this.getTodoSummary(projectId),
-    };
+      await db.put(PROJECT_TODOS_STORE, nextTodo);
+      return {
+        todo: nextTodo,
+        summary: await this.getTodoSummary(projectId),
+      };
+    });
   }
 
   async deleteTodo(
     projectId: string,
     todoId: string,
   ): Promise<{ deleted: string; summary: HtmlProjectTodoSummary }> {
-    const db = await getDb();
-    await requireProject(db, projectId);
-    const todo = await db.get(PROJECT_TODOS_STORE, [projectId, todoId]);
-    if (!todo) {
-      throw new Error(`Project todo ${todoId} not found.`);
-    }
+    return withWorkspaceWrite(async () => {
+      const db = await getDb();
+      await requireProject(db, projectId);
+      const todo = await db.get(PROJECT_TODOS_STORE, [projectId, todoId]);
+      if (!todo) {
+        throw new Error(`Project todo ${todoId} not found.`);
+      }
 
-    await db.delete(PROJECT_TODOS_STORE, [projectId, todoId]);
-    return {
-      deleted: todoId,
-      summary: await this.getTodoSummary(projectId),
-    };
+      await db.delete(PROJECT_TODOS_STORE, [projectId, todoId]);
+      return {
+        deleted: todoId,
+        summary: await this.getTodoSummary(projectId),
+      };
+    });
+  }
+
+  /**
+   * Validate the hidden rows created by a workspace archive before the root
+   * journal writes its durable publication receipt.  No visibility state is
+   * flipped here: readers become visible only after the shared receipt exists.
+   */
+  async publishImportedProjectRecords(
+    projectIds: string[],
+    importId: string,
+    options: Pick<ImportHtmlProjectArchiveOptions, 'operationToken'> = {},
+  ): Promise<void> {
+    await withWorkspaceWriteIfNeeded(options.operationToken, async () => {
+      if (!importId.trim()) {
+        throw new Error('Workspace archive project publication requires an importId.');
+      }
+      const db = await getDb();
+      for (const projectId of projectIds) {
+        const project = await requireStoredProject(db, projectId);
+        if (stagedImportId(project) !== importId) {
+          throw new Error(
+            `Workspace archive project ${projectId} is not staged for import ${importId}.`,
+          );
+        }
+        const todos = await db.getAllFromIndex(PROJECT_TODOS_STORE, 'by-project', projectId);
+        if (todos.some(todo => stagedImportId(todo) !== importId)) {
+          throw new Error(
+            `Workspace archive project ${projectId} contains rows outside import ${importId}.`,
+          );
+        }
+      }
+      await gitService.flushUnsafe();
+    });
+  }
+
+  /**
+   * Remove only rows and repository trees staged by the specified import.
+   * Visible or differently-tagged projects are never touched; every failure is
+   * collected so journal recovery can report the exact cleanup boundary.
+   */
+  async removeImportedProjectRecords(
+    projectIds: string[],
+    importId: string,
+    options: Pick<ImportHtmlProjectArchiveOptions, 'operationToken'> = {},
+  ): Promise<ImportedProjectCleanupResult> {
+    return withWorkspaceWriteIfNeeded(options.operationToken, async () => {
+      if (!importId.trim()) {
+        throw new Error('Workspace archive project cleanup requires an importId.');
+      }
+      const db = await getDb();
+      const removedIds: string[] = [];
+      const failures: string[] = [];
+      for (const projectId of projectIds) {
+        try {
+          // Recovery journals persist planned destination ids before provider
+          // writes begin.  A crash before this id was created is already
+          // clean; do not turn that idempotent state into a rollback failure.
+          const project = await db.get(PROJECTS_STORE, projectId);
+          if (!project) {
+            continue;
+          }
+          if (stagedImportId(project) !== importId) {
+            throw new Error(`Project is not staged for import ${importId}.`);
+          }
+          const stagedTodos = await db.getAllFromIndex(
+            PROJECT_TODOS_STORE,
+            'by-project',
+            projectId,
+          );
+          if (stagedTodos.some(todo => stagedImportId(todo) !== importId)) {
+            throw new Error(`Project todos are not staged for import ${importId}.`);
+          }
+          await gitService.removeProjectRepositoryUnsafe(projectId);
+          const transaction = db.transaction(
+            [PROJECTS_STORE, PROJECT_FILES_STORE, PROJECT_SNAPSHOTS_STORE, PROJECT_TODOS_STORE],
+            'readwrite',
+          );
+          await transaction.objectStore(PROJECTS_STORE).delete(projectId);
+          const files = await transaction
+            .objectStore(PROJECT_FILES_STORE)
+            .index('by-project')
+            .getAll(projectId);
+          for (const file of files) {
+            await transaction.objectStore(PROJECT_FILES_STORE).delete([projectId, file.path]);
+          }
+          const snapshots = await transaction
+            .objectStore(PROJECT_SNAPSHOTS_STORE)
+            .index('by-project')
+            .getAll(projectId);
+          for (const snapshot of snapshots) {
+            await transaction
+              .objectStore(PROJECT_SNAPSHOTS_STORE)
+              .delete([projectId, snapshot.version]);
+          }
+          for (const todo of stagedTodos) {
+            await transaction.objectStore(PROJECT_TODOS_STORE).delete([projectId, todo.id]);
+          }
+          await transaction.done;
+          removedIds.push(projectId);
+        } catch (error) {
+          failures.push(`${projectId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      if (failures.length > 0) {
+        throw new Error(`Workspace archive project cleanup failed: ${failures.join('; ')}`);
+      }
+      return { removedIds };
+    });
   }
 
   private async deleteProjectRecords(projectId: string): Promise<void> {
@@ -1346,7 +2030,7 @@ class HtmlProjectStore {
     // Delete the durable file tree first. If LightningFS cleanup or its
     // superblock flush fails, retain all IndexedDB records so a later retry
     // can finish cleanup instead of leaving an unreachable project record.
-    await gitService.deleteProjectDir(projectId);
+    await gitService.deleteProjectDirUnsafe(projectId);
 
     const files = await db.getAllFromIndex(PROJECT_FILES_STORE, 'by-project', projectId);
     for (const file of files) {
@@ -1367,19 +2051,23 @@ class HtmlProjectStore {
   }
 
   async deleteProject(projectId: string, assistantId: string): Promise<HtmlProject> {
-    const project = await this.assertProjectOwnership(projectId, assistantId);
-    await this.deleteProjectRecords(project.id);
-    return project;
+    return withWorkspaceWrite(async () => {
+      const project = await this.assertProjectOwnership(projectId, assistantId);
+      await this.deleteProjectRecords(project.id);
+      return project;
+    });
   }
 
   async deleteProjectsByAssistant(assistantId: string): Promise<number> {
-    const projects = await this.listProjectsByAssistant(assistantId);
+    return withWorkspaceWrite(async () => {
+      const projects = await this.listProjectsByAssistant(assistantId);
 
-    for (const project of projects) {
-      await this.deleteProjectRecords(project.id);
-    }
+      for (const project of projects) {
+        await this.deleteProjectRecords(project.id);
+      }
 
-    return projects.length;
+      return projects.length;
+    });
   }
 }
 

@@ -8,9 +8,12 @@ import {
   currentBranch,
   deleteProjectDir,
   diff,
+  exportProjectRepository,
+  importProjectRepository,
   ensureRepo,
   listBranches,
   log,
+  removeProjectRepository,
   readProjectFile,
   resolveVersion,
   restoreCommitTree,
@@ -21,6 +24,10 @@ import {
   readMeta,
   writeMeta,
 } from './htmlProjectGitService';
+import {
+  __resetWorkspaceOperationServiceForTesting,
+  withWorkspaceOperation,
+} from './workspaceOperationService';
 
 /**
  * Spike 驗證 (Phase 1 gate)：isomorphic-git + LightningFS 全鏈路。
@@ -43,6 +50,24 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
   afterEach(() => {
     __resetGitServiceForTesting();
     __setFsInstanceForTesting(null);
+    __resetWorkspaceOperationServiceForTesting();
+  });
+
+  it('rejects forged and stale operation tokens instead of bypassing the write barrier', async () => {
+    const forgedToken = Symbol('forged-workspace-operation');
+    await expect(ensureRepo('proj-forged-token', { operationToken: forgedToken })).rejects.toThrow(
+      'Workspace operation token is no longer active.',
+    );
+
+    let staleToken!: symbol;
+    await withWorkspaceOperation('export', async operationToken => {
+      staleToken = operationToken;
+      await ensureRepo('proj-active-token', { operationToken });
+    });
+
+    await expect(ensureRepo('proj-stale-token', { operationToken: staleToken })).rejects.toThrow(
+      'Workspace operation token is no longer active.',
+    );
   });
 
   it('awaits the LightningFS superblock flush before commitAll resolves', async () => {
@@ -330,6 +355,156 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     await restoreCommitTree(projectId, commits[0].oid);
     const restored = await readMeta(projectId);
     expect(restored['index.html'].dependencies).toEqual(['/style.css']);
+  });
+
+  it('raw repository archive round-trips git objects, branches, metadata, binary and dirty files', async () => {
+    const sourceId = 'proj-archive-source';
+    const targetId = 'proj-archive-target';
+    await ensureRepo(sourceId);
+    await writeProjectFile(sourceId, 'index.html', '<html>v1</html>');
+    await writeProjectFile(sourceId, 'assets/logo.bin', new Uint8Array([0x00, 0xff, 0x01, 0x80]));
+    await writeMeta(sourceId, {
+      'index.html': { kind: 'html', encoding: 'utf-8', size: 15, updatedAt: 1000 },
+      'assets/logo.bin': { kind: 'asset', encoding: 'base64', size: 4, updatedAt: 1000 },
+    });
+    const firstOid = await commitAll(sourceId, 'Initial', { previewVersion: 1 });
+    expect(firstOid).toBeTruthy();
+
+    await createBranch(sourceId, 'feature');
+    await writeProjectFile(sourceId, 'index.html', '<html>v2</html>');
+    const mainOid = await commitAll(sourceId, 'Main update', { previewVersion: 2 });
+    expect(mainOid).toBeTruthy();
+    await writeProjectFile(sourceId, 'draft.txt', 'uncommitted working tree');
+
+    const sourceArchive = await exportProjectRepository(sourceId);
+    expect(sourceArchive.schemaVersion).toBe(1);
+    expect(sourceArchive.currentBranch).toBe('main');
+    expect(sourceArchive.headOid).toBe(mainOid);
+    expect(sourceArchive.entries.some(entry => entry.path === '.git/HEAD')).toBe(true);
+    expect(sourceArchive.entries.some(entry => entry.path === '.educare/meta.json')).toBe(true);
+    expect(sourceArchive.entries.some(entry => entry.path === 'draft.txt')).toBe(true);
+
+    const result = await importProjectRepository(targetId, sourceArchive);
+    expect(result).toMatchObject({
+      projectId: targetId,
+      currentBranch: 'main',
+      headOid: mainOid,
+    });
+    expect(await listBranches(targetId)).toEqual(await listBranches(sourceId));
+    expect(await currentBranch(targetId)).toBe(await currentBranch(sourceId));
+    expect(await log(targetId)).toEqual(await log(sourceId));
+    expect(Array.from((await readProjectFile(targetId, 'draft.txt')) ?? [])).toEqual(
+      Array.from(new TextEncoder().encode('uncommitted working tree')),
+    );
+    expect(Array.from((await readProjectFile(targetId, 'assets/logo.bin')) ?? [])).toEqual([
+      0x00, 0xff, 0x01, 0x80,
+    ]);
+    expect(await readMeta(targetId)).toEqual(await readMeta(sourceId));
+
+    // Exporting the imported repository proves refs/objects/index/working tree
+    // were copied byte-for-byte, not reconstructed as a replacement commit.
+    const targetArchive = await exportProjectRepository(targetId);
+    expect(targetArchive.entries.map(entry => entry.path)).toEqual(
+      sourceArchive.entries.map(entry => entry.path),
+    );
+    for (const [index, entry] of sourceArchive.entries.entries()) {
+      expect(Array.from(targetArchive.entries[index].data)).toEqual(Array.from(entry.data));
+    }
+  });
+
+  it('raw repository archive validates paths before writes and never overwrites', async () => {
+    const sourceId = 'proj-archive-invalid-source';
+    await ensureRepo(sourceId);
+    await writeProjectFile(sourceId, 'index.html', '<html></html>');
+    await commitAll(sourceId, 'Initial', { previewVersion: 1 });
+    const archive = await exportProjectRepository(sourceId);
+
+    const unsafeArchive = {
+      ...archive,
+      entries: [...archive.entries, { path: '../outside.txt', data: new Uint8Array([1]) }],
+      byteCount: archive.byteCount + 1,
+    };
+    await expect(
+      importProjectRepository('proj-archive-invalid-target', unsafeArchive),
+    ).rejects.toThrow(/unsafe/i);
+    await expect(
+      fsInstance.promises.stat('/projects/proj-archive-invalid-target'),
+    ).rejects.toThrow();
+
+    await expect(exportProjectRepository('../proj-archive-escape')).rejects.toThrow(/safe/i);
+    await expect(exportProjectRepository('proj-archive-missing-export')).rejects.toThrow(
+      /does not exist|cannot initialize/i,
+    );
+
+    const prefixCollision = {
+      ...archive,
+      entries: [
+        ...archive.entries,
+        { path: 'collision.txt', data: new Uint8Array([1]) },
+        { path: 'collision.txt/nested.bin', data: new Uint8Array([2]) },
+      ],
+      byteCount: archive.byteCount + 2,
+    };
+    await expect(
+      importProjectRepository('proj-archive-prefix-collision', prefixCollision),
+    ).rejects.toThrow(/prefix collision/i);
+    await expect(
+      fsInstance.promises.stat('/projects/proj-archive-prefix-collision'),
+    ).rejects.toThrow();
+
+    const tooManyEntries = {
+      ...archive,
+      entries: [
+        ...archive.entries,
+        ...Array.from({ length: 5_001 }, (_, index) => ({
+          path: `limit-${index}.bin`,
+          data: new Uint8Array([index % 256]),
+        })),
+      ],
+      byteCount: archive.byteCount + 5_001,
+    };
+    await expect(
+      importProjectRepository('proj-archive-too-many-entries', tooManyEntries),
+    ).rejects.toThrow(/too many entries/i);
+    await expect(
+      fsInstance.promises.stat('/projects/proj-archive-too-many-entries'),
+    ).rejects.toThrow();
+
+    await importProjectRepository('proj-archive-existing-target', archive);
+    await expect(importProjectRepository('proj-archive-existing-target', archive)).rejects.toThrow(
+      /already exists|overwrite/i,
+    );
+    expect(await log('proj-archive-existing-target')).toEqual(await log(sourceId));
+
+    const concurrentTarget = 'proj-archive-concurrent-target';
+    const concurrentResults = await Promise.allSettled([
+      importProjectRepository(concurrentTarget, archive),
+      importProjectRepository(concurrentTarget, archive),
+    ]);
+    expect(concurrentResults.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(concurrentResults.filter(result => result.status === 'rejected')).toHaveLength(1);
+    expect(await log(concurrentTarget)).toEqual(await log(sourceId));
+  });
+
+  it('raw repository archive removes a partial destination when copied history is corrupt', async () => {
+    const sourceId = 'proj-archive-corrupt-source';
+    const targetId = 'proj-archive-corrupt-target';
+    await ensureRepo(sourceId);
+    await writeProjectFile(sourceId, 'index.html', '<html></html>');
+    await commitAll(sourceId, 'Initial', { previewVersion: 1 });
+    const archive = await exportProjectRepository(sourceId);
+    const corruptedEntries = archive.entries.map(entry =>
+      entry.path === '.git/refs/heads/main'
+        ? { ...entry, data: new TextEncoder().encode(`${'1'.repeat(40)}\n`) }
+        : entry,
+    );
+    const corrupted = { ...archive, entries: corruptedEntries };
+
+    await expect(importProjectRepository(targetId, corrupted)).rejects.toThrow();
+    await expect(fsInstance.promises.stat(`/projects/${targetId}`)).rejects.toThrow();
+
+    // The explicit rollback primitive remains idempotent for archive journals.
+    await expect(removeProjectRepository(targetId)).resolves.toBeUndefined();
   });
 
   it('deleteProjectDir: 遞迴刪除專案目錄 (含 .git)', async () => {

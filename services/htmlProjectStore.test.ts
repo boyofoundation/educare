@@ -6,6 +6,10 @@ import {
 } from './htmlProjectGitService';
 import { htmlProjectStore, HtmlProjectPathValidationError } from './htmlProjectStore';
 import * as gitService from './htmlProjectGitService';
+import {
+  __resetWorkspaceOperationServiceForTesting,
+  withWorkspaceOperation,
+} from './workspaceOperationService';
 
 /**
  * htmlProjectStore 核心測試 (US-002/003):專案 CRUD、normalizePath 驗證、
@@ -24,6 +28,32 @@ describe('htmlProjectStore (project CRUD + path validation + todos)', () => {
   afterEach(() => {
     __resetGitServiceForTesting();
     __setFsInstanceForTesting(null);
+    __resetWorkspaceOperationServiceForTesting();
+  });
+
+  it('rejects forged and stale archive tokens before reading or mutating project storage', async () => {
+    const forgedToken = Symbol('forged-workspace-operation');
+    await expect(
+      htmlProjectStore.exportProjectArchive('project-forged-token', {
+        operationToken: forgedToken,
+      }),
+    ).rejects.toThrow('Workspace operation token is no longer active.');
+
+    let staleToken!: symbol;
+    await withWorkspaceOperation('export', async operationToken => {
+      staleToken = operationToken;
+      await expect(
+        htmlProjectStore.exportProjectArchive('project-missing-during-active-operation', {
+          operationToken,
+        }),
+      ).rejects.toThrow('HTML project project-missing-during-active-operation not found.');
+    });
+
+    await expect(
+      htmlProjectStore.exportProjectArchive('project-stale-token', {
+        operationToken: staleToken,
+      }),
+    ).rejects.toThrow('Workspace operation token is no longer active.');
   });
 
   describe('createProject + project metadata', () => {
@@ -47,6 +77,131 @@ describe('htmlProjectStore (project CRUD + path validation + todos)', () => {
       });
       expect(await htmlProjectStore.getProject(project.id)).toBeDefined();
       expect(await htmlProjectStore.getProject('nonexistent')).toBeUndefined();
+    });
+  });
+
+  describe('project archive roundtrip', () => {
+    it('exports/imports project metadata, todos, snapshots, git history and dirty files', async () => {
+      const source = await htmlProjectStore.createProject({
+        assistantId: 'archive-source-assistant',
+        sessionId: 'archive-source-session',
+        name: 'Archive source',
+      });
+      await htmlProjectStore.writeFiles(source.id, [
+        { path: '/index.html', kind: 'html', content: '<html>v1</html>' },
+        {
+          path: '/assets/logo.bin',
+          kind: 'asset',
+          content: btoa(String.fromCharCode(0, 255, 1, 128)),
+          encoding: 'base64',
+        },
+      ]);
+      const snapshot = await htmlProjectStore.createSnapshot(source.id, 'source snapshot');
+      await htmlProjectStore.writeFiles(source.id, [
+        { path: '/draft.md', kind: 'md', content: 'uncommitted draft' },
+      ]);
+      await htmlProjectStore.replaceTodos(source.id, [
+        { id: 'todo-1', title: 'Review archive', status: 'in_progress' },
+      ]);
+
+      const archive = await htmlProjectStore.exportProjectArchive(source.id);
+      expect(archive.schemaVersion).toBe(1);
+      expect(archive.repository.projectId).toBe(source.id);
+      expect(archive.repository.entries.some(entry => entry.path === '.git/HEAD')).toBe(true);
+      expect(archive.repository.entries.some(entry => entry.path === 'draft.md')).toBe(true);
+
+      const imported = await htmlProjectStore.importProjectArchive(archive, {
+        projectId: 'project-archive-copy',
+        assistantId: 'archive-copy-assistant',
+        sessionId: null,
+      });
+      expect(imported.id).toBe('project-archive-copy');
+      expect(imported.assistantId).toBe('archive-copy-assistant');
+      expect(imported.sessionId).toBeNull();
+      expect(imported.name).toBe(source.name);
+
+      const sourceFiles = await htmlProjectStore.listFiles(source.id);
+      const importedFiles = await htmlProjectStore.listFiles(imported.id);
+      expect(importedFiles).toEqual(sourceFiles);
+      expect((await htmlProjectStore.readFile(imported.id, '/draft.md'))?.content).toBe(
+        'uncommitted draft',
+      );
+      expect(await htmlProjectStore.listTodos(imported.id)).toEqual([
+        expect.objectContaining({ projectId: imported.id, id: 'todo-1', title: 'Review archive' }),
+      ]);
+
+      const sourceSnapshots = await htmlProjectStore.listSnapshots(source.id);
+      const importedSnapshots = await htmlProjectStore.listSnapshots(imported.id);
+      expect(importedSnapshots.snapshots).toEqual(
+        sourceSnapshots.snapshots.map(snapshotRecord => ({
+          ...snapshotRecord,
+          projectId: imported.id,
+        })),
+      );
+      expect(importedSnapshots.snapshots[0].oid).toBe(snapshot.oid);
+      expect(await gitService.log(imported.id)).toEqual(await gitService.log(source.id));
+    });
+
+    it('does not overwrite an existing project id', async () => {
+      const source = await htmlProjectStore.createProject({
+        assistantId: 'archive-source-assistant-2',
+        name: 'Archive source',
+      });
+      await htmlProjectStore.writeFiles(source.id, [
+        { path: '/index.html', kind: 'html', content: '<html></html>' },
+      ]);
+      const archive = await htmlProjectStore.exportProjectArchive(source.id);
+      await expect(
+        htmlProjectStore.importProjectArchive(archive, {
+          projectId: 'project-archive-implicit-parent',
+        }),
+      ).rejects.toThrow(/explicit assistantId\/sessionId|preserveForeignKeys/i);
+      const existing = await htmlProjectStore.createProject({
+        assistantId: 'archive-existing-assistant',
+        name: 'Existing',
+      });
+
+      await expect(
+        htmlProjectStore.importProjectArchive(archive, {
+          projectId: existing.id,
+          preserveForeignKeys: true,
+        }),
+      ).rejects.toThrow(/already exists|overwrite/i);
+      expect(await htmlProjectStore.getProject(existing.id)).toEqual(existing);
+    });
+
+    it('serializes concurrent imports and preserves only the winning metadata/repository', async () => {
+      const source = await htmlProjectStore.createProject({
+        assistantId: 'archive-concurrent-source-assistant',
+        name: 'Concurrent archive source',
+      });
+      await htmlProjectStore.writeFiles(source.id, [
+        { path: '/index.html', kind: 'html', content: '<html>concurrent</html>' },
+      ]);
+      await htmlProjectStore.replaceTodos(source.id, [
+        { id: 'todo-concurrent', title: 'Keep winner', status: 'pending' },
+      ]);
+      const archive = await htmlProjectStore.exportProjectArchive(source.id);
+      const targetId = 'project-archive-concurrent-copy';
+
+      const results = await Promise.allSettled([
+        htmlProjectStore.importProjectArchive(archive, {
+          projectId: targetId,
+          preserveForeignKeys: true,
+        }),
+        htmlProjectStore.importProjectArchive(archive, {
+          projectId: targetId,
+          preserveForeignKeys: true,
+        }),
+      ]);
+      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+      const imported = await htmlProjectStore.getProject(targetId);
+      expect(imported?.id).toBe(targetId);
+      expect(await htmlProjectStore.listTodos(targetId)).toEqual([
+        expect.objectContaining({ projectId: targetId, id: 'todo-concurrent' }),
+      ]);
+      expect(await gitService.log(targetId)).toEqual(await gitService.log(source.id));
     });
   });
 
@@ -205,7 +360,7 @@ describe('htmlProjectStore (project CRUD + path validation + todos)', () => {
     it('deleteProject: storage cleanup failure rejects and preserves project metadata', async () => {
       const project = await htmlProjectStore.createProject({ assistantId: 'a1', name: 'p' });
       const cleanupSpy = vi
-        .spyOn(gitService, 'deleteProjectDir')
+        .spyOn(gitService, 'deleteProjectDirUnsafe')
         .mockRejectedValue(new Error('flush failed'));
       try {
         await expect(htmlProjectStore.deleteProject(project.id, 'a1')).rejects.toThrow(
