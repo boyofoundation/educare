@@ -119,6 +119,43 @@ body {
   min-height: 100%;
 }
 
+.ui-surface {
+  background: var(--appearance-surface);
+  color: var(--appearance-text);
+}
+
+.ui-panel {
+  border: 1px solid var(--appearance-border);
+  background: var(--appearance-surface-raised);
+  color: var(--appearance-text);
+  box-shadow: 0 18px 40px var(--appearance-shadow);
+}
+
+.ui-text {
+  color: var(--appearance-text) !important;
+}
+
+.ui-muted {
+  color: var(--appearance-text-muted) !important;
+}
+
+.ui-control {
+  border: 1px solid var(--appearance-border-strong);
+  background: var(--appearance-surface);
+  color: var(--appearance-text);
+}
+
+.ui-control::placeholder {
+  color: var(--appearance-text-muted);
+  opacity: 1;
+}
+
+.ui-control:focus-visible {
+  border-color: var(--appearance-focus);
+  outline: 3px solid color-mix(in srgb, var(--appearance-focus) 30%, transparent);
+  outline-offset: 1px;
+}
+
 :focus-visible {
   outline: 3px solid var(--appearance-focus);
   outline-offset: 3px;
@@ -138,6 +175,29 @@ body {
   background-color: rgba(255, 255, 255, 0.94) !important;
   border-color: var(--appearance-border) !important;
   box-shadow: 0 16px 32px var(--appearance-shadow);
+}
+
+:root[data-theme='light'] #root [role='navigation'] [class~='text-white'],
+:root[data-theme='light'] #root [role='navigation'] [class~='text-gray-100'],
+:root[data-theme='light'] #root [role='navigation'] [class~='text-gray-200'],
+:root[data-theme='light'] #root [role='navigation'] [class~='text-gray-300'],
+:root[data-theme='light'] #root [role='navigation'] [class~='text-gray-400'],
+:root[data-theme='light'] #root [role='navigation'] [class~='text-gray-500'] {
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light'] #root [role='navigation'] [class~='text-gray-300'],
+:root[data-theme='light'] #root [role='navigation'] [class~='text-gray-400'],
+:root[data-theme='light'] #root [role='navigation'] [class~='text-gray-500'] {
+  color: var(--appearance-text-muted) !important;
+}
+
+/* Interactive navigation controls retain intentional white-on-primary contrast. */
+:root[data-theme='light'] #root [role='navigation'] button.text-white,
+:root[data-theme='light'] #root [role='navigation'] button [class~='text-white'],
+:root[data-theme='light'] #root [role='navigation'] [role='button'].text-white,
+:root[data-theme='light'] #root [role='navigation'] [role='button'] [class~='text-white'] {
+  color: var(--appearance-button-text) !important;
 }
 
 /* Existing editor/provider forms use Tailwind dark utilities. Scope overrides to the
@@ -296,6 +356,17 @@ body {
   border-color: var(--appearance-border) !important;
   background: var(--appearance-surface) !important;
   color: var(--appearance-text);
+}
+
+:root[data-theme='light'] [data-testid='share-modal'] .text-white {
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light'] [data-testid='share-modal'] button.text-white,
+:root[data-theme='light'] [data-testid='share-modal'] button .text-white,
+:root[data-theme='light'] [data-testid='share-modal'] [role='button'].text-white,
+:root[data-theme='light'] [data-testid='share-modal'] [role='button'] .text-white {
+  color: var(--appearance-button-text) !important;
 }
 
 :root[data-theme='light'] [role='dialog'] .text-white {
