@@ -77,6 +77,12 @@ The dominant initial payload is the vendor chunk (`411716` gzip bytes), followed
 entry (`176637`). This identifies the measurement bottleneck; it does not by itself justify a
 chunking change or claim that an LCP target is met.
 
+The harness also records Chromium `Performance.getMetrics` for the diagnostic sample. One
+baseline diagnostic sample reported `ScriptDurationMs=646.9`, `TaskDurationMs=2209.2`,
+`LayoutDurationMs=639.0`, `RecalcStyleDurationMs=120.7`, and `JSHeapUsedSize=7.85 MB`.
+These are aggregate browser timings, not per-module parse times; they are included to keep
+CPU/layout work visible when comparing the final artifact.
+
 ## Final comparison
 
 Fill this table only after all required UI commits are integrated and the same commands and

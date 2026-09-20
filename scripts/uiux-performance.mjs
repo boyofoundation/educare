@@ -111,6 +111,7 @@ const collectSample = async (browser, url, index, options) => {
   }
 
   await cdp.send('Network.enable');
+  await cdp.send('Performance.enable');
   await cdp.send('Network.emulateNetworkConditions', {
     offline: false,
     latency: LATENCY_MS,
@@ -174,6 +175,24 @@ const collectSample = async (browser, url, index, options) => {
     };
   });
 
+  const performanceSnapshot = await cdp.send('Performance.getMetrics');
+  const browserMetrics = Object.fromEntries(
+    performanceSnapshot.metrics
+      .filter(metric =>
+        [
+          'ScriptDuration',
+          'TaskDuration',
+          'LayoutDuration',
+          'RecalcStyleDuration',
+          'JSHeapUsedSize',
+        ].includes(metric.name),
+      )
+      .map(metric => [
+        metric.name.endsWith('Duration') ? `${metric.name}Ms` : metric.name,
+        metric.name.endsWith('Duration') ? metric.value * 1000 : metric.value,
+      ]),
+  );
+
   const gzipMetrics = await collectGzipMetrics(metrics.scriptTimings);
   if (artifactDir) {
     await context.tracing.stop({ path: resolve(artifactDir, `sample-${index}.trace.zip`) });
@@ -191,6 +210,7 @@ const collectSample = async (browser, url, index, options) => {
       : undefined,
     ...metrics,
     ...gzipMetrics,
+    browserMetrics,
   };
 };
 
