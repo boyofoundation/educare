@@ -56,10 +56,12 @@ import type {
   SubagentRunRecord,
   ToolCallRecord,
   RouteProposal,
+  ClarifyRecord,
 } from '../../types';
 import { HtmlProjectWorkspaceUpdate } from '../../types';
 import { DRAW_GEOMETRY_TOOL_NAME, type GeometryDoc } from '../../services/geometryToolService';
 import { SPEAK_TEXT_TOOL_NAME, type SpeechUtteranceDoc } from '../../services/speechToolService';
+import type { ClarifyRequest, ClarifyUserAnswer } from '../../services/clarifyToolService';
 import {
   getCachedSharedRoutableTargets,
   resolveRoutableTargets,
@@ -78,6 +80,7 @@ import {
 import { LOCAL_WORKSPACE_RUN_ID } from '../../services/workspaceOfflineGuard';
 import { acquireWorkspaceRunLock } from '../../services/workspaceRunLock';
 import AgentRunControls from './AgentRunControls';
+import ClarifyQuestionCard from './ClarifyQuestionCard';
 
 const INTERRUPTION_NOTICE = '⚠️ 上次工作已中斷';
 const EMPTY_RESPONSE_NOTICE = '（本次回覆沒有內容）';
@@ -253,6 +256,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const [streamingSpeechUtterances, setStreamingSpeechUtterances] = useState<
     SpeechUtteranceRecord[]
   >([]);
+  const [streamingClarifyRecords, setStreamingClarifyRecords] = useState<ClarifyRecord[]>([]);
+  const [pendingClarify, setPendingClarify] = useState<{
+    toolCallId: string;
+    request: ClarifyRequest;
+  } | null>(null);
   const [streamingImages, setStreamingImages] = useState<MessageImage[]>([]);
   const [interruptedCheckpoint, setInterruptedCheckpoint] = useState<AgentRunCheckpoint | null>(
     null,
@@ -279,6 +287,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const streamingBufferRef = useRef('');
   const streamingFlushFrameRef = useRef<number | null>(null);
   const routeProposalRef = useRef<RouteProposal | undefined>(undefined);
+  const pendingClarifyRef = useRef<{ toolCallId: string; request: ClarifyRequest } | null>(null);
+  const clarifyResolverRef = useRef<((answer: ClarifyUserAnswer | null) => void) | null>(null);
   const handoffKickoffSessionIdRef = useRef<string | null>(null);
   const activeRunSessionsRef = useRef(new Map<string, ActiveRunSession>());
   const runOwnershipSessionIdRef = useRef<string | null>(null);
@@ -1040,6 +1050,29 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     });
   };
 
+  /**
+   * 結算等待中的 askUser 問題:清掉互動卡片、把完成的問答寫入串流紀錄,
+   * 並 resolve 掛在 llmService tool loop 上的 promise (null = 略過/中止)。
+   */
+  const settlePendingClarify = (answer: ClarifyUserAnswer | null) => {
+    const pending = pendingClarifyRef.current;
+    pendingClarifyRef.current = null;
+    setPendingClarify(null);
+    if (pending) {
+      setStreamingClarifyRecords(previous => [
+        ...previous,
+        {
+          id: pending.toolCallId,
+          request: pending.request,
+          answer: answer ?? { kind: 'dismissed' },
+        },
+      ]);
+    }
+    const resolve = clarifyResolverRef.current;
+    clarifyResolverRef.current = null;
+    resolve?.(answer);
+  };
+
   const buildAssistantMessage = (content: string, extras?: Partial<ChatMessage>): ChatMessage => ({
     role: 'model',
     content,
@@ -1125,11 +1158,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setPendingEmptyResponseNotice(null);
     latestErrorMessageRef.current = null;
     routeProposalRef.current = undefined;
+    pendingClarifyRef.current = null;
+    clarifyResolverRef.current = null;
+    setPendingClarify(null);
     setRunState(null);
     setSubagentBatches({});
     setToolCallRecords([]);
     setStreamingGeometryBoards([]);
     setStreamingSpeechUtterances([]);
+    setStreamingClarifyRecords([]);
     setStreamingImages([]);
     setResumeError(null);
     actions?.setAgentRunState?.(null);
@@ -1277,6 +1314,21 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           onRouteProposal: proposal => {
             routeProposalRef.current = proposal;
           },
+          onClarifyRequest: (request, context) => {
+            // 背景 run (使用者已切走 session) 無法互動:直接回「略過」,
+            // 模型會收到明確的 dismissed 結果而不是懸掛等待。
+            if (!isRunSessionDisplayed()) {
+              return Promise.resolve(null);
+            }
+            return new Promise<ClarifyUserAnswer | null>(resolve => {
+              // 同一時間最多一個等待中的問題;防禦性結算前一個。
+              clarifyResolverRef.current?.(null);
+              clarifyResolverRef.current = resolve;
+              const pending = { toolCallId: context.toolCallId, request };
+              pendingClarifyRef.current = pending;
+              setPendingClarify(pending);
+            });
+          },
           onStateChange: nextState => {
             if (!isRunSessionDisplayed()) {
               return;
@@ -1361,6 +1413,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           setStreamingResponse('');
           setStreamingGeometryBoards([]);
           setStreamingSpeechUtterances([]);
+          setStreamingClarifyRecords([]);
           setStreamingImages([]);
         }
         const fullModelResponse = result.fullText.trim();
@@ -1403,6 +1456,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           const hasArtifacts =
             (result.geometryBoards?.length ?? 0) > 0 ||
             (result.speechUtterances?.length ?? 0) > 0 ||
+            (result.clarifyRecords?.length ?? 0) > 0 ||
             (result.images?.length ?? 0) > 0 ||
             persistedToolCallLog.length > 0 ||
             persistedSubagentRuns.length > 0;
@@ -1413,6 +1467,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                   citations: result.citations,
                   geometryBoards: result.geometryBoards,
                   speechUtterances: result.speechUtterances,
+                  clarifyRecords: result.clarifyRecords,
                   images: result.images,
                   routeProposal: routeProposalRef.current,
                 })
@@ -1467,6 +1522,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           citations: result.citations,
           geometryBoards: result.geometryBoards,
           speechUtterances: result.speechUtterances,
+          clarifyRecords: result.clarifyRecords,
           images: result.images,
           routeProposal: routeProposalRef.current,
         });
@@ -1560,6 +1616,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         setStreamingResponse('');
         setStreamingGeometryBoards([]);
         setStreamingSpeechUtterances([]);
+        setStreamingClarifyRecords([]);
         setSubagentBatches({});
         setToolCallRecords([]);
       }
@@ -1606,6 +1663,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         activeRunSessionsRef.current.delete(displaySession.id);
       }
       setActiveRunRevision(revision => revision + 1);
+      // 中止/例外路徑:若還有等待中的 askUser 問題,結算為略過,
+      // 避免互動卡片殘留或 promise 懸掛。
+      if (clarifyResolverRef.current) {
+        settlePendingClarify(null);
+      }
     }
   };
 
@@ -2090,7 +2152,20 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                 toolCallLog={toolCallRecords}
                 geometryBoards={streamingGeometryBoards}
                 speechUtterances={streamingSpeechUtterances}
+                clarifyRecords={streamingClarifyRecords}
               />
+            )}
+
+            {pendingClarify && (
+              <div className='mb-6 flex justify-start'>
+                <div className='w-full max-w-3xl'>
+                  <ClarifyQuestionCard
+                    request={pendingClarify.request}
+                    onAnswer={answer => settlePendingClarify(answer)}
+                    onDismiss={() => settlePendingClarify(null)}
+                  />
+                </div>
+              </div>
             )}
 
             {pendingEmptyResponseNotice && (

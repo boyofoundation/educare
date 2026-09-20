@@ -4,6 +4,7 @@ import { UserIcon, GeminiIcon } from '../ui/Icons';
 import AgentActivityTimeline from './AgentActivityTimeline';
 import GeometryBoard from './GeometryBoard';
 import SpeechUtteranceCard from './SpeechUtteranceCard';
+import ClarifyQuestionCard from './ClarifyQuestionCard';
 import ReadAloudButton from './ReadAloudButton';
 import GeneratedImageGrid from './GeneratedImageGrid';
 import MarkdownContent from './MarkdownContent';
@@ -309,6 +310,9 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
           ))}
           {message.speechUtterances?.map(utterance => (
             <SpeechUtteranceCard key={utterance.id} utterance={utterance} />
+          ))}
+          {message.clarifyRecords?.map(record => (
+            <ClarifyQuestionCard key={record.id} record={record} />
           ))}
           <AgentActivityTimeline
             toolCalls={message.toolCallLog}

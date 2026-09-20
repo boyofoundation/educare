@@ -1279,6 +1279,92 @@ describe('ChatContainer', () => {
     });
   });
 
+  it('renders the pending askUser card, resolves the user answer, and persists clarifyRecords', async () => {
+    let resolveRun: (value: AgentRunResult) => void = () => undefined;
+    let answerPromise: Promise<{ kind: string; label?: string } | null> | null = null;
+    mockControllerRun.mockImplementationOnce(async () => {
+      const options = mockAgentRunControllerCtor.mock.calls.at(-1)?.[0] as {
+        callbacks?: {
+          onClarifyRequest?: (
+            request: {
+              question: string;
+              options: Array<{ label: string; description?: string }>;
+              allowCustomAnswer: boolean;
+            },
+            context: { toolCallId: string },
+          ) => Promise<{ kind: 'option'; label: string } | null>;
+        };
+      };
+      const onClarifyRequest = options?.callbacks?.onClarifyRequest;
+      if (onClarifyRequest) {
+        answerPromise = onClarifyRequest(
+          {
+            question: '要使用哪種主題？',
+            options: [{ label: '亮色' }, { label: '暗色' }],
+            allowCustomAnswer: true,
+          },
+          { toolCallId: 'askUser-1-1' },
+        );
+      }
+      return new Promise<AgentRunResult>(resolve => {
+        resolveRun = resolve;
+      });
+    });
+
+    render(<ChatContainer {...defaultProps} />);
+
+    await sendMessage('Build a page');
+
+    // The interactive question card appears while the run is pending.
+    const card = await screen.findByTestId('clarify-question-card');
+    expect(card).toHaveAttribute('data-pending', 'true');
+    expect(screen.getByText('要使用哪種主題？')).toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /暗色/ }));
+
+    await waitFor(() => {
+      expect(answerPromise).resolves.toEqual({ kind: 'option', label: '暗色' });
+    });
+
+    // Answering dismisses the interactive card; finishing the run persists the record.
+    resolveRun({
+      ...buildRunResult('Answered response'),
+      clarifyRecords: [
+        {
+          id: 'clarify-0-0',
+          request: {
+            question: '要使用哪種主題？',
+            options: [{ label: '亮色' }, { label: '暗色' }],
+            allowCustomAnswer: true,
+          },
+          answer: { kind: 'option', label: '暗色' },
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      expect(defaultProps.onNewMessage).toHaveBeenCalled();
+    });
+    const staticCard = await screen.findByTestId('clarify-question-card');
+    expect(staticCard).not.toHaveAttribute('data-pending');
+    expect(defaultProps.onNewMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: 'model',
+            content: 'Answered response',
+            clarifyRecords: [
+              expect.objectContaining({ answer: { kind: 'option', label: '暗色' } }),
+            ],
+          }),
+        ]),
+      }),
+      'Build a page',
+      'Answered response',
+      expect.objectContaining({ promptTokenCount: 10, candidatesTokenCount: 15 }),
+    );
+  });
+
   it('calls controller.stop when the Stop button is clicked during a run', async () => {
     // Run that stays pending (we control resolution) so the Stop button stays visible.
     let resolveRun: (value: AgentRunResult) => void = () => undefined;

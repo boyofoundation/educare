@@ -5,6 +5,7 @@ import MarkdownContent from './MarkdownContent';
 import AgentActivityTimeline from './AgentActivityTimeline';
 import GeometryBoard from './GeometryBoard';
 import SpeechUtteranceCard from './SpeechUtteranceCard';
+import ClarifyQuestionCard from './ClarifyQuestionCard';
 import GeneratedImageGrid from './GeneratedImageGrid';
 
 const StreamingResponse: React.FC<StreamingResponseProps> = ({
@@ -14,6 +15,7 @@ const StreamingResponse: React.FC<StreamingResponseProps> = ({
   toolCallLog,
   geometryBoards,
   speechUtterances,
+  clarifyRecords,
 }) => {
   const subagentRuns = useMemo(
     () => Object.values(subagentBatches ?? {}).flat(),
@@ -38,6 +40,9 @@ const StreamingResponse: React.FC<StreamingResponseProps> = ({
           ))}
           {speechUtterances?.map(utterance => (
             <SpeechUtteranceCard key={utterance.id} utterance={utterance} />
+          ))}
+          {clarifyRecords?.map(record => (
+            <ClarifyQuestionCard key={record.id} record={record} />
           ))}
           {images?.length ? <GeneratedImageGrid images={images} /> : null}
           {content !== '' && (
