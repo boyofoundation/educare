@@ -1,4 +1,4 @@
-import React, { useReducer, useCallback, useEffect } from 'react';
+import React, { useReducer, useCallback, useEffect, useRef, useState } from 'react';
 import {
   AgentBundle,
   AgentRunState,
@@ -23,6 +23,7 @@ import {
 import { htmlProjectStore } from '../../services/htmlProjectStore';
 import { htmlProjectImportService } from '../../services/htmlProjectImportService';
 import { importAssistantPackageFile } from '../../services/assistantPackageService';
+import { AssistantPackageImportDialog } from '../assistant/AssistantPackageImportDialog';
 import { getTemplateFiles } from '../../services/htmlProjectTemplates';
 import type { LocalSearchResult } from '../../services/localSearchService';
 import { AppContext } from './useAppContext';
@@ -263,6 +264,24 @@ interface AppProviderProps {
 
 export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   const [state, dispatch] = useReducer(appReducer, initialState);
+  const [assistantImportPreview, setAssistantImportPreview] = useState<Assistant | null>(null);
+  const importDecisionRef = useRef<((accepted: boolean) => void) | null>(null);
+  const importInProgressRef = useRef(false);
+  const importMountedRef = useRef(true);
+  const resolveImportDecision = useCallback((accepted: boolean) => {
+    const resolve = importDecisionRef.current;
+    importDecisionRef.current = null;
+    setAssistantImportPreview(null);
+    resolve?.(accepted);
+  }, []);
+  useEffect(() => {
+    importMountedRef.current = true;
+    return () => {
+      importMountedRef.current = false;
+      importDecisionRef.current?.(false);
+      importDecisionRef.current = null;
+    };
+  }, []);
   const currentAssistantUsesExclusiveTools =
     state.currentAssistant?.mathToolsEnabled === true ||
     state.currentAssistant?.webSpeechToolsEnabled === true;
@@ -446,19 +465,51 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   // Import assistant from an exported package zip (offline sharing without Turso)
   const importAssistantPackage = useCallback(
     async (file: File) => {
-      const existingIds = state.assistants.map(assistant => assistant.id);
-      const imported = await importAssistantPackageFile(file, existingIds);
-
-      await db.saveAssistant(imported);
-      const storedAssistants = await db.getAllAssistants();
-      dispatch({
-        type: 'SET_ASSISTANTS',
-        payload: storedAssistants.sort((a, b) => b.createdAt - a.createdAt),
-      });
-      await selectAssistant(imported.id, true);
-      return imported;
+      if (state.isShared !== false || state.bundleMode || state.isBundleImportRoute) {
+        throw new Error('請回到個人工作區再匯入助理。');
+      }
+      if (importInProgressRef.current) {
+        throw new Error('請先完成或取消目前的助理匯入。');
+      }
+      if (file.size > 50 * 1024 * 1024) {
+        throw new Error('助理壓縮檔超過 50 MiB，尚未讀取或寫入資料。');
+      }
+      importInProgressRef.current = true;
+      try {
+        const existingIds = state.assistants.map(assistant => assistant.id);
+        const parsed = await importAssistantPackageFile(file, existingIds);
+        if (!importMountedRef.current) {
+          throw new globalThis.DOMException('匯入畫面已關閉。', 'AbortError');
+        }
+        const imported = { ...parsed, id: crypto.randomUUID() };
+        const accepted = await new Promise<boolean>(resolve => {
+          importDecisionRef.current = resolve;
+          setAssistantImportPreview(imported);
+        });
+        if (!accepted) {
+          throw new globalThis.DOMException('已取消助理匯入，沒有儲存檔案內容。', 'AbortError');
+        }
+        // Every import is a new copy, including when another tab imports the same
+        // package while this confirmation is open.
+        await db.saveAssistant(imported);
+        const storedAssistants = await db.getAllAssistants();
+        dispatch({
+          type: 'SET_ASSISTANTS',
+          payload: storedAssistants.sort((a, b) => b.createdAt - a.createdAt),
+        });
+        await selectAssistant(imported.id, true);
+        return imported;
+      } finally {
+        importInProgressRef.current = false;
+      }
     },
-    [selectAssistant, state.assistants],
+    [
+      selectAssistant,
+      state.assistants,
+      state.isShared,
+      state.bundleMode,
+      state.isBundleImportRoute,
+    ],
   );
 
   // Delete assistant
@@ -536,6 +587,9 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   }, []);
 
   const reportNavigationError = useCallback((error: unknown) => {
+    if (error instanceof globalThis.DOMException && error.name === 'AbortError') {
+      return;
+    }
     const message = error instanceof Error && error.message ? error.message : '無法完成導覽。';
     console.error('Failed to apply navigation intent:', error);
     dispatch({ type: 'SET_ERROR', payload: message });
@@ -1554,7 +1608,17 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
     },
   };
 
-  return <AppContext.Provider value={contextValue}>{children}</AppContext.Provider>;
+  return (
+    <AppContext.Provider value={contextValue}>
+      {children}
+      {assistantImportPreview && (
+        <AssistantPackageImportDialog
+          assistant={assistantImportPreview}
+          onDecision={resolveImportDecision}
+        />
+      )}
+    </AppContext.Provider>
+  );
 }
 
 export default AppProvider;

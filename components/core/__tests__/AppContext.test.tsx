@@ -65,6 +65,7 @@ const mockProviderRegistry = vi.hoisted(() => ({
 }));
 const mockAssistantPackageService = vi.hoisted(() => ({
   importAssistantPackageFile: vi.fn(),
+  ASSISTANT_PACKAGE_SCHEMA_VERSION: 1,
 }));
 
 vi.mock('../../../services/db', () => mockDb);
@@ -1536,6 +1537,35 @@ describe('AppContext', () => {
       expect(screen.getAllByTestId('focused-material-target').at(-1)).toHaveTextContent('none');
     });
 
+    it('cancels an assistant package preview without saving imported content', async () => {
+      const importedAssistant = {
+        ...TEST_ASSISTANTS.withRag,
+        id: 'cancelled-import',
+        name: 'Cancelled Package',
+      };
+      mockDb.getAllAssistants.mockResolvedValue([TEST_ASSISTANTS.basic]);
+      mockDb.getAssistant.mockResolvedValue(TEST_ASSISTANTS.basic);
+      mockDb.getSessionsForAssistant.mockResolvedValue([TEST_SESSIONS.withMessages]);
+      mockAssistantPackageService.importAssistantPackageFile.mockResolvedValue(importedAssistant);
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('is-shared')).toHaveTextContent('false'));
+      await act(async () => {
+        screen.getByTestId('navigate-import').click();
+      });
+      await screen.findByRole('dialog', { name: '確認助理包內容' });
+      await act(async () => {
+        screen.getByRole('button', { name: '取消匯入' }).click();
+      });
+      expect(screen.queryByRole('dialog', { name: '確認助理包內容' })).not.toBeInTheDocument();
+      expect(mockDb.saveAssistant).not.toHaveBeenCalledWith(
+        expect.objectContaining({ name: importedAssistant.name }),
+      );
+    });
+
     it('continues a deferred assistant import after dirty navigation is confirmed', async () => {
       const importedAssistant = {
         ...TEST_ASSISTANTS.withRag,
@@ -1577,8 +1607,26 @@ describe('AppContext', () => {
           expect.any(File),
           expect.arrayContaining([TEST_ASSISTANTS.basic.id]),
         );
-        expect(mockDb.saveAssistant).toHaveBeenCalledWith(importedAssistant);
       });
+      expect(mockDb.saveAssistant).not.toHaveBeenCalledWith(
+        expect.objectContaining({ name: importedAssistant.name }),
+      );
+      expect(screen.getByRole('dialog', { name: '確認助理包內容' })).toBeVisible();
+      await act(async () => {
+        screen.getByRole('button', { name: '確認並匯入助理' }).click();
+      });
+      await waitFor(() => {
+        expect(mockDb.saveAssistant).toHaveBeenCalledWith(
+          expect.objectContaining({
+            name: importedAssistant.name,
+            systemPrompt: importedAssistant.systemPrompt,
+          }),
+        );
+      });
+      const saved = mockDb.saveAssistant.mock.calls.find(
+        ([assistant]) => assistant.name === importedAssistant.name,
+      )?.[0];
+      expect(saved?.id).not.toBe(importedAssistant.id);
     });
   });
 
