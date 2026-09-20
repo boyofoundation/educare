@@ -6,7 +6,7 @@ import ChatInput from './ChatInput';
 import WelcomeMessage from './WelcomeMessage';
 import ThinkingIndicator from './ThinkingIndicator';
 import StreamingResponse from './StreamingResponse';
-import { Virtuoso } from 'react-virtuoso';
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { AgentRunController } from '../../services/agentRunController';
 import { buildIndexedKnowledgeChunks } from '../../services/knowledgeSearchService';
 import {
@@ -258,6 +258,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const latestErrorMessageRef = useRef<string | null>(null);
   const inputRef = useRef(initialDraft);
   const draftKeyRef = useRef(draftKey);
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const streamingBufferRef = useRef('');
   const streamingFlushFrameRef = useRef<number | null>(null);
   const routeProposalRef = useRef<RouteProposal | undefined>(undefined);
@@ -278,7 +279,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setInput(value);
   }, []);
 
-  const hasRuntimeContext = Boolean(appContext?.state);
+  // Lightweight harnesses (bundle runners/tests) provide only run state and must retain
+  // their existing send behavior; provider/network gating belongs to the full AppProvider.
+  const hasRuntimeContext = Boolean(
+    appContext?.state && Array.isArray(appContext.state.assistants),
+  );
   const [isOnline, setIsOnline] = useState(
     () => typeof navigator === 'undefined' || navigator.onLine !== false,
   );
@@ -298,8 +303,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     draftKeyRef.current = draftKey;
     const restoredDraft = draftPersistenceEnabled ? readChatDraft(draftKey) : '';
     inputRef.current = restoredDraft;
-    setInput(restoredDraft);
-  }, [draftKey, draftPersistenceEnabled]);
+    setInputValue(restoredDraft);
+  }, [draftKey, draftPersistenceEnabled, setInputValue]);
 
   useEffect(() => {
     if (!draftPersistenceEnabled) {
@@ -410,7 +415,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       return;
     }
 
-    actions?.setViewMode?.('provider_settings');
+    if (actions?.openProviderSettings) {
+      actions.openProviderSettings('chat');
+    } else {
+      actions?.setViewMode?.('provider_settings');
+    }
   };
 
   useEffect(() => {
@@ -548,6 +557,42 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       activeRunSessionRef.current = currentSession;
     }
   }, [currentSession]);
+
+  // Search navigation publishes an exact message index through AppContext. Prefer
+  // Virtuoso's imperative handle; the DOM fallback also works while the virtual list mounts.
+  useEffect(() => {
+    const target = appContext?.state?.focusedMessageTarget;
+    if (
+      !target ||
+      target.sessionId !== currentSession.id ||
+      target.messageIndex < 0 ||
+      target.messageIndex >= currentSession.messages.length
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      if (virtuosoRef.current) {
+        virtuosoRef.current.scrollToIndex({
+          index: target.messageIndex,
+          align: 'center',
+          behavior: 'smooth',
+        });
+      } else {
+        document
+          .querySelector(`[data-message-index="${target.messageIndex}"]`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      actions?.clearFocusedMessage?.();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    actions,
+    appContext?.state?.focusedMessageTarget,
+    currentSession.id,
+    currentSession.messages.length,
+  ]);
 
   useEffect(() => {
     subagentBatchesRef.current = subagentBatches;
@@ -1245,7 +1290,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         { isError: true },
       );
       // Retain the unsent user input so the recipient can edit and retry.
-      setInput(message);
+      setInputValue(message);
       if (attachments?.length) {
         setPendingAttachments(attachments);
       }
@@ -1271,12 +1316,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
   const handleSend = async () => {
     const attachments = imageInputSupported ? pendingAttachments : [];
-    if ((!input.trim() && attachments.length === 0) || isLoading) {
+    if ((!input.trim() && attachments.length === 0) || isLoading || inputUnavailable) {
       return;
     }
 
     const userMessage = input.trim();
-    setInput('');
+    setInputValue('');
+    if (draftPersistenceEnabled) {
+      persistChatDraft(draftKeyRef.current, '');
+    }
     setPendingAttachments([]);
     setAttachmentError(null);
     setPendingEmptyResponseNotice(null);
@@ -1379,11 +1427,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   }, [currentSession, isLoading]);
 
   const handlePromptSelect = async (prompt: string) => {
-    if (isLoading) {
+    if (isLoading || inputUnavailable) {
       return;
     }
 
-    setInput(prompt);
+    setInputValue(prompt);
     const baseSession = sessionRef.current;
     const newUserMessage: ChatMessage = {
       role: 'user',
@@ -1400,7 +1448,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       displaySession: updatedSession,
       historyMessages: baseSession.messages.filter(messageItem => !isSyntheticMessage(messageItem)),
     });
-    setInput('');
+    setInputValue('');
   };
 
   const citationContentsById = useMemo(
@@ -1461,7 +1509,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                     setPendingEmptyResponseNotice(null);
                     setIsThinking(false);
                     setStatusText('');
-                    setInput('');
+                    setInputValue('');
                     setInterruptedCheckpoint(null);
                     setResumeUnavailableReason(null);
                     setResumeError(null);
@@ -1574,6 +1622,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             {/* A stable key can leave react-virtuoso with an empty measurement after the
                 initial zero-item render; remount when persisted message count changes. */}
             <Virtuoso
+              ref={virtuosoRef}
               key={`${currentSession.id}:${currentSession.messages.length}`}
               data={currentSession.messages}
               customScrollParent={containerRef.current ?? undefined}
@@ -1587,7 +1636,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                   return null;
                 }
                 return (
-                  <div className='mb-6'>
+                  <div className='mb-6' data-message-index={index}>
                     <MessageBubble
                       message={msg}
                       index={index}
@@ -1650,12 +1699,35 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         </div>
       )}
 
+      {inputGuidance && (
+        <div
+          id='chat-input-guidance'
+          className='flex items-center justify-between gap-3 border-t border-amber-500/20 bg-amber-500/10 px-4 py-2 text-sm text-amber-100 md:px-6'
+          role='status'
+          data-testid='chat-input-guidance'
+        >
+          <span>{inputGuidance.message}</span>
+          {inputGuidance.actionLabel && (
+            <button
+              type='button'
+              onClick={handleRequestProviderSetup}
+              className='flex-shrink-0 rounded-md border border-amber-200/40 px-2.5 py-1.5 text-xs font-medium text-amber-50 transition hover:bg-amber-100/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70'
+            >
+              {inputGuidance.actionLabel}
+            </button>
+          )}
+        </div>
+      )}
+
       <ChatInput
         value={input}
-        onChange={setInput}
+        onChange={setInputValue}
         onSend={handleSend}
         isLoading={isLoading}
         disabled={false}
+        sendDisabled={inputUnavailable}
+        sendDisabledReason={inputGuidance?.reason}
+        ariaDescribedBy={inputGuidance ? 'chat-input-guidance' : undefined}
         isWorkspaceOpen={_isWorkspaceOpen}
         isRunning={isRunning}
         onStop={handleStop}

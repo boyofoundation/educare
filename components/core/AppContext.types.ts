@@ -8,6 +8,7 @@ import {
   HtmlProjectPreviewArtifact,
   AgentBundle,
 } from '../../types';
+import type { LocalSearchResult } from '../../services/localSearchService';
 
 export type ViewMode =
   | 'chat'
@@ -23,6 +24,19 @@ export interface ModelLoadingProgress {
   status: string;
   progress: number;
   name?: string;
+}
+
+export interface FocusedMessageTarget {
+  sessionId: string;
+  messageIndex: number;
+  requestId: string;
+}
+
+export interface NavigationRequest {
+  viewMode: ViewMode;
+  assistantId?: string;
+  sessionId?: string;
+  projectId?: string;
 }
 
 export interface AppState {
@@ -59,6 +73,13 @@ export interface AppState {
   agentRunState: AgentRunState | null;
   /** Temporary shared-mode session consumed by SharedAssistant after a handoff. */
   pendingHandoffSession?: ChatSession | null;
+  /** View to return to after provider setup; kept in context so drafts do not need routing flags. */
+  providerReturnView?: ViewMode | null;
+  /** Message selected from local search and consumed by ChatContainer. */
+  focusedMessageTarget?: FocusedMessageTarget | null;
+  /** Unsaved assistant-editor state used by navigation guards. */
+  editorDirty?: boolean;
+  pendingNavigation?: NavigationRequest | null;
 }
 
 export type AppAction =
@@ -93,7 +114,11 @@ export type AppAction =
   | { type: 'CLEAR_PROJECT_ACTIVITY' }
   | { type: 'RESET_PROJECT_WORKSPACE' }
   | { type: 'SET_AGENT_RUN_STATE'; payload: AgentRunState | null }
-  | { type: 'SET_PENDING_HANDOFF_SESSION'; payload: ChatSession | null };
+  | { type: 'SET_PENDING_HANDOFF_SESSION'; payload: ChatSession | null }
+  | { type: 'SET_PROVIDER_RETURN_VIEW'; payload: ViewMode | null }
+  | { type: 'SET_FOCUSED_MESSAGE_TARGET'; payload: FocusedMessageTarget | null }
+  | { type: 'SET_EDITOR_DIRTY'; payload: boolean }
+  | { type: 'SET_PENDING_NAVIGATION'; payload: NavigationRequest | null };
 
 export interface AppContextValue {
   state: AppState;
@@ -111,6 +136,20 @@ export interface AppContextValue {
     deleteSession: (sessionId: string, options?: { externallyManaged?: boolean }) => Promise<void>;
     updateSession: (session: ChatSession) => Promise<void>;
     setViewMode: (mode: ViewMode) => void;
+    setEditorDirty: (dirty: boolean) => void;
+    navigate: (request: NavigationRequest) => { allowed: boolean };
+    confirmPendingNavigation: () => void;
+    cancelPendingNavigation: () => void;
+    openProviderSettings: (returnTo?: ViewMode) => void;
+    closeProviderSettings: () => void;
+    openSession: (sessionId: string) => Promise<void>;
+    renameSession: (sessionId: string, title: string) => Promise<void>;
+    toggleSessionPinned: (sessionId: string) => Promise<void>;
+    setSessionCategory: (sessionId: string, category: string) => Promise<void>;
+    toggleAssistantPinned: (assistantId: string) => Promise<void>;
+    setAssistantCategory: (assistantId: string, category: string) => Promise<void>;
+    openSearchResult: (result: LocalSearchResult) => Promise<void>;
+    clearFocusedMessage: () => void;
     setBundleMode: (payload: { bundleId: string; bundle?: AgentBundle } | null) => void;
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppContext } from './useAppContext';
 import { AssistantList } from '../assistant';
 import { ProjectPicker } from '../canvas';
@@ -6,6 +6,13 @@ import { ChatIcon, TrashIcon, SettingsIcon, PlusIcon } from '../ui/Icons';
 import { ChatSession, SessionTokenUsage } from '../../types';
 import { useTursoAssistantStatus } from '../../hooks/useTursoAssistantStatus';
 import { downloadAssistantPackage } from '../../services/assistantPackageService';
+import { htmlProjectStore } from '../../services/htmlProjectStore';
+import * as db from '../../services/db';
+import {
+  getLocalSearchResultKindLabel,
+  searchLocalWorkspace,
+  type LocalSearchResult,
+} from '../../services/localSearchService';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -73,7 +80,7 @@ const BrandMark: React.FC<{ className?: string }> = ({ className }) => (
 );
 
 export function Layout({ children }: LayoutProps): React.JSX.Element {
-  const { state, dispatch, actions } = useAppContext();
+  const { state, actions } = useAppContext();
 
   // Check if current assistant exists in Turso for sharing
   const { canShare } = useTursoAssistantStatus(state.currentAssistant?.id || null);
@@ -89,6 +96,145 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   const tokenPopoverRef = useRef<HTMLDivElement | null>(null);
   const expandedTokenBtnRef = useRef<globalThis.HTMLButtonElement | null>(null);
   const railTokenBtnRef = useRef<globalThis.HTMLButtonElement | null>(null);
+  const drawerCloseButtonRef = useRef<globalThis.HTMLButtonElement | null>(null);
+  const drawerTriggerRef = useRef<globalThis.HTMLButtonElement | null>(null);
+  const previouslyFocusedRef = useRef<globalThis.HTMLElement | null>(null);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<LocalSearchResult[]>([]);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [sessionTitleDraft, setSessionTitleDraft] = useState('');
+
+  const orderedSessions = useMemo(
+    () =>
+      [...state.sessions].sort((left, right) => {
+        if (Boolean(left.isPinned) !== Boolean(right.isPinned)) {
+          return left.isPinned ? -1 : 1;
+        }
+        const leftTime = left.lastOpenedAt ?? left.updatedAt ?? left.createdAt;
+        const rightTime = right.lastOpenedAt ?? right.updatedAt ?? right.createdAt;
+        return rightTime - leftTime;
+      }),
+    [state.sessions],
+  );
+
+  const drawerInteractive = !isTouch || state.isSidebarOpen;
+
+  const requestNavigation = (viewMode: Parameters<typeof actions.navigate>[0]['viewMode']) => {
+    const result = actions.navigate({ viewMode });
+    if (result.allowed) {
+      closeDrawerIfMobile();
+    }
+  };
+
+  const beginRenameSession = (session: ChatSession) => {
+    setEditingSessionId(session.id);
+    setSessionTitleDraft(session.title);
+  };
+
+  const commitRenameSession = async (sessionId: string) => {
+    const nextTitle = sessionTitleDraft.trim();
+    if (nextTitle) {
+      await actions.renameSession(sessionId, nextTitle);
+    }
+    setEditingSessionId(null);
+    setSessionTitleDraft('');
+  };
+
+  const openSessionFromSidebar = (sessionId: string) => {
+    if (!actions.navigate({ viewMode: 'chat', sessionId }).allowed) {
+      return;
+    }
+    void actions.openSession(sessionId);
+    closeDrawerIfMobile();
+  };
+
+  useEffect(() => {
+    if (!isTouch || !state.isSidebarOpen) {
+      if (isTouch && previouslyFocusedRef.current) {
+        const previous = previouslyFocusedRef.current;
+        window.setTimeout(() => {
+          if (previous.isConnected) {
+            previous.focus();
+          } else {
+            drawerTriggerRef.current?.focus();
+          }
+        }, 0);
+        previouslyFocusedRef.current = null;
+      }
+      return;
+    }
+
+    previouslyFocusedRef.current = document.activeElement as globalThis.HTMLElement | null;
+    const focusTimer = window.setTimeout(() => drawerCloseButtonRef.current?.focus(), 0);
+    return () => window.clearTimeout(focusTimer);
+  }, [isTouch, state.isSidebarOpen]);
+
+  useEffect(() => {
+    let active = true;
+    const query = searchQuery.trim();
+    if (
+      state.isShared ||
+      state.bundleMode ||
+      state.isBundleImportRoute ||
+      !isSearchOpen ||
+      !query
+    ) {
+      setSearchResults([]);
+      setIsSearchLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setIsSearchLoading(true);
+    const loadSearchResults = async () => {
+      try {
+        const sessions = (
+          await Promise.all(state.assistants.map(assistant => db.getSessionsForAssistant(assistant.id)))
+        ).flat();
+        const projects = (
+          await Promise.all(
+            state.assistants.map(assistant =>
+              htmlProjectStore.listProjectsByAssistant(assistant.id).catch(() => []),
+            ),
+          )
+        ).flat();
+        if (!active) {
+          return;
+        }
+        setSearchResults(
+          searchLocalWorkspace({
+            query,
+            assistants: state.assistants,
+            sessions,
+            projects,
+          }),
+        );
+      } catch {
+        if (active) {
+          setSearchResults([]);
+        }
+      } finally {
+        if (active) {
+          setIsSearchLoading(false);
+        }
+      }
+    };
+    void loadSearchResults();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    isSearchOpen,
+    searchQuery,
+    state.assistants,
+    state.bundleMode,
+    state.isBundleImportRoute,
+    state.isShared,
+  ]);
 
   // Escape closes the mobile/tablet drawer
   useEffect(() => {
@@ -163,7 +309,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   // In shared / bundle / standalone bundle-import mode, render a simplified layout without sidebar
   if (state.isShared || state.bundleMode || state.isBundleImportRoute) {
     return (
-      <div className='flex h-screen font-sans bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900'>
+      <div className='flex min-h-[100svh] h-[100dvh] font-sans bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900'>
         {/* Main content area - full width in shared mode */}
         <div className='flex-1 flex flex-col overflow-hidden'>{children}</div>
       </div>
@@ -328,21 +474,29 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   );
 
   return (
-    <div className='relative flex h-screen overflow-hidden bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 font-sans'>
+    <div className='relative flex min-h-[100svh] h-[100dvh] overflow-hidden bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 font-sans'>
       {/* Sidebar Overlay for Mobile and Tablet */}
       {(state.isMobile || state.isTablet) && state.isSidebarOpen && (
-        <div className='fixed inset-0 bg-black/50 z-40 lg:hidden' onClick={actions.toggleSidebar} />
+        <div
+          className='fixed inset-0 z-40 bg-black/50 lg:hidden'
+          onClick={() => actions.setSidebarOpen(false)}
+          aria-hidden='true'
+        />
       )}
 
       {/* Sidebar */}
       <div
-        className={`${state.isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 h-full z-50 ${
+        className={`${state.isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 h-[100dvh] z-50 ${
           state.isMobile || state.isTablet ? 'w-80' : collapsed ? 'w-20' : 'w-72'
         } bg-gray-900/95 backdrop-blur-sm flex flex-col overflow-hidden ${
-          collapsed ? 'px-2 pt-4 pb-3' : 'px-4 pt-4 pb-3'
+          collapsed
+            ? 'px-2 pt-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]'
+            : 'px-4 pt-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]'
         } border-r border-gray-700/50 shadow-2xl transition-all duration-300 ease-in-out`}
         role='navigation'
         aria-label='主要導覽'
+        aria-hidden={!drawerInteractive}
+        inert={!drawerInteractive}
       >
         {/* Desktop collapse toggle — always reachable so there is no dead-end state */}
         {isDesktop && (
@@ -387,7 +541,8 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           </div>
           {(state.isMobile || state.isTablet) && (
             <button
-              onClick={actions.toggleSidebar}
+              ref={drawerCloseButtonRef}
+              onClick={() => actions.setSidebarOpen(false)}
               className='p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 flex-shrink-0'
               aria-label='關閉選單'
               title='關閉選單'
@@ -410,19 +565,21 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           selectedAssistant={state.currentAssistant}
           onSelect={assistantId => {
             // 強制切換到聊天模式，無論當前是什麼模式
-            actions.selectAssistant(assistantId, true);
-            closeDrawerIfMobile();
+            if (actions.navigate({ viewMode: 'chat' }).allowed) {
+              void actions.selectAssistant(assistantId, true);
+              closeDrawerIfMobile();
+            }
           }}
           onEdit={assistant => {
-            actions.selectAssistant(assistant.id, false);
-            actions.setViewMode('edit_assistant');
-            closeDrawerIfMobile();
+            if (actions.navigate({ viewMode: 'edit_assistant' }).allowed) {
+              void actions.selectAssistant(assistant.id, false);
+              closeDrawerIfMobile();
+            }
           }}
           onDelete={actions.deleteAssistant}
           onShare={actions.openShareModal}
           onCreateNew={() => {
-            actions.setViewMode('new_assistant');
-            closeDrawerIfMobile();
+            requestNavigation('new_assistant');
           }}
           onExport={assistant => {
             try {
@@ -433,6 +590,9 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           }}
           onImport={async file => {
             try {
+              if (!actions.navigate({ viewMode: 'chat' }).allowed) {
+                return;
+              }
               await actions.importAssistantPackage(file);
               closeDrawerIfMobile();
             } catch (error) {
@@ -440,19 +600,90 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             }
           }}
           onBuildBundle={() => {
-            actions.setViewMode('bundle_builder');
-            closeDrawerIfMobile();
+            requestNavigation('bundle_builder');
           }}
           canShare={canShare}
           collapsed={collapsed}
         />
 
+        {/* Local navigation search stays in the current app shell; it never queries shared or bundle data. */}
+        <div className={collapsed ? 'mb-3 flex justify-center' : 'mb-3 px-1'}>
+          <button
+            type='button'
+            data-testid='sidebar-search-toggle'
+            onClick={() => setIsSearchOpen(previous => !previous)}
+            className={
+              collapsed
+                ? 'flex h-11 w-11 items-center justify-center rounded-xl border border-gray-600/40 bg-gray-800/60 text-gray-300 transition hover:border-cyan-500/50 hover:text-cyan-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                : 'flex w-full items-center gap-2 rounded-lg border border-gray-700/60 bg-gray-800/50 px-3 py-2 text-left text-sm text-gray-300 transition hover:border-cyan-500/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+            }
+            aria-expanded={isSearchOpen}
+            aria-controls='sidebar-local-search'
+            aria-label='搜尋助理、聊天與素材'
+            title='搜尋助理、聊天與素材'
+          >
+            <svg className='h-4 w-4 flex-shrink-0' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+              <path
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                strokeWidth={2}
+                d='m21 21-4.35-4.35m2.1-5.4a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z'
+              />
+            </svg>
+            {!collapsed && <span>搜尋助理、聊天與素材</span>}
+          </button>
+          {isSearchOpen && !collapsed && (
+            <div id='sidebar-local-search' className='mt-2 space-y-2'>
+              <input
+                autoFocus
+                value={searchQuery}
+                onChange={event => setSearchQuery(event.target.value)}
+                placeholder='搜尋名稱、訊息或檔案…'
+                className='w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
+                aria-label='搜尋本機內容'
+              />
+              {isSearchLoading && <p className='px-2 text-xs text-gray-500'>搜尋中…</p>}
+              {!isSearchLoading && searchQuery.trim() && searchResults.length === 0 && (
+                <p className='px-2 text-xs text-gray-500'>找不到符合的本機內容。</p>
+              )}
+              {searchResults.length > 0 && (
+                <div className='max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700/60 bg-gray-950/50 p-1'>
+                  {searchResults.map(result => (
+                    <button
+                      type='button'
+                      key={`${result.kind}:${result.id}`}
+                      onClick={() => {
+                        void actions.openSearchResult(result);
+                        setSearchQuery('');
+                        setIsSearchOpen(false);
+                        closeDrawerIfMobile();
+                      }}
+                      className='w-full rounded-md px-2.5 py-2 text-left transition hover:bg-cyan-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                    >
+                      <div className='flex items-center gap-2'>
+                        <span className='rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200'>
+                          {getLocalSearchResultKindLabel(result.kind)}
+                        </span>
+                        <span className='min-w-0 flex-1 truncate text-xs font-medium text-gray-100'>
+                          {result.title}
+                        </span>
+                      </div>
+                      <p className='mt-1 line-clamp-2 text-[11px] leading-4 text-gray-400'>
+                        {result.snippet || result.subtitle}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <div className={collapsed ? 'mb-4 flex flex-col items-center gap-2' : 'mb-4 px-3'}>
           <button
             type='button'
             onClick={() => {
-              actions.setViewMode('bundle_import');
-              closeDrawerIfMobile();
+              requestNavigation('bundle_import');
             }}
             className={
               collapsed
@@ -528,9 +759,10 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
               </button>
               <button
                 onClick={() => {
-                  actions.createNewSession(state.currentAssistant!.id);
-                  actions.setViewMode('chat');
-                  closeDrawerIfMobile();
+                  if (actions.navigate({ viewMode: 'chat' }).allowed) {
+                    void actions.createNewSession(state.currentAssistant!.id);
+                    closeDrawerIfMobile();
+                  }
                 }}
                 className='flex w-11 h-11 items-center justify-center rounded-xl bg-cyan-600 text-white shadow-lg shadow-cyan-600/25 transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70'
                 title='新增聊天'
@@ -540,7 +772,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
               </button>
               <div className='w-8 border-t border-gray-700/40 my-1' />
               <div className='flex flex-col items-center gap-1.5 w-full'>
-                {state.sessions.map((sess: ChatSession) => {
+                {orderedSessions.map((sess: ChatSession) => {
                   const isActive = state.currentSession?.id === sess.id;
                   return (
                     <div key={sess.id} className='relative flex w-full justify-center'>
@@ -552,9 +784,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                       )}
                       <button
                         onClick={() => {
-                          dispatch({ type: 'SET_CURRENT_SESSION', payload: sess });
-                          actions.setViewMode('chat');
-                          closeDrawerIfMobile();
+                          openSessionFromSidebar(sess.id);
                         }}
                         className={`flex w-11 h-11 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
                           isActive
@@ -604,9 +834,10 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
               </div>
               <button
                 onClick={() => {
-                  actions.createNewSession(state.currentAssistant!.id);
-                  actions.setViewMode('chat');
-                  closeDrawerIfMobile();
+                  if (actions.navigate({ viewMode: 'chat' }).allowed) {
+                    void actions.createNewSession(state.currentAssistant!.id);
+                    closeDrawerIfMobile();
+                  }
                 }}
                 className='mb-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-cyan-600 py-2 text-sm font-semibold text-white shadow-lg shadow-cyan-600/25 transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70'
               >
@@ -619,12 +850,10 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                     尚無聊天記錄，點擊上方「新增聊天」開始。
                   </p>
                 )}
-                {state.sessions.map((sess: ChatSession) => {
+                {orderedSessions.map((sess: ChatSession) => {
                   const isActive = state.currentSession?.id === sess.id;
                   const openSession = () => {
-                    dispatch({ type: 'SET_CURRENT_SESSION', payload: sess });
-                    actions.setViewMode('chat');
-                    closeDrawerIfMobile();
+                    openSessionFromSidebar(sess.id);
                   };
                   return (
                     <div
@@ -651,13 +880,82 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                           className='absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-cyan-400'
                         />
                       )}
-                      <span
-                        className={`min-w-0 flex-1 truncate text-sm ${isActive ? 'font-medium' : ''}`}
+                      {editingSessionId === sess.id ? (
+                        <input
+                          autoFocus
+                          value={sessionTitleDraft}
+                          onChange={event => setSessionTitleDraft(event.target.value)}
+                          onClick={event => event.stopPropagation()}
+                          onKeyDown={event => {
+                            event.stopPropagation();
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              void commitRenameSession(sess.id);
+                            } else if (event.key === 'Escape') {
+                              event.preventDefault();
+                              setEditingSessionId(null);
+                            }
+                          }}
+                          className='min-w-0 flex-1 rounded border border-cyan-500/60 bg-gray-900 px-2 py-1 text-sm text-white outline-none focus:ring-2 focus:ring-cyan-500/20'
+                          aria-label={`重新命名聊天 ${sess.title}`}
+                        />
+                      ) : (
+                        <span
+                          className={`min-w-0 flex-1 truncate text-sm ${isActive ? 'font-medium' : ''}`}
+                        >
+                          {sess.title}
+                        </span>
+                      )}
+                      <button
+                        type='button'
+                        onClick={event => {
+                          event.stopPropagation();
+                          void actions.toggleSessionPinned(sess.id);
+                        }}
+                        className={`flex-shrink-0 rounded p-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
+                          sess.isPinned ? 'text-amber-300' : 'text-gray-600 hover:text-gray-300'
+                        }`}
+                        aria-label={sess.isPinned ? `取消置頂 ${sess.title}` : `置頂 ${sess.title}`}
+                        aria-pressed={Boolean(sess.isPinned)}
+                        title={sess.isPinned ? '取消置頂' : '置頂聊天'}
                       >
-                        {sess.title}
-                      </span>
+                        ★
+                      </button>
+                      {editingSessionId !== sess.id && (
+                        <button
+                          type='button'
+                          onClick={event => {
+                            event.stopPropagation();
+                            beginRenameSession(sess);
+                          }}
+                          className='flex-shrink-0 rounded p-1 text-xs text-gray-600 transition-colors hover:text-cyan-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                          aria-label={`重新命名聊天 ${sess.title}`}
+                          title='重新命名聊天'
+                        >
+                          ✎
+                        </button>
+                      )}
+                      <select
+                        value={sess.category ?? ''}
+                        onChange={event => {
+                          event.stopPropagation();
+                          void actions.setSessionCategory(sess.id, event.target.value);
+                        }}
+                        onClick={event => event.stopPropagation()}
+                        className='max-w-[4.5rem] rounded border border-gray-700/60 bg-gray-900/70 px-1 py-1 text-[10px] text-gray-400 outline-none focus:border-cyan-500/60'
+                        aria-label={`設定聊天分類 ${sess.title}`}
+                      >
+                        <option value=''>分類</option>
+                        {sess.category && !['課程', '研究', '工作', '其他'].includes(sess.category) && (
+                          <option value={sess.category}>{sess.category}</option>
+                        )}
+                        <option value='課程'>課程</option>
+                        <option value='研究'>研究</option>
+                        <option value='工作'>工作</option>
+                        <option value='其他'>其他</option>
+                      </select>
                       <span className='flex-shrink-0 text-[11px] tabular-nums text-gray-500'>
-                        {formatRelativeTime(sess.updatedAt || sess.createdAt)}
+                        {formatRelativeTime(sess.lastOpenedAt ?? sess.updatedAt ?? sess.createdAt)}
                       </span>
                       <button
                         onClick={e => {
@@ -688,8 +986,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           >
             <button
               onClick={() => {
-                actions.setViewMode('settings');
-                closeDrawerIfMobile();
+                requestNavigation('settings');
               }}
               className={
                 collapsed
@@ -719,16 +1016,67 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
         </div>
       )}
 
+      {collapsed && isSearchOpen && (
+        <div
+          id='sidebar-local-search'
+          className='fixed left-[5.5rem] top-4 z-[60] w-80 rounded-xl border border-gray-700/60 bg-gray-900 p-3 shadow-2xl shadow-black/50'
+        >
+          <input
+            autoFocus
+            value={searchQuery}
+            onChange={event => setSearchQuery(event.target.value)}
+            placeholder='搜尋名稱、訊息或檔案…'
+            className='w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
+            aria-label='搜尋本機內容'
+          />
+          {isSearchLoading && <p className='mt-2 px-2 text-xs text-gray-500'>搜尋中…</p>}
+          {!isSearchLoading && searchQuery.trim() && searchResults.length === 0 && (
+            <p className='mt-2 px-2 text-xs text-gray-500'>找不到符合的本機內容。</p>
+          )}
+          {searchResults.length > 0 && (
+            <div className='mt-2 max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700/60 bg-gray-950/50 p-1'>
+              {searchResults.map(result => (
+                <button
+                  type='button'
+                  key={`${result.kind}:${result.id}`}
+                  onClick={() => {
+                    void actions.openSearchResult(result);
+                    setSearchQuery('');
+                    setIsSearchOpen(false);
+                  }}
+                  className='w-full rounded-md px-2.5 py-2 text-left transition hover:bg-cyan-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                >
+                  <div className='flex items-center gap-2'>
+                    <span className='rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200'>
+                      {getLocalSearchResultKindLabel(result.kind)}
+                    </span>
+                    <span className='min-w-0 flex-1 truncate text-xs font-medium text-gray-100'>
+                      {result.title}
+                    </span>
+                  </div>
+                  <p className='mt-1 line-clamp-2 text-[11px] leading-4 text-gray-400'>
+                    {result.snippet || result.subtitle}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Main Content */}
       <main
         className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-gray-800 to-gray-900 backdrop-blur-sm transition-all duration-300 ease-in-out ${mainOffset}`}
+        aria-hidden={isTouch && state.isSidebarOpen}
+        inert={isTouch && state.isSidebarOpen}
       >
         {/* Top Bar with Hamburger Menu */}
         {(state.isMobile || state.isTablet) && !state.isSidebarOpen && (
           <div className='flex items-center justify-between gap-3 border-b border-gray-700/50 bg-gray-800/80 px-4 py-3 backdrop-blur-sm'>
             <div className='flex min-w-0 items-center'>
               <button
-                onClick={actions.toggleSidebar}
+                ref={drawerTriggerRef}
+                onClick={() => actions.setSidebarOpen(true)}
                 className='mr-3 flex-shrink-0 rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-700/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
                 aria-label='開啟選單'
                 aria-expanded={state.isSidebarOpen}
