@@ -2227,4 +2227,231 @@ describe('streamChat', () => {
       expect(mockExecuteHtmlProjectToolCall).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('askUser clarify tool', () => {
+    const ASK_ARGS = {
+      question: '要使用哪種主題？',
+      options: [{ label: '亮色', description: '適合白天閱讀' }, { label: '暗色' }],
+    };
+
+    const buildAskProvider = (
+      runWithExecuteTool: (
+        executeTool: (call: { name: string; args: Record<string, unknown> }) => Promise<unknown>,
+      ) => Promise<void>,
+    ) => ({
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params: Record<string, unknown>) {
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<unknown>;
+        await runWithExecuteTool(executeTool);
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 1,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    });
+
+    it('exposes askUser with its guidance prompt only when onClarifyRequest is provided', async () => {
+      const observedChatParams: Array<Record<string, unknown>> = [];
+      mockGetActiveProvider.mockReturnValue({
+        name: 'gemini',
+        displayName: 'Gemini',
+        supportedModels: ['gemini-2.5-flash'],
+        isAvailable: () => true,
+        streamChat: vi.fn(async function* (params) {
+          observedChatParams.push(params as Record<string, unknown>);
+          yield {
+            text: '',
+            isComplete: true,
+            metadata: {
+              promptTokenCount: 0,
+              candidatesTokenCount: 0,
+              provider: 'gemini',
+              model: 'gemini-2.5-flash',
+              toolRoundCount: 0,
+              repeatedRecoverableErrors: [],
+            },
+          };
+        }),
+      });
+
+      const { streamChat } = await import('./llmService');
+
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'hi',
+        assistantId: 'assistant-1',
+        onClarifyRequest: vi.fn().mockResolvedValue(null),
+        onChunk: vi.fn(),
+        onComplete: vi.fn(),
+      });
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'hi',
+        assistantId: 'assistant-1',
+        onChunk: vi.fn(),
+        onComplete: vi.fn(),
+      });
+
+      const withClarify = observedChatParams[0];
+      expect((withClarify?.tools as Array<{ name: string }>).map(tool => tool.name)).toEqual([
+        'askUser',
+      ]);
+      expect(String(withClarify?.systemPrompt)).toContain('askUser');
+      const withoutClarify = observedChatParams[1];
+      expect(withoutClarify?.tools).toBeUndefined();
+      expect(String(withoutClarify?.systemPrompt)).not.toContain('askUser');
+    });
+
+    it('resolves the user option through onClarifyRequest and reports clarifyRecords', async () => {
+      const onClarifyRequest = vi.fn().mockResolvedValue({ kind: 'option', label: '暗色' });
+      const onComplete = vi.fn();
+      let toolResult: unknown;
+      mockGetActiveProvider.mockReturnValue(
+        buildAskProvider(async executeTool => {
+          toolResult = await executeTool({ name: 'askUser', args: ASK_ARGS });
+        }),
+      );
+
+      const { streamChat } = await import('./llmService');
+
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'build a page',
+        assistantId: 'assistant-1',
+        onClarifyRequest,
+        onChunk: vi.fn(),
+        onComplete,
+      });
+
+      expect(toolResult).toEqual({
+        ok: true,
+        answer: { kind: 'option', label: '暗色' },
+        summary: '使用者選擇：暗色',
+      });
+      expect(onClarifyRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ question: ASK_ARGS.question }),
+        expect.objectContaining({ toolCallId: expect.stringMatching(/^askUser-1-\d+$/) }),
+      );
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clarifyRecords: [
+            expect.objectContaining({
+              answer: { kind: 'option', label: '暗色' },
+            }),
+          ],
+        }),
+        '',
+      );
+    });
+
+    it('reports a dismissed answer when the user skips the question', async () => {
+      const onClarifyRequest = vi.fn().mockResolvedValue(null);
+      const onComplete = vi.fn();
+      let toolResult: unknown;
+      mockGetActiveProvider.mockReturnValue(
+        buildAskProvider(async executeTool => {
+          toolResult = await executeTool({ name: 'askUser', args: ASK_ARGS });
+        }),
+      );
+
+      const { streamChat } = await import('./llmService');
+
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'build a page',
+        assistantId: 'assistant-1',
+        onClarifyRequest,
+        onChunk: vi.fn(),
+        onComplete,
+      });
+
+      expect(toolResult).toEqual({
+        ok: true,
+        answer: { kind: 'dismissed' },
+        summary: expect.stringContaining('skipped'),
+      });
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clarifyRecords: [expect.objectContaining({ answer: { kind: 'dismissed' } })],
+        }),
+        '',
+      );
+    });
+
+    it('returns a recoverable error for malformed askUser args', async () => {
+      let toolResult: unknown;
+      mockGetActiveProvider.mockReturnValue(
+        buildAskProvider(async executeTool => {
+          toolResult = await executeTool({
+            name: 'askUser',
+            args: { question: 'Q?', options: [{ label: 'Only one' }] },
+          });
+        }),
+      );
+
+      const { streamChat } = await import('./llmService');
+
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'build a page',
+        assistantId: 'assistant-1',
+        onClarifyRequest: vi.fn().mockResolvedValue(null),
+        onChunk: vi.fn(),
+        onComplete: vi.fn(),
+      });
+
+      expect(toolResult).toMatchObject({
+        ok: false,
+        recoverable: true,
+        code: 'clarify-options-too-few',
+      });
+    });
+
+    it('dismisses without calling the UI when the signal is already aborted', async () => {
+      const onClarifyRequest = vi.fn();
+      const controller = new AbortController();
+      controller.abort();
+      let toolResult: unknown;
+      mockGetActiveProvider.mockReturnValue(
+        buildAskProvider(async executeTool => {
+          toolResult = await executeTool({ name: 'askUser', args: ASK_ARGS });
+        }),
+      );
+
+      const { streamChat } = await import('./llmService');
+
+      await streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'build a page',
+        assistantId: 'assistant-1',
+        onClarifyRequest,
+        signal: controller.signal,
+        onChunk: vi.fn(),
+        onComplete: vi.fn(),
+      });
+
+      expect(onClarifyRequest).not.toHaveBeenCalled();
+      expect(toolResult).toMatchObject({ ok: true, answer: { kind: 'dismissed' } });
+    });
+  });
 });

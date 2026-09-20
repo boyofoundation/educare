@@ -16,6 +16,7 @@ import {
   type SubagentTaskSpec,
   type TokenUsageTotals,
   type RouteProposal,
+  type ClarifyRecord,
 } from '../types';
 import { ToolCall, type ProviderUsageMetadata } from './llmAdapter';
 import { providerManager, initializeProviders } from './providerRegistry';
@@ -84,6 +85,15 @@ import {
   type SpeakTextArgs,
   type SpeechUtteranceDoc,
 } from './speechToolService';
+import {
+  CLARIFY_SYSTEM_PROMPT,
+  CLARIFY_TOOL_DESCRIPTION,
+  CLARIFY_TOOL_NAME,
+  CLARIFY_TOOL_SCHEMA,
+  normalizeClarifyRequest,
+  type ClarifyRequest,
+  type ClarifyUserAnswer,
+} from './clarifyToolService';
 
 export interface StreamChatParams {
   systemPrompt: string;
@@ -101,6 +111,15 @@ export interface StreamChatParams {
   webSpeechToolsEnabled?: boolean;
   routableTargets?: RoutableTarget[];
   onRouteProposal?: (proposal: RouteProposal) => void;
+  /**
+   * askUser 澄清工具 (預設工具之一):模型提出選項式問題,由 UI 渲染選單,
+   * 使用者點選選項、輸入自訂回答或略過。提供此 callback 即曝光工具;
+   * 回傳 null 代表使用者略過/執行中止,以「已略過」結果回報模型。
+   */
+  onClarifyRequest?: (
+    request: ClarifyRequest,
+    context: { toolCallId: string },
+  ) => Promise<ClarifyUserAnswer | null>;
   /**
    * HTML 專案模式開關。預設 false（opt-in）。為 false 時完全略過意圖分類、
    * 不進行 summary preflight、不暴露任何 HTML 專案工具、不注入專案系統提示,
@@ -174,6 +193,7 @@ export interface StreamChatParams {
         result: Extract<DrawGeometryResult, { ok: true }>;
       }>;
       speechUtterances?: SpeechUtteranceDoc[];
+      clarifyRecords?: ClarifyRecord[];
       images?: MessageImage[];
     },
     fullText: string,
@@ -370,6 +390,40 @@ const localizeProviderError = (error: unknown, providerDisplayName: string): Err
   });
 };
 
+/**
+ * 等待使用者回答 askUser 問題。signal 中止或 UI callback 拋錯時視為「略過」
+ * 回傳 null,保證 promise 必定 settle,不會卡住 provider 的 tool loop。
+ */
+const awaitClarifyAnswer = async (
+  onClarifyRequest: NonNullable<StreamChatParams['onClarifyRequest']>,
+  request: ClarifyRequest,
+  toolCallId: string,
+  signal: AbortSignal | undefined,
+): Promise<ClarifyUserAnswer | null> => {
+  if (!signal) {
+    try {
+      return await onClarifyRequest(request, { toolCallId });
+    } catch {
+      return null;
+    }
+  }
+  if (signal.aborted) {
+    return null;
+  }
+  return new Promise<ClarifyUserAnswer | null>(resolve => {
+    const settle = (value: ClarifyUserAnswer | null) => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(value);
+    };
+    const onAbort = () => settle(null);
+    signal.addEventListener('abort', onAbort);
+    onClarifyRequest(request, { toolCallId }).then(
+      value => settle(value),
+      () => settle(null),
+    );
+  });
+};
+
 export const streamChat = async (params: StreamChatParams) => {
   const {
     systemPrompt,
@@ -400,6 +454,7 @@ export const streamChat = async (params: StreamChatParams) => {
     onGeometryBoardPreview,
     onSpeechUtterancePreview,
     onRouteProposal,
+    onClarifyRequest,
     onComplete,
   } = params;
 
@@ -438,10 +493,13 @@ export const streamChat = async (params: StreamChatParams) => {
     result: Extract<DrawGeometryResult, { ok: true }>;
   }> = [];
   const speechUtterances: SpeechUtteranceDoc[] = [];
+  const clarifyRecords: ClarifyRecord[] = [];
   let computeFailureCount = 0;
   let drawGeometryFailureCount = 0;
   let speakTextFailureCount = 0;
 
+  // askUser 澄清工具:互動 UI (ChatContainer) 提供 onClarifyRequest 即預設曝光。
+  const clarifyToolEnabled = typeof onClarifyRequest === 'function';
   const knowledgeToolEnabled = hasKnowledgeChunks(knowledgeChunks);
 
   // HTML 專案模式未開啟時,完全略過意圖分類與工具暴露(即使有 packSetOverride)。
@@ -578,6 +636,7 @@ export const streamChat = async (params: StreamChatParams) => {
     const finalSystemPrompt = [
       systemPrompt,
       MARKDOWN_MATH_SYSTEM_PROMPT,
+      clarifyToolEnabled ? CLARIFY_SYSTEM_PROMPT : '',
       knowledgeToolEnabled ? KNOWLEDGE_SEARCH_SYSTEM_PROMPT : '',
       mathToolsEnabled ? MATH_TOOLS_SYSTEM_PROMPT : '',
       webSpeechToolsEnabled ? WEB_SPEECH_TOOLS_SYSTEM_PROMPT : '',
@@ -752,6 +811,40 @@ export const streamChat = async (params: StreamChatParams) => {
               result = validation;
             }
           }
+        } else if (call.name === CLARIFY_TOOL_NAME && onClarifyRequest) {
+          const normalized = normalizeClarifyRequest(call.args);
+          if (!normalized.ok) {
+            result = normalized;
+          } else {
+            const answer = await awaitClarifyAnswer(
+              onClarifyRequest,
+              normalized.request,
+              toolCallId,
+              signal,
+            );
+            clarifyRecords.push({
+              id: toolCallId,
+              request: normalized.request,
+              answer: answer ?? { kind: 'dismissed' },
+            });
+            if (answer) {
+              result = {
+                ok: true,
+                answer,
+                summary:
+                  answer.kind === 'option'
+                    ? `使用者選擇：${answer.label}`
+                    : `使用者自訂回答：${answer.text}`,
+              };
+            } else {
+              result = {
+                ok: true,
+                answer: { kind: 'dismissed' },
+                summary:
+                  'User skipped the question. Proceed with your best judgment; do not call askUser again for the same question.',
+              };
+            }
+          }
         } else if (subagentDelegationEnabled && call.name === SUBAGENT_DELEGATE_TOOL_NAME) {
           result = await runSubagentBatch(
             ((call.args as { tasks?: SubagentTaskSpec[] }).tasks ?? []) as SubagentTaskSpec[],
@@ -897,6 +990,15 @@ export const streamChat = async (params: StreamChatParams) => {
     };
 
     const tools = [
+      ...(clarifyToolEnabled
+        ? [
+            {
+              name: CLARIFY_TOOL_NAME,
+              description: CLARIFY_TOOL_DESCRIPTION,
+              parameters: CLARIFY_TOOL_SCHEMA,
+            },
+          ]
+        : []),
       ...(knowledgeToolEnabled
         ? [
             {
@@ -1011,6 +1113,7 @@ export const streamChat = async (params: StreamChatParams) => {
         subagentUsageTotals,
         geometryBoards: geometryBoards.length > 0 ? geometryBoards : undefined,
         speechUtterances: speechUtterances.length > 0 ? speechUtterances : undefined,
+        clarifyRecords: clarifyRecords.length > 0 ? clarifyRecords : undefined,
         images: responseImages.length > 0 ? responseImages : undefined,
       },
       fullResponseText,
