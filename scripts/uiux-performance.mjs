@@ -1,8 +1,10 @@
-/* global console, process */
+/* global URL, console, process */
 
 import { chromium } from '@playwright/test';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 
 const DEFAULT_URL = 'http://127.0.0.1:4178/educare/';
 const DEFAULT_SAMPLES = 5;
@@ -11,6 +13,7 @@ const CPU_RATE = 4;
 const DOWNLOAD_THROUGHPUT = (1.6 * 1024 * 1024) / 8;
 const UPLOAD_THROUGHPUT = (750 * 1024) / 8;
 const LATENCY_MS = 150;
+const REPOSITORY_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 const parseArgs = argv => {
   const options = {
@@ -18,6 +21,7 @@ const parseArgs = argv => {
     samples: Number(process.env.UIUX_SAMPLES || DEFAULT_SAMPLES),
     output: process.env.UIUX_OUTPUT || '',
     compare: process.env.UIUX_COMPARE || '',
+    artifactDir: process.env.UIUX_ARTIFACT_DIR || '',
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -30,6 +34,8 @@ const parseArgs = argv => {
       options.output = argv[++index];
     } else if (argument === '--compare' && argv[index + 1]) {
       options.compare = argv[++index];
+    } else if (argument === '--artifact-dir' && argv[index + 1]) {
+      options.artifactDir = argv[++index];
     }
   }
 
@@ -44,10 +50,65 @@ const median = values => {
   return sorted[Math.floor(sorted.length / 2)] ?? null;
 };
 
-const collectSample = async (browser, url, index) => {
-  const context = await browser.newContext({ viewport: VIEWPORT });
+const getDistAssetPath = resourceUrl => {
+  try {
+    const pathname = new URL(resourceUrl).pathname;
+    const baseMarker = '/educare/';
+    const baseIndex = pathname.indexOf(baseMarker);
+    const relativePath =
+      baseIndex >= 0 ? pathname.slice(baseIndex + baseMarker.length) : pathname.replace(/^\//, '');
+    if (!relativePath.startsWith('assets/')) {
+      return null;
+    }
+    return resolve(REPOSITORY_ROOT, 'dist', relativePath);
+  } catch {
+    return null;
+  }
+};
+
+const collectGzipMetrics = async scripts => {
+  const metrics = await Promise.all(
+    scripts.map(async script => {
+      const assetPath = getDistAssetPath(script.name);
+      if (!assetPath) {
+        return { ...script, gzipBytes: null, assetPath: null };
+      }
+      try {
+        const contents = await readFile(assetPath);
+        return {
+          ...script,
+          gzipBytes: gzipSync(contents, { level: 9 }).byteLength,
+          assetPath,
+        };
+      } catch {
+        return { ...script, gzipBytes: null, assetPath };
+      }
+    }),
+  );
+  const gzipBytes = entries => entries.reduce((total, entry) => total + (entry.gzipBytes || 0), 0);
+  return {
+    scripts: metrics,
+    initialJsGzipBytes: gzipBytes(metrics.filter(entry => entry.initial)),
+    allJsGzipBytes: gzipBytes(metrics),
+  };
+};
+
+const collectSample = async (browser, url, index, options) => {
+  const artifactDir = options.artifactDir && index === 1 ? resolve(options.artifactDir) : null;
+  if (artifactDir) {
+    await mkdir(artifactDir, { recursive: true });
+  }
+  const context = await browser.newContext({
+    viewport: VIEWPORT,
+    ...(artifactDir
+      ? { recordHar: { path: resolve(artifactDir, `sample-${index}.har`), mode: 'full' } }
+      : {}),
+  });
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
+  if (artifactDir) {
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+  }
 
   await cdp.send('Network.enable');
   await cdp.send('Network.emulateNetworkConditions', {
@@ -97,18 +158,39 @@ const collectSample = async (browser, url, index) => {
       lcpMs: lcp,
       initialJsTransferBytes: transferBytes(initialScripts),
       allJsTransferBytes: transferBytes(scripts),
+      scriptTimings: scripts.map(entry => ({
+        name: entry.name,
+        startTime: entry.startTime,
+        responseEnd: entry.responseEnd,
+        duration: entry.duration,
+        transferSize: entry.transferSize || 0,
+        encodedBodySize: entry.encodedBodySize || 0,
+        decodedBodySize: entry.decodedBodySize || 0,
+        initial: initialScripts.includes(entry),
+      })),
       resourceCount: resources.length,
       readyState: globalThis.document.readyState,
       horizontalOverflow: globalThis.document.documentElement.scrollWidth > globalThis.innerWidth,
     };
   });
 
+  const gzipMetrics = await collectGzipMetrics(metrics.scriptTimings);
+  if (artifactDir) {
+    await context.tracing.stop({ path: resolve(artifactDir, `sample-${index}.trace.zip`) });
+  }
   await context.close();
   return {
     sample: index,
     elapsedMs: Date.now() - startedAt,
     httpStatus: response?.status() ?? null,
+    artifacts: artifactDir
+      ? {
+          har: resolve(artifactDir, `sample-${index}.har`),
+          trace: resolve(artifactDir, `sample-${index}.trace.zip`),
+        }
+      : undefined,
     ...metrics,
+    ...gzipMetrics,
   };
 };
 
@@ -118,7 +200,7 @@ const main = async () => {
   const samples = [];
   try {
     for (let index = 1; index <= options.samples; index += 1) {
-      samples.push(await collectSample(browser, options.url, index));
+      samples.push(await collectSample(browser, options.url, index, options));
     }
   } finally {
     await browser.close();
@@ -137,6 +219,8 @@ const main = async () => {
     medianLcpMs: median(samples.map(sample => sample.lcpMs).filter(value => value != null)),
     medianInitialJsTransferBytes: median(samples.map(sample => sample.initialJsTransferBytes)),
     medianAllJsTransferBytes: median(samples.map(sample => sample.allJsTransferBytes)),
+    medianInitialJsGzipBytes: median(samples.map(sample => sample.initialJsGzipBytes)),
+    medianAllJsGzipBytes: median(samples.map(sample => sample.allJsGzipBytes)),
   };
 
   if (options.compare) {
@@ -156,6 +240,11 @@ const main = async () => {
         result.medianInitialJsTransferBytes == null || baseline.medianInitialJsTransferBytes == null
           ? null
           : result.medianInitialJsTransferBytes - baseline.medianInitialJsTransferBytes,
+      baselineMedianInitialJsGzipBytes: baseline.medianInitialJsGzipBytes ?? null,
+      initialJsGzipDeltaBytes:
+        result.medianInitialJsGzipBytes == null || baseline.medianInitialJsGzipBytes == null
+          ? null
+          : result.medianInitialJsGzipBytes - baseline.medianInitialJsGzipBytes,
     };
   }
 

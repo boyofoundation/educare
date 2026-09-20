@@ -14,6 +14,8 @@ artifact before running it:
 ```bash
 node ./node_modules/vite/bin/vite.js build
 node ./node_modules/@playwright/test/cli.js test --config=playwright.uiux.config.ts --grep @baseline
+node scripts/uiux-performance.mjs --samples 5 --artifact-dir /tmp/uiux-baseline-artifacts-5 --output /tmp/uiux-baseline.json
+node scripts/uiux-performance.mjs --samples 5 --output /tmp/uiux-final.json --compare /tmp/uiux-baseline.json
 node ./node_modules/@playwright/test/cli.js test --config=playwright.uiux.config.ts --grep @final
 ```
 
@@ -41,19 +43,39 @@ headless Chromium context at `390×844`, CPU throttling `4×`, download `1.6 Mbp
 `750 Kbps`, and `150 ms` latency. The browser was allowed two seconds after `load` for the
 largest-contentful-paint observer to settle.
 
-|     Sample | LCP (ms) | initial JavaScript transfer bytes |
-| ---------: | -------: | --------------------------------: |
-|          1 |     5056 |                            771109 |
-|          2 |     4836 |                            771109 |
-|          3 |     4664 |                            771109 |
-|          4 |     4688 |                            771109 |
-|          5 |     4708 |                            771109 |
-| **median** | **4708** |                        **771109** |
+|     Sample | LCP (ms) | initial JS transfer bytes | initial JS gzip bytes |
+| ---------: | -------: | ------------------------: | --------------------: |
+|          1 |     5624 |                    771109 |                765062 |
+|          2 |     4692 |                    771109 |                765062 |
+|          3 |     4732 |                    771109 |                765062 |
+|          4 |     4744 |                    771109 |                765062 |
+|          5 |     4884 |                    771109 |                765062 |
+| **median** | **4744** |                **771109** |            **765062** |
 
 The baseline median LCP is above the plan's `≤2500 ms` target. This is a measured baseline,
 not a claim that the target is met. The transfer number is the browser-reported compressed
-resource transfer for initial JavaScript; it includes transfer overhead and is kept as a
-consistent comparison metric, not presented as an exact bundle gzip-file size.
+resource transfer for initial JavaScript; it includes transfer overhead. The separate gzip
+column is calculated from the exact `dist/assets/*.js` files requested by the page at gzip
+level 9, so it is the comparable bundle-size metric rather than a claim about HTTP headers.
+
+The detailed baseline run also captured a HAR and Chromium trace for sample 1 under
+`/tmp/uiux-baseline-artifacts-5/` and recorded script resource timings in the JSON output. The
+initial JavaScript gzip breakdown was:
+
+| Module                     | Response end (ms) | Transfer bytes | Gzip bytes |
+| -------------------------- | ----------------: | -------------: | ---------: |
+| `vendor-F6IiWY1K.js`       |              4387 |         414200 |     411716 |
+| `index-BoR2pccp.js`        |              3250 |         177322 |     176637 |
+| `react-vendor-Bsj2qgg8.js` |              2305 |          77861 |      77419 |
+| `highlight-C732I_wS.js`    |              1833 |          51658 |      51140 |
+| `ai-libs-AvMxdEry.js`      |              2168 |          40790 |      39778 |
+| `turso-DdGEoPju.js`        |              1753 |           4339 |       4034 |
+| `markdown-upVzGTIj.js`     |               645 |           3270 |       2970 |
+| `utils-Dob3nYDb.js`        |               618 |           1669 |       1368 |
+
+The dominant initial payload is the vendor chunk (`411716` gzip bytes), followed by the app
+entry (`176637`). This identifies the measurement bottleneck; it does not by itself justify a
+chunking change or claim that an LCP target is met.
 
 ## Final comparison
 
@@ -62,8 +84,9 @@ conditions have been rerun. Do not copy the baseline values into the final colum
 
 | Metric                           |       Baseline |   Final |   Delta | Result  |
 | -------------------------------- | -------------: | ------: | ------: | ------- |
-| Median LCP (ms)                  |           4764 | pending | pending | pending |
+| Median LCP (ms)                  |           4744 | pending | pending | pending |
 | Median initial JS transfer bytes |         771109 | pending | pending | pending |
+| Median initial JS gzip bytes     |         765062 | pending | pending | pending |
 | Mobile horizontal overflow       |             no | pending |       — | pending |
 | Final UIUX E2E                   | not applicable | pending |       — | pending |
 
