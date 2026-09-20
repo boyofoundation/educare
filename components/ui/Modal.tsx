@@ -8,6 +8,11 @@ interface ModalStackEntry {
   dialog: HTMLDivElement | null;
 }
 
+interface InertElementState {
+  inert: boolean;
+  ariaHidden: string | null;
+}
+
 const modalStack: ModalStackEntry[] = [];
 let bodyOverflowBeforeModal: string | null = null;
 
@@ -41,7 +46,9 @@ const focusElement = (element: HTMLElement | null): void => {
 };
 
 const lockBodyScroll = (): void => {
-  if (modalStack.length === 0) {
+  // The extra null check keeps the lock recoverable if a React concurrent
+  // commit briefly overlaps an effect cleanup and setup.
+  if (modalStack.length === 0 || bodyOverflowBeforeModal === null) {
     bodyOverflowBeforeModal = document.body.style.overflow;
   }
   document.body.style.overflow = 'hidden';
@@ -53,6 +60,45 @@ const unlockBodyScroll = (): void => {
   }
   document.body.style.overflow = bodyOverflowBeforeModal ?? '';
   bodyOverflowBeforeModal = null;
+};
+
+const inertBackground = (portal: HTMLDivElement | null): Map<HTMLElement, InertElementState> => {
+  const previousState = new Map<HTMLElement, InertElementState>();
+  if (!portal) {
+    return previousState;
+  }
+
+  Array.from(document.body.children).forEach(child => {
+    if (
+      child === portal ||
+      !(child instanceof HTMLElement) ||
+      child.dataset.modalPortal === 'true'
+    ) {
+      return;
+    }
+    previousState.set(child, {
+      inert: child.inert === true,
+      ariaHidden: child.getAttribute('aria-hidden'),
+    });
+    child.inert = true;
+    child.setAttribute('aria-hidden', 'true');
+  });
+
+  return previousState;
+};
+
+const restoreBackground = (previousState: Map<HTMLElement, InertElementState>): void => {
+  previousState.forEach((state, element) => {
+    if (!element.isConnected) {
+      return;
+    }
+    element.inert = state.inert;
+    if (state.ariaHidden === null) {
+      element.removeAttribute('aria-hidden');
+    } else {
+      element.setAttribute('aria-hidden', state.ariaHidden);
+    }
+  });
 };
 
 const Modal: React.FC<ModalProps> = ({
@@ -67,6 +113,7 @@ const Modal: React.FC<ModalProps> = ({
 }) => {
   const modalId = useId();
   const titleId = `modal-title-${modalId}`;
+  const portalRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
@@ -89,6 +136,7 @@ const Modal: React.FC<ModalProps> = ({
     };
     modalStack.push(entry);
     lockBodyScroll();
+    const previousBackgroundState = inertBackground(portalRef.current);
 
     const focusInitialElement = () => {
       entry.dialog = dialogRef.current;
@@ -103,7 +151,7 @@ const Modal: React.FC<ModalProps> = ({
     // The portal is committed before effects run, so focus synchronously. A
     // microtask also covers content that becomes available in the same commit.
     focusInitialElement();
-    queueMicrotask(focusInitialElement);
+    void Promise.resolve().then(focusInitialElement);
 
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (!isTopmostModal(modalId)) {
@@ -142,14 +190,8 @@ const Modal: React.FC<ModalProps> = ({
           ? 0
           : currentIndex + 1;
 
-      if (
-        currentIndex === -1 ||
-        (event.shiftKey && currentIndex === 0) ||
-        (!event.shiftKey && currentIndex === focusable.length - 1)
-      ) {
-        event.preventDefault();
-        focusElement(focusable[nextIndex]);
-      }
+      event.preventDefault();
+      focusElement(focusable[nextIndex]);
     };
 
     document.addEventListener('keydown', handleKeyDown);
@@ -161,6 +203,7 @@ const Modal: React.FC<ModalProps> = ({
         modalStack.splice(stackIndex, 1);
       }
       unlockBodyScroll();
+      restoreBackground(previousBackgroundState);
 
       const previous = previousActiveElementRef.current;
       if (previous?.isConnected) {
@@ -181,7 +224,11 @@ const Modal: React.FC<ModalProps> = ({
         : 'max-h-[90vh] max-w-lg';
 
   return createPortal(
-    <div className='fixed inset-0 z-50 flex items-center justify-center p-4'>
+    <div
+      ref={portalRef}
+      data-modal-portal='true'
+      className='fixed inset-0 z-50 flex items-center justify-center p-4'
+    >
       {/* Backdrop */}
       <div
         className='fixed inset-0 bg-black/50 backdrop-blur-sm'

@@ -1,6 +1,28 @@
-import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import React from 'react';
 import Modal from '../Modal';
+
+const NestedModalHarness = () => {
+  const [outerOpen, setOuterOpen] = React.useState(false);
+  const [innerOpen, setInnerOpen] = React.useState(false);
+
+  return (
+    <>
+      <button type='button' onClick={() => setOuterOpen(true)}>
+        Open outer
+      </button>
+      <Modal isOpen={outerOpen} onClose={() => setOuterOpen(false)} title='Outer dialog'>
+        <button type='button' onClick={() => setInnerOpen(true)}>
+          Open inner
+        </button>
+        <Modal isOpen={innerOpen} onClose={() => setInnerOpen(false)} title='Inner dialog'>
+          <button type='button'>Inner action</button>
+        </Modal>
+      </Modal>
+    </>
+  );
+};
 
 describe('Modal', () => {
   it('does not render when isOpen is false', () => {
@@ -13,48 +35,57 @@ describe('Modal', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('renders when isOpen is true', () => {
+  it('renders a uniquely labelled dialog when open', () => {
     render(
-      <Modal isOpen={true} onClose={vi.fn()}>
+      <>
+        <Modal isOpen={true} onClose={vi.fn()} title='First Modal'>
+          <div>First content</div>
+        </Modal>
+        <Modal isOpen={true} onClose={vi.fn()} title='Second Modal'>
+          <div>Second content</div>
+        </Modal>
+      </>,
+    );
+
+    const dialogs = screen.getAllByRole('dialog');
+    expect(dialogs).toHaveLength(2);
+    const labels = dialogs.map(dialog => dialog.getAttribute('aria-labelledby'));
+    expect(labels[0]).toBeTruthy();
+    expect(labels[0]).not.toBe(labels[1]);
+    expect(screen.getByText('First content')).toBeInTheDocument();
+    expect(screen.getByText('Second content')).toBeInTheDocument();
+  });
+
+  it('uses an accessible label when no visible title is provided', () => {
+    render(
+      <Modal isOpen={true} onClose={vi.fn()} ariaLabel='Custom dialog'>
         <div>Modal content</div>
       </Modal>,
     );
 
-    const modal = screen.getByRole('dialog');
-    expect(modal).toBeInTheDocument();
-    expect(screen.getByText('Modal content')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Custom dialog' })).toBeInTheDocument();
   });
 
-  it('renders title when provided', () => {
-    render(
-      <Modal isOpen={true} onClose={vi.fn()} title='Test Modal'>
+  it('inerts background content while open and restores it after close', () => {
+    const background = document.createElement('main');
+    document.body.appendChild(background);
+    const { unmount } = render(
+      <Modal isOpen={true} onClose={vi.fn()} title='Inert dialog'>
         <div>Modal content</div>
       </Modal>,
     );
 
-    expect(screen.getByText('Test Modal')).toBeInTheDocument();
-    const modal = screen.getByRole('dialog');
-    expect(modal).toHaveAttribute('aria-labelledby', 'modal-title');
+    expect(background).toHaveAttribute('aria-hidden', 'true');
+    expect(background.inert).toBe(true);
+
+    unmount();
+
+    expect(background).not.toHaveAttribute('aria-hidden');
+    expect(background.inert).toBe(false);
+    background.remove();
   });
 
-  it('calls onClose when backdrop is clicked', () => {
-    const handleClose = vi.fn();
-    render(
-      <Modal isOpen={true} onClose={handleClose}>
-        <div>Modal content</div>
-      </Modal>,
-    );
-
-    const backdrop = document.querySelector('.fixed.inset-0.bg-black\\/50');
-    expect(backdrop).toBeInTheDocument();
-
-    if (backdrop) {
-      fireEvent.click(backdrop);
-      expect(handleClose).toHaveBeenCalledTimes(1);
-    }
-  });
-
-  it('calls onClose when close button is clicked', () => {
+  it('calls onClose when backdrop, close button, or Escape is used', () => {
     const handleClose = vi.fn();
     render(
       <Modal isOpen={true} onClose={handleClose} title='Test Modal'>
@@ -62,26 +93,17 @@ describe('Modal', () => {
       </Modal>,
     );
 
-    const closeButton = screen.getByLabelText('關閉對話框');
-    fireEvent.click(closeButton);
-
+    const backdrop = document.querySelector('.fixed.inset-0.bg-black\\/50');
+    expect(backdrop).toBeInTheDocument();
+    fireEvent.click(backdrop!);
     expect(handleClose).toHaveBeenCalledTimes(1);
-  });
 
-  it('calls onClose when Escape key is pressed', () => {
-    const handleClose = vi.fn();
-    render(
-      <Modal isOpen={true} onClose={handleClose}>
-        <div>Modal content</div>
-      </Modal>,
-    );
-
+    fireEvent.click(screen.getByRole('button', { name: '關閉對話框' }));
     fireEvent.keyDown(document, { key: 'Escape' });
-
-    expect(handleClose).toHaveBeenCalledTimes(1);
+    expect(handleClose).toHaveBeenCalledTimes(3);
   });
 
-  it('does not call onClose when other keys are pressed', () => {
+  it('ignores non-dismissal keys', () => {
     const handleClose = vi.fn();
     render(
       <Modal isOpen={true} onClose={handleClose}>
@@ -90,70 +112,115 @@ describe('Modal', () => {
     );
 
     fireEvent.keyDown(document, { key: 'Enter' });
-    fireEvent.keyDown(document, { key: 'Space' });
-
+    fireEvent.keyDown(document, { key: ' ' });
     expect(handleClose).not.toHaveBeenCalled();
   });
 
-  it('applies custom className', () => {
+  it('traps Tab focus within the topmost dialog', () => {
     render(
-      <Modal isOpen={true} onClose={vi.fn()} className='custom-modal'>
-        <div>Modal content</div>
+      <Modal isOpen={true} onClose={vi.fn()} title='Focus dialog'>
+        <button type='button'>First action</button>
+        <button type='button'>Second action</button>
       </Modal>,
     );
 
-    const modal = screen.getByRole('dialog');
-    expect(modal).toHaveClass('custom-modal');
+    const closeButton = screen.getByRole('button', { name: '關閉對話框' });
+    const firstAction = screen.getByRole('button', { name: 'First action' });
+    const secondAction = screen.getByRole('button', { name: 'Second action' });
+
+    secondAction.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(document.activeElement).toBe(closeButton);
+
+    firstAction.focus();
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(closeButton);
   });
 
-  it('applies wide size classes when requested', () => {
-    render(
-      <Modal isOpen={true} onClose={vi.fn()} size='wide'>
-        <div>Modal content</div>
+  it('restores focus to the trigger after close', () => {
+    const handleClose = vi.fn();
+    const closed = (
+      <>
+        <button type='button' onClick={() => undefined}>
+          Trigger
+        </button>
+        <Modal isOpen={false} onClose={handleClose} title='Focus dialog'>
+          <button type='button'>Action</button>
+        </Modal>
+      </>
+    );
+    const { rerender } = render(closed);
+
+    const trigger = screen.getByRole('button', { name: 'Trigger' });
+    trigger.focus();
+
+    rerender(
+      <>
+        <button type='button' onClick={() => undefined}>
+          Trigger
+        </button>
+        <Modal isOpen={true} onClose={handleClose} title='Focus dialog'>
+          <button type='button'>Action</button>
+        </Modal>
+      </>,
+    );
+    expect(document.activeElement).not.toBe(trigger);
+
+    rerender(closed);
+
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('only dismisses the topmost nested dialog on Escape', () => {
+    render(<NestedModalHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open outer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open inner' }));
+
+    expect(screen.getAllByRole('dialog')).toHaveLength(2);
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog', { name: 'Inner dialog' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Outer dialog' })).toBeInTheDocument();
+  });
+
+  it('keeps body scroll locked for nested dialogs and restores prior overflow', () => {
+    document.body.style.overflow = 'scroll';
+    const { rerender } = render(
+      <Modal isOpen={true} onClose={vi.fn()} title='Outer'>
+        <div>Outer</div>
       </Modal>,
     );
+    expect(document.body.style.overflow).toBe('hidden');
 
-    const modal = screen.getByRole('dialog');
-    expect(modal).toHaveClass('max-w-5xl');
-    expect(modal).toHaveClass('max-h-[90vh]');
-  });
+    rerender(
+      <>
+        <Modal isOpen={true} onClose={vi.fn()} title='Outer'>
+          <div>Outer</div>
+        </Modal>
+        <Modal isOpen={true} onClose={vi.fn()} title='Inner'>
+          <div>Inner</div>
+        </Modal>
+      </>,
+    );
+    expect(document.body.style.overflow).toBe('hidden');
 
-  it('sets overflow hidden on body when open', () => {
-    // Reset body overflow first
+    rerender(
+      <Modal isOpen={false} onClose={vi.fn()} title='Outer'>
+        <div>Outer</div>
+      </Modal>,
+    );
+    expect(document.body.style.overflow).toBe('scroll');
     document.body.style.overflow = '';
-
-    const { rerender } = render(
-      <Modal isOpen={false} onClose={vi.fn()}>
-        <div>Modal content</div>
-      </Modal>,
-    );
-
-    expect(document.body.style.overflow).toBe('');
-
-    rerender(
-      <Modal isOpen={true} onClose={vi.fn()}>
-        <div>Modal content</div>
-      </Modal>,
-    );
-
-    expect(document.body.style.overflow).toBe('hidden');
   });
 
-  it('restores body overflow when closed', () => {
-    const { rerender } = render(
-      <Modal isOpen={true} onClose={vi.fn()}>
+  it('applies custom className and size classes', () => {
+    render(
+      <Modal isOpen={true} onClose={vi.fn()} className='custom-modal' size='wide'>
         <div>Modal content</div>
       </Modal>,
     );
 
-    expect(document.body.style.overflow).toBe('hidden');
-
-    rerender(
-      <Modal isOpen={false} onClose={vi.fn()}>
-        <div>Modal content</div>
-      </Modal>,
-    );
-
-    expect(document.body.style.overflow).toBe('unset');
+    const modal = screen.getByRole('dialog');
+    expect(modal).toHaveClass('custom-modal', 'max-w-5xl', 'max-h-[90vh]');
   });
 });

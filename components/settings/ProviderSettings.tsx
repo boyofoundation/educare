@@ -19,6 +19,14 @@ interface ProviderInfo {
   isEndpoint?: boolean;
 }
 
+type ProviderNotice = {
+  type: 'success' | 'error' | 'info';
+  message: string;
+};
+
+type ProviderField = 'apiKey' | 'baseUrl' | 'model';
+type ProviderFieldErrors = Partial<Record<ProviderField, string>>;
+
 /**
  * 目前要在設定介面上顯示的服務商。
  * 其他服務商（openai / anthropic / ollama / groq）的資料與底層邏輯皆保留，
@@ -39,6 +47,12 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
   const [useCustomModel, setUseCustomModel] = useState<Record<ProviderType, boolean>>(
     {} as Record<ProviderType, boolean>,
   );
+  const [providerNotices, setProviderNotices] = useState<
+    Partial<Record<ProviderType, ProviderNotice>>
+  >({});
+  const [providerFieldErrors, setProviderFieldErrors] = useState<
+    Partial<Record<ProviderType, ProviderFieldErrors>>
+  >({});
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   const providerInfo: Record<ProviderType, ProviderInfo> = {
@@ -132,19 +146,76 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
         : 50;
       providerManager.updateProviderConfig(providerType, { [key]: sanitizedValue });
       setSettings(providerManager.getSettings());
+      clearFieldError(providerType, key);
       return;
     }
 
     providerManager.updateProviderConfig(providerType, { [key]: value });
     setSettings(providerManager.getSettings());
+    clearFieldError(providerType, key);
+  };
+
+  const setProviderNotice = (providerType: ProviderType, notice?: ProviderNotice) => {
+    setProviderNotices(previous => ({ ...previous, [providerType]: notice }));
+  };
+
+  const clearFieldError = (providerType: ProviderType, key: string) => {
+    if (key !== 'apiKey' && key !== 'baseUrl' && key !== 'model') {
+      return;
+    }
+
+    setProviderFieldErrors(previous => {
+      const nextErrors = { ...(previous[providerType] ?? {}) };
+      delete nextErrors[key];
+      return {
+        ...previous,
+        [providerType]: nextErrors,
+      };
+    });
+    setProviderNotice(providerType);
+  };
+
+  const validateProviderConfiguration = (providerType: ProviderType): boolean => {
+    const provider = providerManager.getProvider(providerType);
+    const config = settings.providers[providerType].config;
+    const errors: ProviderFieldErrors = {};
+
+    if (!String(config.model || '').trim()) {
+      errors.model = '請先選擇或輸入模型名稱。';
+    }
+    if (provider?.requiresApiKey && !String(config.apiKey || '').trim()) {
+      errors.apiKey = '請先輸入 API 金鑰，再測試此服務商。';
+    }
+    if (providerType === 'lmstudio' && !String(config.baseUrl || '').trim()) {
+      errors.baseUrl = '請先輸入端點網址，再測試此服務商。';
+    }
+
+    setProviderFieldErrors(previous => ({ ...previous, [providerType]: errors }));
+    if (Object.keys(errors).length > 0) {
+      setProviderNotice(providerType, {
+        type: 'error',
+        message: '請先修正標示的設定，再執行連線測試。',
+      });
+      return false;
+    }
+
+    return true;
   };
 
   const testProvider = async (providerType: ProviderType) => {
     setTestingProvider(providerType);
+    setProviderNotice(providerType);
     try {
       const provider = providerManager.getProvider(providerType);
       if (!provider) {
-        alert('Provider not found');
+        setProviderNotice(providerType, {
+          type: 'error',
+          message: '找不到此服務商，請重新載入設定頁後再試。',
+        });
+        return;
+      }
+
+      if (!validateProviderConfiguration(providerType)) {
         return;
       }
 
@@ -164,14 +235,21 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
       }
 
       if (responseReceived) {
-        alert(`✅ ${providerInfo[providerType].name} 連接測試成功！`);
+        setProviderNotice(providerType, {
+          type: 'success',
+          message: `${providerInfo[providerType].name} 連線測試成功。本次測試不代表之後每次請求都可用。`,
+        });
       } else {
-        alert(`❌ ${providerInfo[providerType].name} 測試失敗：未收到回應`);
+        setProviderNotice(providerType, {
+          type: 'error',
+          message: `${providerInfo[providerType].name} 測試失敗：未收到回應。請檢查端點、模型與網路設定。`,
+        });
       }
     } catch (error) {
-      alert(
-        `❌ ${providerInfo[providerType].name} 測試失敗：${error instanceof Error ? error.message : '未知錯誤'}`,
-      );
+      setProviderNotice(providerType, {
+        type: 'error',
+        message: `${providerInfo[providerType].name} 測試失敗：${error instanceof Error ? error.message : '未知錯誤'}`,
+      });
     } finally {
       setTestingProvider(null);
     }
@@ -179,17 +257,28 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
 
   const fetchAvailableModels = async (providerType: ProviderType) => {
     setFetchingModels(prev => ({ ...prev, [providerType]: true }));
+    setProviderNotice(providerType);
     try {
       const provider = providerManager.getProvider(providerType);
       if (provider && provider.getAvailableModels) {
         const models = await provider.getAvailableModels();
         setAvailableModels(prev => ({ ...prev, [providerType]: models }));
+        setProviderNotice(providerType, {
+          type: 'success',
+          message: `已取得 ${models.length} 個模型。仍請按「測試連線」確認服務可用。`,
+        });
       } else {
-        console.warn(`Provider ${providerType} does not support dynamic model fetching`);
+        setProviderNotice(providerType, {
+          type: 'info',
+          message: '此服務商沒有提供動態模型列表，請使用內建列表或自訂輸入。',
+        });
       }
     } catch (error) {
       console.warn(`Failed to fetch models for ${providerType}:`, error);
-      alert(`無法獲取 ${providerInfo[providerType].name} 的模型列表，請確認配置正確`);
+      setProviderNotice(providerType, {
+        type: 'error',
+        message: `無法取得 ${providerInfo[providerType].name} 的模型列表，請確認配置後重試。`,
+      });
     } finally {
       setFetchingModels(prev => ({ ...prev, [providerType]: false }));
     }
@@ -207,13 +296,13 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
     if (!enabled) {
       return { status: 'disabled', text: '已停用' };
     }
-    if (available) {
-      return { status: 'ready', text: '就緒' };
+    if (!available) {
+      return {
+        status: 'warning',
+        text: provider.requiresApiKey ? '需要 API 金鑰' : '需要端點設定',
+      };
     }
-    if (providerType === 'ollama' || providerType === 'lmstudio') {
-      return { status: 'warning', text: '服務未運行' };
-    }
-    return { status: 'warning', text: '需要配置' };
+    return { status: 'ready', text: '已設定，尚未測試' };
   };
 
   const statusBadgeClass = (status: string) =>
@@ -228,6 +317,8 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
   const inputClass =
     'w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors';
   const labelClass = 'block text-sm font-medium text-gray-300 mb-2';
+  const fieldInputClass = (providerType: ProviderType, field: ProviderField) =>
+    `${inputClass}${providerFieldErrors[providerType]?.[field] ? ' border-red-400 focus:border-red-400 focus:ring-red-400' : ''}`;
 
   const activeInfo = providerInfo[settings.activeProvider];
 
@@ -305,6 +396,18 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
               className={`rounded-2xl border transition-colors ${
                 isActive ? 'border-cyan-500/40 bg-gray-800/60' : 'border-gray-700/40 bg-gray-800/40'
               }`}
+              role='button'
+              tabIndex={0}
+              aria-expanded={isExpanded}
+              onKeyDown={event => {
+                if (event.target !== event.currentTarget) {
+                  return;
+                }
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  setExpandedProvider(isExpanded ? null : providerType);
+                }
+              }}
             >
               <div
                 className='p-5 cursor-pointer'
@@ -347,6 +450,7 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                       <input
                         type='checkbox'
                         checked={isEnabled}
+                        aria-label={`啟用 ${info.name}`}
                         onChange={e => {
                           e.stopPropagation();
                           handleProviderToggle(providerType);
@@ -390,16 +494,25 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                     {info.isEndpoint ? (
                       <div className='space-y-4'>
                         <div>
-                          <label className={labelClass}>端點網址 (Base URL)</label>
+                          <label htmlFor={`${providerType}-base-url`} className={labelClass}>
+                            端點網址 (Base URL)
+                          </label>
                           <div className='flex space-x-2'>
                             <input
+                              id={`${providerType}-base-url`}
                               type='url'
                               value={config.baseUrl || ''}
                               onChange={e =>
                                 handleConfigUpdate(providerType, 'baseUrl', e.target.value)
                               }
                               placeholder='http://localhost:1234/v1'
-                              className={inputClass}
+                              className={fieldInputClass(providerType, 'baseUrl')}
+                              aria-invalid={Boolean(providerFieldErrors[providerType]?.baseUrl)}
+                              aria-describedby={
+                                providerFieldErrors[providerType]?.baseUrl
+                                  ? `${providerType}-base-url-error`
+                                  : undefined
+                              }
                             />
                             <a
                               href={info.helpUrl}
@@ -423,22 +536,49 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                               </svg>
                             </a>
                           </div>
+                          {providerFieldErrors[providerType]?.baseUrl && (
+                            <p
+                              id={`${providerType}-base-url-error`}
+                              className='mt-1.5 text-xs text-red-300'
+                              role='alert'
+                            >
+                              {providerFieldErrors[providerType].baseUrl}
+                            </p>
+                          )}
                           <p className='text-xs text-gray-500 mt-1.5'>
                             支援任何相容於 OpenAI API 的本機服務（<code>/v1/chat/completions</code>
                             ）。
                           </p>
                         </div>
                         <div>
-                          <label className={labelClass}>{info.apiKeyLabel}</label>
+                          <label htmlFor={`${providerType}-api-key`} className={labelClass}>
+                            {info.apiKeyLabel}
+                          </label>
                           <input
+                            id={`${providerType}-api-key`}
                             type='password'
                             value={config.apiKey || ''}
                             onChange={e =>
                               handleConfigUpdate(providerType, 'apiKey', e.target.value)
                             }
                             placeholder='若端點需要 Bearer Token 才填寫'
-                            className={inputClass}
+                            className={fieldInputClass(providerType, 'apiKey')}
+                            aria-invalid={Boolean(providerFieldErrors[providerType]?.apiKey)}
+                            aria-describedby={
+                              providerFieldErrors[providerType]?.apiKey
+                                ? `${providerType}-api-key-error`
+                                : undefined
+                            }
                           />
+                          {providerFieldErrors[providerType]?.apiKey && (
+                            <p
+                              id={`${providerType}-api-key-error`}
+                              className='mt-1.5 text-xs text-red-300'
+                              role='alert'
+                            >
+                              {providerFieldErrors[providerType].apiKey}
+                            </p>
+                          )}
                           <p className='text-xs text-gray-500 mt-1.5'>
                             留空則不傳送 Authorization 標頭。
                           </p>
@@ -446,16 +586,25 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                       </div>
                     ) : provider?.requiresApiKey ? (
                       <div>
-                        <label className={labelClass}>{info.apiKeyLabel}</label>
+                        <label htmlFor={`${providerType}-api-key`} className={labelClass}>
+                          {info.apiKeyLabel}
+                        </label>
                         <div className='flex space-x-2'>
                           <input
+                            id={`${providerType}-api-key`}
                             type='password'
                             value={config.apiKey || ''}
                             onChange={e =>
                               handleConfigUpdate(providerType, 'apiKey', e.target.value)
                             }
                             placeholder={info.apiKeyPlaceholder}
-                            className={inputClass}
+                            className={fieldInputClass(providerType, 'apiKey')}
+                            aria-invalid={Boolean(providerFieldErrors[providerType]?.apiKey)}
+                            aria-describedby={
+                              providerFieldErrors[providerType]?.apiKey
+                                ? `${providerType}-api-key-error`
+                                : undefined
+                            }
                           />
                           <a
                             href={info.helpUrl}
@@ -479,6 +628,15 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                             </svg>
                           </a>
                         </div>
+                        {providerFieldErrors[providerType]?.apiKey && (
+                          <p
+                            id={`${providerType}-api-key-error`}
+                            className='mt-1.5 text-xs text-red-300'
+                            role='alert'
+                          >
+                            {providerFieldErrors[providerType].apiKey}
+                          </p>
+                        )}
                       </div>
                     ) : null}
 
@@ -486,7 +644,10 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                     {provider?.supportedModels && provider.supportedModels.length > 0 && (
                       <div>
                         <div className='flex items-center justify-between mb-2 gap-2 flex-wrap'>
-                          <label className='block text-sm font-medium text-gray-300'>
+                          <label
+                            htmlFor={`${providerType}-model`}
+                            className='block text-sm font-medium text-gray-300'
+                          >
                             模型選擇
                           </label>
                           <div className='flex items-center space-x-2'>
@@ -539,16 +700,24 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
 
                         {useCustomModel[providerType] ? (
                           <input
+                            id={`${providerType}-model`}
                             type='text'
                             value={config.model || ''}
                             onChange={e =>
                               handleConfigUpdate(providerType, 'model', e.target.value)
                             }
                             placeholder='請輸入模型名稱 (例如: gpt-4o, gemini-2.5-flash)'
-                            className={inputClass}
+                            className={fieldInputClass(providerType, 'model')}
+                            aria-invalid={Boolean(providerFieldErrors[providerType]?.model)}
+                            aria-describedby={
+                              providerFieldErrors[providerType]?.model
+                                ? `${providerType}-model-error`
+                                : undefined
+                            }
                           />
                         ) : (
                           <select
+                            id={`${providerType}-model`}
                             value={
                               config.model ||
                               availableModels[providerType]?.[0] ||
@@ -557,7 +726,13 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                             onChange={e =>
                               handleConfigUpdate(providerType, 'model', e.target.value)
                             }
-                            className={`${inputClass} appearance-none cursor-pointer`}
+                            className={`${fieldInputClass(providerType, 'model')} appearance-none cursor-pointer`}
+                            aria-invalid={Boolean(providerFieldErrors[providerType]?.model)}
+                            aria-describedby={
+                              providerFieldErrors[providerType]?.model
+                                ? `${providerType}-model-error`
+                                : undefined
+                            }
                           >
                             {(availableModels[providerType] || provider.supportedModels).map(
                               model => (
@@ -567,6 +742,16 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                               ),
                             )}
                           </select>
+                        )}
+
+                        {providerFieldErrors[providerType]?.model && (
+                          <p
+                            id={`${providerType}-model-error`}
+                            className='mt-1.5 text-xs text-red-300'
+                            role='alert'
+                          >
+                            {providerFieldErrors[providerType].model}
+                          </p>
                         )}
 
                         {availableModels[providerType] &&
@@ -650,6 +835,21 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                     </p>
 
                     {/* Actions */}
+                    {providerNotices[providerType] && (
+                      <div
+                        role={providerNotices[providerType]?.type === 'error' ? 'alert' : 'status'}
+                        aria-live='polite'
+                        className={`rounded-xl border px-4 py-3 text-sm ${
+                          providerNotices[providerType]?.type === 'success'
+                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                            : providerNotices[providerType]?.type === 'error'
+                              ? 'border-red-500/30 bg-red-500/10 text-red-100'
+                              : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-100'
+                        }`}
+                      >
+                        {providerNotices[providerType]?.message}
+                      </div>
+                    )}
                     <div className='flex flex-col sm:flex-row gap-3 pt-1'>
                       <button
                         onClick={() => testProvider(providerType)}
