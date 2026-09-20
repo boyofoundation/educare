@@ -37,8 +37,9 @@ const openSettings = async (page: import('@playwright/test').Page) => {
 };
 
 test.describe('UIUX integrated acceptance @final', () => {
-  test('shares a local assistant through a file without cloud setup or writes', async ({
+  test('exports and imports an assistant in a fresh browser without cloud setup or writes', async ({
     page,
+    browser,
   }) => {
     const externalWrites: string[] = [];
     await page.route('**/*', async route => {
@@ -57,6 +58,7 @@ test.describe('UIUX integrated acceptance @final', () => {
     const onboarding = page.getByRole('dialog', { name: '先選用途，再開始備課' });
     await onboarding.getByRole('button', { name: /英文教學/ }).click();
     await onboarding.getByRole('button', { name: '套用樣板並開始' }).click();
+    const assistantName = await page.getByTestId('assistant-editor').locator('#name').inputValue();
     await page.getByTestId('save-button').click();
     await expect(page.getByTestId('assistant-editor')).toBeHidden();
     await page.getByRole('button', { name: '分享助理', exact: true }).click();
@@ -67,6 +69,40 @@ test.describe('UIUX integrated acceptance @final', () => {
     const download = await downloadReady;
     expect(download.suggestedFilename()).toMatch(/\.zip$/);
     expect(await download.failure()).toBeNull();
+    const archivePath = await download.path();
+    expect(archivePath).not.toBeNull();
+    const importedContext = await browser.newContext({ viewport: MOBILE_VIEWPORT });
+    try {
+      await importedContext.route('**/*', async route => {
+        const request = route.request();
+        if (!['127.0.0.1', 'localhost'].includes(new URL(request.url()).hostname)) {
+          if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
+            externalWrites.push(request.url());
+          }
+          await route.fulfill({ status: 404, body: '' });
+        } else {
+          await route.continue();
+        }
+      });
+      const importedPage = await importedContext.newPage();
+      await importedPage.goto('http://127.0.0.1:4178/educare/');
+      await importedPage.getByRole('button', { name: /匯入助理／協作包/ }).click();
+      const importDialog = importedPage.getByRole('dialog', { name: '匯入助理或協作包' });
+      await importDialog.locator('input[type="file"]').setInputFiles(archivePath!);
+      await expect(importDialog).toBeHidden();
+      await expect(importedPage.getByRole('main', { name: '聊天對話' })).toBeVisible();
+      await expect(
+        importedPage.getByRole('heading', { name: assistantName, exact: true, level: 2 }),
+      ).toBeVisible();
+      await expect(importedPage.getByTestId('chat-input-guidance')).toContainText('尚未設定');
+      await importedPage.reload();
+      await expect(
+        importedPage.getByRole('heading', { name: assistantName, exact: true, level: 2 }),
+      ).toBeVisible();
+      await expect(importedPage.getByTestId('onboarding-overlay')).toBeHidden();
+    } finally {
+      await importedContext.close();
+    }
     expect(externalWrites).toEqual([]);
   });
 
@@ -108,6 +144,9 @@ test.describe('UIUX integrated acceptance @final', () => {
     // An aria-hidden region has no accessible name until it opens.
     const navigation = page.locator('[role="navigation"][aria-label="主要導覽"]');
     await expect(menuButton).toBeVisible();
+    const menuBounds = await menuButton.boundingBox();
+    expect(menuBounds?.width).toBeGreaterThanOrEqual(44);
+    expect(menuBounds?.height).toBeGreaterThanOrEqual(44);
     const closedState = await navigation.evaluate(element => ({
       ariaHidden: element.getAttribute('aria-hidden'),
       inert: element.hasAttribute('inert') || (element as HTMLElement).inert === true,
@@ -116,7 +155,11 @@ test.describe('UIUX integrated acceptance @final', () => {
 
     await menuButton.click();
     await expect(navigation).toBeVisible();
-    await navigation.getByRole('button', { name: '關閉選單' }).focus();
+    const closeMenu = navigation.getByRole('button', { name: '關閉選單' });
+    const closeBounds = await closeMenu.boundingBox();
+    expect(closeBounds?.width).toBeGreaterThanOrEqual(44);
+    expect(closeBounds?.height).toBeGreaterThanOrEqual(44);
+    await closeMenu.focus();
     await page.keyboard.press('Escape');
     await expect
       .poll(async () =>

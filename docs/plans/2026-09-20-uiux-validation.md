@@ -4,11 +4,14 @@
 
 This document records the integrated U1–U6 engineering verification on 2026-09-20 in
 `uiux/frontend-improvements-20260920`, based on `89844da`. All five Team lanes were preserved
-and merged through `6e9dd92`, followed by integration fixes and regression coverage in `5e54fcd`. The main
+and merged through `6e9dd92`, followed by integration fixes in `5e54fcd` and final
+appearance, navigation, form, startup, and persistence fixes through `161d4b1`. The main
 worktree was not merged, reset, or deployed. No dependencies or lockfiles were changed.
 
-Engineering checks pass; the complete plan is **not yet accepted**. Human/device gates below
-remain open, and measured LCP remains above 2500 ms. Browser automation ran headless against
+Per the user's 2026-09-20 scope update, first-time-user trials, physical-device checks, and
+VoiceOver are deferred to the user and do not block Agent engineering delivery. They remain
+explicitly untested, not implicitly accepted. Follow-up findings belong in the
+[feedback register](./2026-09-20-uiux-feedback.md). Browser automation runs headless against
 production preview with a fixed Chromium project and fake/mocked provider credentials only.
 
 The Playwright config owns port `4178` and points at Vite's `/educare/` base path. Build the
@@ -16,7 +19,7 @@ artifact before running it:
 
 ```bash
 node ./node_modules/vite/bin/vite.js build
-node ./node_modules/@playwright/test/cli.js test --config playwright.uiux.config.ts --grep '@final|@flows|@readability' --timeout=35000 --global-timeout=300000
+node ./node_modules/@playwright/test/cli.js test --config playwright.uiux.config.ts --grep '@final|@flows|@readability|@reading' --retries=0 --timeout=35000 --global-timeout=300000
 # Keep production preview running on 4178 for the standalone performance harness.
 node scripts/uiux-performance.mjs --samples 5 --artifact-dir /tmp/uiux-final-artifacts --output /tmp/uiux-final.json --compare .omx/reports/uiux-final-20260920/baseline.json
 ```
@@ -29,15 +32,15 @@ converted to a skip.
 
 ## Acceptance coverage
 
-| Area              | Automated check                                                                                                                                              | Evidence boundary                                                               |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| U1 first run      | Template → save → first mocked chat in ≤3 setup actions; completion persists after reload; existing/shared entry unit regressions                            | Five-person usability trial is not performed                                    |
-| U2 drawer/modal   | Mobile focus exclusion/return, modal focus trap/scroll lock; nested modal unit regressions; light/dark onboarding heading contrast ≥4.5 and close/skip ≥44px | Not a full-site contrast, focus-ring, zoom, or VoiceOver audit                  |
-| U4 storage/share  | Injected IndexedDB failure preserves form and permits retry; appearance storage failure reports non-success; ZIP export without Turso or external writes     | Actual device quota exhaustion/offline lifecycle remains untested               |
-| U3 mobile         | Browser shell/chat overflow and state at 360/390/768/1280px; unit tests preserve mounted chat/Canvas and scroll offsets at 360/390/768px                     | Browser Canvas file/checkpoint flows and physical keyboard/rotation remain open |
-| U6 appearance     | Theme, reading size and reduced-motion persistence; light settings and light/dark onboarding screenshots inspected                                           | Not every math/code/citation/error state has a new screenshot audit             |
-| U5 search/privacy | Exact message among 100 seeded sessions; rename/pin survive reload without modifying messages; shared and bundle privacy isolation                           | Local data and mocked services only                                             |
-| U6 performance    | Five cold Chromium samples; 1,000-message top/middle/bottom navigation, bounded rendered nodes, append preserves reading position                            | LCP target remains unmet; profile retained below                                |
+| Area              | Automated check                                                                                                                                                                               | Evidence boundary                                                 |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| U1 first run      | Template → save → first mocked chat in ≤3 setup actions; completion persists after reload; existing/shared entry unit regressions                                                             | Five-person usability trial is not performed                      |
+| U2 drawer/modal   | Mobile focus exclusion/return, modal focus trap/scroll lock; nested modal regressions; named onboarding/editor/drawer targets ≥44px; keyboard traversal with 200% equivalent reflow           | Not native browser zoom, a full-site audit, or VoiceOver          |
+| U4 storage/share  | Injected IndexedDB failure preserves form and permits retry; appearance failure reports non-success; ZIP export → import in a fresh context; offline loaded history and draft remain readable | No real quota exhaustion, offline cold start, or cloud writes     |
+| U3 mobile         | Create/edit/provider/chat/Canvas at 360/390/768/1280px; Canvas upload/file selection, checkpoint restoration, mounted-pane state and visible chat reading-position retention                  | Physical software keyboard and rotation are deferred              |
+| U6 appearance     | Dark/light/system math, code tokens/headers, citations, errors, guidance and message actions ≥4.5:1; composer border ≥3:1; live OS-theme changes; font/motion persistence                     | Named controls and fixtures only, not accessibility certification |
+| U5 search/privacy | Exact message among 100 sessions; exact material chunk among duplicate filenames; rename/pin persist without changing messages; shared/bundle privacy and dirty-navigation guards             | Local data and mocked services only                               |
+| U6 performance    | Five cold Chromium samples; 1,000-message top/middle/bottom navigation, bounded rendered nodes, append preserves reading position                                                             | LCP target remains unmet; profile retained below                  |
 
 Integration regressions also cover complete deferred navigation intents, search/rename retry,
 dirty-editor save ordering, metadata-preserving edits, partial upload retry, memory-only drafts,
@@ -48,18 +51,28 @@ a misleading React.lazy reset that would reuse a rejected import.
 
 ## Final engineering checks
 
-| Check                                                               | Result                                              |
-| ------------------------------------------------------------------- | --------------------------------------------------- |
-| `node node_modules/typescript/bin/tsc --noEmit --pretty false`      | Pass                                                |
-| `node node_modules/eslint/bin/eslint.js . --ext .js,.jsx,.ts,.tsx`  | Pass, no warnings                                   |
-| Prettier on changed files; `git diff --check`                       | Pass                                                |
-| `node node_modules/vitest/vitest.mjs --run --reporter=dot`          | 103 files / 1,489 tests passed; no unhandled errors |
-| Production Vite build                                               | Pass                                                |
-| Headless production Playwright (`@final`, `@flows`, `@readability`) | 15/15 passed, no skipped tests, 18.3 s              |
+| Check                                                                           | Result                                                                                     |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `node node_modules/typescript/bin/tsc --noEmit --pretty false`                  | Pass                                                                                       |
+| `node node_modules/eslint/bin/eslint.js . --ext .js,.jsx,.ts,.tsx`              | Pass, no warnings                                                                          |
+| Prettier on changed files; `git diff --check`                                   | Pass                                                                                       |
+| `node node_modules/vitest/vitest.mjs --run --reporter=dot`                      | 103 files / 1,503 tests passed; no unhandled errors                                        |
+| Production Vite build                                                           | Pass                                                                                       |
+| Headless production Playwright (`@final`, `@flows`, `@readability`, `@reading`) | 26/26 passed, no retries or skipped tests, 55.4 s                                          |
+| Canvas suite repeated three times (`--repeat-each=3 --retries=0`)               | 12/12 passed, 36.6 s; final deletion-only follow-up also passes the complete 26-test suite |
 
 Vitest still emits some existing React `act(...)` warnings and intentional error-path console
 output. Node emits `module.register()` deprecation warnings. These are not hidden or counted as
 test failures. The final full suite does not reproduce the baseline ShareModal teardown rejection.
+
+Follow-up regressions reproduced and fixed pale-on-light reading controls, non-reactive system
+theme selection, exact material targeting, and saved status erased by a parent rerender.
+Canvas also exposed LightningFS's deferred directory persistence: write/commit/delete boundaries
+now await `flush()`, errors propagate, and failed deletion retains a retry entry point. Deferred
+flush, rejection, absent-directory retry, and assistant/project metadata preservation are tested.
+The responsive fixture waits for a real artifact before reload; it does not sleep or retry to
+hide failures. Navigation unit fixtures use explicit creation ordering instead of depending on
+multiple `Date.now()` calls landing within the same millisecond.
 
 ## Baseline (commit `89844da`)
 
@@ -108,7 +121,7 @@ baseline diagnostic sample reported `ScriptDurationMs=646.9`, `TaskDurationMs=22
 These are aggregate browser timings, not per-module parse times; they are included to keep
 CPU/layout work visible when comparing the final artifact.
 
-## Final comparison
+## Earlier integration checkpoint (`fb864c2`)
 
 Measured after integration using Chromium `140.0.7339.16`, headless, the same viewport,
 CPU/network throttling, and five fresh contexts. No browser reinstall occurred between baseline
@@ -127,13 +140,41 @@ gzip bytes and no horizontal overflow. Initial means script resources completed 
 LCP (or 2000 ms, whichever is later), not all scripts fetched during startup. All sampled startup
 scripts total 657613 gzip bytes; some provider chunks now load after LCP rather than disappearing.
 
-The remaining profile points to initial payload/network work: `vendor-BKIW2ia-.js` is 248993
+At that checkpoint, the profile pointed to initial payload/network work: `vendor-BKIW2ia-.js` is 248993
 gzip bytes and finishes at 3396.5 ms in sample 1; `markdown-BguTdfJ5.js` is 165043 gzip bytes and
 finishes at 2980.5 ms. Both are still requested from the initial dependency graph. This is evidence
 of an unresolved initial dependency bottleneck, not proof that either module alone causes LCP.
-Further splitting needs an import-dependency investigation and another same-condition measurement;
-the 2.5-second target is not waived. Sample 1 aggregate metrics: script 214.9 ms, task 519.1 ms,
+The subsequent dependency investigation found `micromark-extension-math` and `lowlight` in the
+broad vendor chunk pulling deferred markdown/highlight chunks into initial modulepreloads.
+They now follow the existing markdown chunk boundary; the final measurement is recorded below.
+The 2.5-second target is not waived. Checkpoint sample 1 metrics: script 214.9 ms, task 519.1 ms,
 layout 57.6 ms, style recalculation 28.2 ms, used JS heap 6.89 MB.
+
+## Final Agent-delivery performance
+
+The final artifact through `161d4b1` was measured after all builds and tests finished, using
+Chromium `140.0.7339.16` and the same five-context headless conditions. LCP samples were
+**2660, 2600, 2640, 2608, 2604 ms**; none had horizontal overflow.
+
+| Metric              |     Baseline |        Final |                 Change |
+| ------------------- | -----------: | -----------: | ---------------------: |
+| Median LCP          |      4744 ms |      2608 ms |      −2136 ms (−45.0%) |
+| Initial JS transfer | 771109 bytes | 387906 bytes |          −383203 bytes |
+| Initial JS gzip     | 765062 bytes | 384992 bytes | −380070 bytes (−49.7%) |
+
+All startup scripts total 440586 gzip bytes (447711 transfer bytes); late provider chunks still
+exist. Initial modulepreloads now contain vendor, React, utilities, and Turso, without markdown
+or highlight. An intermediate graph-fix artifact measured 2540 ms (2656, 2560, 2524, 2540,
+2540); this is retained as a diagnostic checkpoint, not substituted for the final 2608 ms run.
+
+**The ≤2500 ms target remains unmet by 108 ms.** U6 permits an explicit unresolved-profile
+handoff, not a claim of target attainment. Final sample 1 still downloads `vendor-D0Pje6ej.js`
+(247465 gzip bytes) until 2288.8 ms; the app entry is 73906 gzip bytes. This identifies a
+remaining initial payload/network bottleneck, not exclusive proof of LCP causation. Further
+vendor dependency splitting would require a separately bounded investigation and equivalent
+regression/measurement, rather than repeating samples until a faster median appears.
+Sample 1 metrics: script 192.0 ms, task 468.2 ms, layout 58.8 ms, style recalculation 26.4 ms,
+used JS heap 5.68 MB. JSON resource timings, HAR, and trace are retained locally.
 
 ## Preserved evidence and Team cleanup
 
@@ -147,8 +188,10 @@ layout 57.6 ms, style recalculation 28.2 ms, used JS heap 6.89 MB.
 - Local, git-ignored evidence is under `.omx/reports/uiux-final-20260920/`: baseline/final JSON,
   sample-1 HAR and traces, full validation logs, Playwright JSON, and four rendered screenshots.
   HAR/traces are local artifacts, not uploaded or committed.
+- The final Agent-delivery evidence is separate at `.omx/reports/uiux-agent-final-20260920/`:
+  full 26-test and repeated Canvas JSON, final logs, screenshots, performance JSON/HAR/trace.
 
-## Outstanding human/device gates
+## Deferred human/device acceptance
 
 These cannot be honestly replaced by automated test output:
 
@@ -158,16 +201,18 @@ These cannot be honestly replaced by automated test output:
   rotation, and keyboard dismissal; a simulated viewport is not device evidence.
 - Complete the onboarding, form, and chat path with VoiceOver and record any remaining focus
   defects.
-- Review 200% zoom, focus rings, touch target dimensions, and 4.5:1 text / 3:1 control
-  contrast across the full application. The new onboarding checks cover only their named controls
-  and headings; the automated suite does not grant accessibility certification.
-- Complete mobile browser Canvas file selection/checkpoint restoration and full create/edit/model
-  settings/Canvas overflow coverage at all four widths; the mounted-pane unit checks and chat
-  viewport E2E are not substitutes for these complete interaction paths.
+- Review native 200% browser zoom, focus rings, touch targets, and contrast across the full
+  application. The automated zoom check uses a `640×450` CSS viewport and device scale factor 2
+  to model `1280×900` at 200% reflow; it does not change the native browser zoom and does not use
+  CSS `zoom`. Reading contrast checks cover only named elements in the fixture, not every page.
+
+The feedback register retains device, browser, reproduction, expected/actual result, evidence,
+severity, fix commit, regression, and user-retest fields. Do not put API keys or private student
+data into that register. Empty rows and automated passes do not count as human acceptance.
 
 ## Limitations and reproducibility
 
 - Tests use local storage and ephemeral browser contexts only. No Turso writes, provider
   credentials, remote model calls, or deployment are involved.
 - No main-branch merge, deployment, live-provider connectivity claim, or human acceptance claim
-  is made. The next functional wave remains gated on the plan's outstanding acceptance work.
+  is made. This delivery does not automatically start the next functional wave or deployment.
