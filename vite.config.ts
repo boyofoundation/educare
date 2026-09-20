@@ -130,7 +130,13 @@ export default defineConfig(() => {
               id.includes('react-markdown') ||
               id.includes('remark-') ||
               id.includes('rehype-') ||
-              id.includes('node_modules/katex')
+              id.includes('node_modules/katex') ||
+              // Keep transitive math/highlight runtime modules with markdown.
+              // Leaving these in the broad vendor chunk makes vendor import
+              // the deferred markdown/highlight chunks and pulls them into
+              // the entry modulepreload set.
+              id.includes('node_modules/micromark-extension-math') ||
+              id.includes('node_modules/lowlight')
             ) {
               return 'markdown';
             }
