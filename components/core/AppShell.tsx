@@ -19,9 +19,53 @@ import { getBundleMetrics } from '../../services/bundleMetricsService';
 
 function AppContent(): React.JSX.Element {
   const { state, actions } = useAppContext();
+  const [mobilePane, setMobilePane] = React.useState<'chat' | 'canvas'>('chat');
+  const paneId = React.useId();
+  const chatTabRef = React.useRef<React.ComponentRef<'button'>>(null);
+  const canvasTabRef = React.useRef<React.ComponentRef<'button'>>(null);
+  const previousWorkspaceRef = React.useRef<string | null>(null);
   const bundleMetrics = getBundleMetrics();
   const htmlProjectAccessEnabled =
     !state.currentAssistant?.mathToolsEnabled && !state.currentAssistant?.webSpeechToolsEnabled;
+  const compactLayout = state.isMobile || state.isTablet;
+  const hasWorkspace = htmlProjectAccessEnabled && Boolean(state.activeProjectId);
+  const workspaceVisible = hasWorkspace && state.isProjectWorkspaceOpen;
+  const showPaneTabs = compactLayout && hasWorkspace;
+
+  React.useEffect(() => {
+    const nextProject = workspaceVisible ? state.activeProjectId : null;
+    if (nextProject !== previousWorkspaceRef.current) {
+      setMobilePane(nextProject ? 'canvas' : 'chat');
+      if (!nextProject && compactLayout) {
+        chatTabRef.current?.focus();
+      }
+    }
+    previousWorkspaceRef.current = nextProject;
+  }, [workspaceVisible, state.activeProjectId, compactLayout]);
+
+  const selectPane = (pane: 'chat' | 'canvas') => {
+    setMobilePane(pane);
+    if (pane === 'canvas' && !state.isProjectWorkspaceOpen) {
+      actions.setProjectWorkspaceOpen(true);
+    }
+  };
+
+  const handlePaneKey = (event: React.KeyboardEvent<React.ComponentRef<'button'>>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      return;
+    }
+    event.preventDefault();
+    const nextPane =
+      event.key === 'Home'
+        ? 'chat'
+        : event.key === 'End'
+          ? 'canvas'
+          : mobilePane === 'chat'
+            ? 'canvas'
+            : 'chat';
+    selectPane(nextPane);
+    (nextPane === 'chat' ? chatTabRef : canvasTabRef).current?.focus();
+  };
 
   // Initialize compression service with default configuration
   const compressionService = new ChatCompactorService({
@@ -276,7 +320,40 @@ function AppContent(): React.JSX.Element {
 
       {state.viewMode === 'chat' && state.currentAssistant && state.currentSession && (
         <div className='flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden lg:flex-row'>
+          {showPaneTabs && (
+            <div
+              role='tablist'
+              aria-label='聊天與作品'
+              className='flex shrink-0 border-b border-gray-700 bg-gray-900 p-1'
+            >
+              {(['chat', 'canvas'] as const).map(pane => (
+                <button
+                  key={pane}
+                  ref={pane === 'chat' ? chatTabRef : canvasTabRef}
+                  type='button'
+                  role='tab'
+                  id={`${paneId}-${pane}-tab`}
+                  aria-controls={`${paneId}-${pane}-panel`}
+                  aria-selected={mobilePane === pane}
+                  tabIndex={mobilePane === pane ? 0 : -1}
+                  onClick={() => selectPane(pane)}
+                  onKeyDown={handlePaneKey}
+                  className={`min-h-11 min-w-11 flex-1 rounded-lg px-4 py-2 text-sm font-semibold ${mobilePane === pane ? 'bg-cyan-700 text-white' : 'text-gray-300 hover:bg-gray-800'}`}
+                >
+                  {pane === 'chat' ? '聊天' : '作品'}
+                </button>
+              ))}
+            </div>
+          )}
           <div
+            id={`${paneId}-chat-panel`}
+            role={showPaneTabs ? 'tabpanel' : undefined}
+            aria-labelledby={showPaneTabs ? `${paneId}-chat-tab` : undefined}
+            style={
+              showPaneTabs && workspaceVisible && mobilePane === 'canvas'
+                ? { display: 'none' }
+                : undefined
+            }
             className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${htmlProjectAccessEnabled && state.isProjectWorkspaceOpen && state.activeProjectId ? 'lg:w-[55%]' : 'w-full'}`}
           >
             <div className='min-h-0 flex-1'>
@@ -331,9 +408,19 @@ function AppContent(): React.JSX.Element {
               />
             </div>
           </div>
-          {htmlProjectAccessEnabled && state.isProjectWorkspaceOpen && state.activeProjectId && (
-            <div className='min-h-0 overflow-hidden border-t border-gray-800 lg:h-full lg:w-[45%] lg:min-w-[360px] lg:max-w-[48%] lg:border-l lg:border-t-0'>
-              <HtmlProjectWorkspace projectId={state.activeProjectId} />
+          {hasWorkspace && state.activeProjectId && (
+            <div
+              id={`${paneId}-canvas-panel`}
+              role={showPaneTabs ? 'tabpanel' : undefined}
+              aria-labelledby={showPaneTabs ? `${paneId}-canvas-tab` : undefined}
+              style={
+                !workspaceVisible || (showPaneTabs && mobilePane !== 'canvas')
+                  ? { display: 'none' }
+                  : undefined
+              }
+              className='min-h-0 min-w-0 flex-1 overflow-hidden border-t border-gray-800 lg:h-full lg:flex-none lg:w-[45%] lg:min-w-[360px] lg:max-w-[48%] lg:border-l lg:border-t-0'
+            >
+              {workspaceVisible && <HtmlProjectWorkspace projectId={state.activeProjectId} />}
             </div>
           )}
         </div>

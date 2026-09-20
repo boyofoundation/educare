@@ -296,6 +296,7 @@ let mockURLSearchParams: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  Object.defineProperty(window, 'innerWidth', { value: 1280, writable: true });
 
   mockURLSearchParams = vi.fn().mockImplementation(() => ({
     has: vi.fn().mockReturnValue(false),
@@ -785,6 +786,50 @@ describe('AppShell', () => {
         expect(screen.getByText('hideHeader:true')).toBeInTheDocument();
       });
     });
+
+    it.each([360, 390, 768])(
+      'keeps chat and Canvas mounted while switching narrow-screen panes at %ipx',
+      async width => {
+        Object.defineProperty(window, 'innerWidth', { value: width, writable: true });
+        vi.mocked(dbMock.getSessionsForAssistant).mockResolvedValue([
+          { ...TEST_SESSIONS.withMessages, activeProjectId: 'project-42' },
+        ]);
+
+        render(<AppShell />);
+
+        const canvas = await screen.findByTestId('html-project-workspace');
+        const chat = screen.getByTestId('chat-container');
+        const chatTab = screen.getByRole('tab', { name: '聊天' });
+        const canvasTab = screen.getByRole('tab', { name: '作品' });
+        chat.scrollTop = 240;
+        canvas.scrollTop = 120;
+
+        expect(canvasTab).toHaveAttribute('aria-selected', 'true');
+        expect(canvas).toBeVisible();
+        expect(chat).not.toBeVisible();
+
+        fireEvent.click(chatTab);
+        expect(chat).toBeVisible();
+        expect(canvas).not.toBeVisible();
+        expect(chatTab).toHaveAttribute('aria-selected', 'true');
+
+        fireEvent.keyDown(chatTab, { key: 'ArrowRight' });
+        expect(canvasTab).toHaveFocus();
+        expect(canvas).toBeVisible();
+        expect(screen.getByTestId('chat-container')).toBe(chat);
+        expect(screen.getByTestId('html-project-workspace')).toBe(canvas);
+        expect(chat.scrollTop).toBe(240);
+        expect(canvas.scrollTop).toBe(120);
+
+        fireEvent.click(screen.getByTestId('hide-workspace'));
+        expect(chat).toBeVisible();
+        expect(chatTab).toHaveFocus();
+        expect(chatTab).toHaveAttribute('aria-selected', 'true');
+        fireEvent.click(canvasTab);
+        expect(await screen.findByTestId('html-project-workspace')).toBeVisible();
+        expect(screen.getByTestId('chat-container')).toBe(chat);
+      },
+    );
 
     it('should keep assistant-owned HTML projects reopenable after deleting the active chat session', async () => {
       const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
