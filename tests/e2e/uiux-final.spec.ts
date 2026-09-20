@@ -2,21 +2,16 @@ import { expect, test } from '@playwright/test';
 
 const MOBILE_VIEWPORT = { width: 390, height: 844 };
 
-const prepareFreshBrowser = async (page: import('@playwright/test').Page) => {
-  await page.addInitScript(() => {
-    localStorage.clear();
-    sessionStorage.clear();
-  });
-};
-
 const openFreshApp = async (
   page: import('@playwright/test').Page,
   viewport = { width: 1280, height: 900 },
 ) => {
   await page.setViewportSize(viewport);
-  await prepareFreshBrowser(page);
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  // Playwright gives each test an isolated context. Do not clear storage on
+  // every navigation: reload assertions must exercise actual persistence.
+  await page.goto('./', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#root')).toBeVisible();
+  await expect(page.locator('main')).toBeVisible();
 };
 
 const skipOnboardingIfPresent = async (page: import('@playwright/test').Page) => {
@@ -34,24 +29,58 @@ const openSettings = async (page: import('@playwright/test').Page) => {
     await menuButton.click();
     await page
       .getByRole('navigation', { name: '主要導覽' })
-      .getByRole('button', { name: '設定' })
+      .getByRole('button', { name: '設定', exact: true })
       .click();
   } else {
-    await page.getByRole('button', { name: '設定' }).first().click();
+    await page.getByRole('button', { name: '設定', exact: true }).click();
   }
 };
 
 test.describe('UIUX integrated acceptance @final', () => {
-  test('first-run onboarding completes a template path without credentials and persists', async ({
+  test('shares a local assistant through a file without cloud setup or writes', async ({
     page,
   }) => {
+    const externalWrites: string[] = [];
+    await page.route('**/*', async route => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (!['127.0.0.1', 'localhost'].includes(url.hostname)) {
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
+          externalWrites.push(request.url());
+        }
+        await route.fulfill({ status: 404, body: '' });
+        return;
+      }
+      await route.continue();
+    });
+    await openFreshApp(page);
+    const onboarding = page.getByRole('dialog', { name: '先選用途，再開始備課' });
+    await onboarding.getByRole('button', { name: /英文教學/ }).click();
+    await onboarding.getByRole('button', { name: '套用樣板並開始' }).click();
+    await page.getByTestId('save-button').click();
+    await expect(page.getByTestId('assistant-editor')).toBeHidden();
+    await page.getByRole('button', { name: '分享助理', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '分享助理', exact: true });
+    await expect(dialog.getByText('先匯出助理檔案')).toBeVisible();
+    const downloadReady = page.waitForEvent('download');
+    await dialog.getByRole('button', { name: '匯出助理檔案', exact: true }).click();
+    const download = await downloadReady;
+    expect(download.suggestedFilename()).toMatch(/\.zip$/);
+    expect(await download.failure()).toBeNull();
+    expect(externalWrites).toEqual([]);
+  });
+
+  test('first-run onboarding completes a template path without credentials and persists', async ({
+    page,
+  }, testInfo) => {
     await openFreshApp(page);
 
     const overlay = page.getByTestId('onboarding-overlay');
     await expect(overlay).toBeVisible();
-    const dialog = overlay.getByRole('dialog');
+    const dialog = page.getByRole('dialog', { name: '先選用途，再開始備課' });
     await expect(dialog).toHaveAttribute('aria-modal', 'true');
     await expect(dialog).toContainText('先選用途，再開始備課');
+    await page.screenshot({ path: testInfo.outputPath('onboarding-desktop.png') });
 
     await dialog.getByRole('button', { name: /英文教學/ }).click();
     await expect(dialog.getByRole('button', { name: '套用樣板並開始' })).toBeEnabled();
@@ -76,7 +105,8 @@ test.describe('UIUX integrated acceptance @final', () => {
     await skipOnboardingIfPresent(page);
 
     const menuButton = page.getByRole('button', { name: '開啟選單' });
-    const navigation = page.getByRole('navigation', { name: '主要導覽' });
+    // An aria-hidden region has no accessible name until it opens.
+    const navigation = page.locator('[role="navigation"][aria-label="主要導覽"]');
     await expect(menuButton).toBeVisible();
     const closedState = await navigation.evaluate(element => ({
       ariaHidden: element.getAttribute('aria-hidden'),
@@ -154,7 +184,7 @@ test.describe('UIUX integrated acceptance @final', () => {
 
   test('mobile theme and reading preferences survive reload without changing preview boundaries', async ({
     page,
-  }) => {
+  }, testInfo) => {
     await openFreshApp(page, MOBILE_VIEWPORT);
     await openSettings(page);
     const appearance = page.getByTestId('appearance-settings');
@@ -163,6 +193,11 @@ test.describe('UIUX integrated acceptance @final', () => {
     await appearance.getByTestId('appearance-font-size').selectOption('large');
     await appearance.getByTestId('appearance-reduced-motion').check();
     await expect(appearance.getByRole('status')).toContainText('已儲存');
+    await expect(page.getByTestId('settings-page')).toHaveCSS(
+      'background-color',
+      'rgb(255, 255, 255)',
+    );
+    await page.screenshot({ path: testInfo.outputPath('appearance-mobile-light.png') });
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
@@ -196,7 +231,7 @@ test.describe('UIUX integrated acceptance @final', () => {
     await expect(page.getByTestId('navigation-search-results')).toContainText(/找不到|沒有結果/);
     expect(requests.filter(url => /api|turso|provider|search/i.test(url))).toEqual([]);
 
-    await page.goto('/?share=missing-shared-assistant', { waitUntil: 'domcontentloaded' });
+    await page.goto('./?share=missing-shared-assistant', { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('searchbox')).toBeHidden();
     await expect(page.getByRole('button', { name: /搜尋|查找/ }).first()).toBeHidden();
   });

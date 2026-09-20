@@ -230,6 +230,8 @@ const main = async () => {
     measuredAt: new Date().toISOString(),
     url: options.url,
     conditions: {
+      browserVersion: browser.version(),
+      headless: true,
       viewport: `${VIEWPORT.width}x${VIEWPORT.height}`,
       cpuRate: CPU_RATE,
       downloadMbps: 1.6,
