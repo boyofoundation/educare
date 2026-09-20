@@ -82,7 +82,7 @@ describe('RAGFileUpload', () => {
     });
 
     expect(parseDocumentMock).toHaveBeenCalledWith(file);
-    expect(screen.getByText(/已本地保存/)).toBeInTheDocument();
+    expect(screen.getByText(/已解析，尚未儲存/)).toBeInTheDocument();
   });
 
   it('shows processing status and disables input while upload is in progress', async () => {

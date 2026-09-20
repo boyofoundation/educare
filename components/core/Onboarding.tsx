@@ -64,13 +64,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({
     return null;
   }
 
-  const setOpen = (nextOpen: boolean) => {
-    if (isOpen === undefined) {
-      setInternalOpen(nextOpen);
-    }
-    onOpenChange?.(nextOpen);
-  };
-
   const finish = (reason: OnboardingCompletionReason, templateId?: string) => {
     closeGuide(reason, onOpenChange, onComplete, onSkip, templateId);
     if (isOpen === undefined) {
@@ -106,7 +99,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             className='rounded-lg p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400'
             onClick={() => {
               finish('skip');
-              setOpen(false);
             }}
             type='button'
           >
@@ -120,6 +112,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             return (
               <button
                 aria-pressed={selected}
+                aria-label={`${template.name}樣板${selected ? '（已選取）' : ''}`}
                 className={`rounded-xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
                   selected
                     ? 'border-cyan-400 bg-cyan-950/70'
@@ -159,7 +152,9 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             className='shrink-0 rounded-lg bg-cyan-600 px-4 py-3 font-semibold text-white transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50'
             disabled={!selectedTemplate}
             onClick={() => {
-              if (!selectedTemplate) return;
+              if (!selectedTemplate) {
+                return;
+              }
               onApplyTemplate?.(selectedTemplate);
               finish('template', selectedTemplate.id);
             }}
@@ -179,7 +174,9 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             type='button'
           >
             匯入助理／協作包
-            <span className='mt-1 block text-xs font-normal text-slate-400'>使用現有檔案，不需要先設定雲端。</span>
+            <span className='mt-1 block text-xs font-normal text-slate-400'>
+              使用現有檔案，不需要先設定雲端。
+            </span>
           </button>
           <button
             className='rounded-lg border border-slate-600 px-4 py-3 text-left text-sm font-semibold text-slate-100 transition hover:border-cyan-400 hover:bg-slate-800'
@@ -190,7 +187,9 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             type='button'
           >
             先瀏覽已保存內容
-            <span className='mt-1 block text-xs font-normal text-slate-400'>資料留在本機，可稍後再建立助理。</span>
+            <span className='mt-1 block text-xs font-normal text-slate-400'>
+              資料留在本機，可稍後再建立助理。
+            </span>
           </button>
         </div>
 
@@ -200,7 +199,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             className='rounded-lg px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white'
             onClick={() => {
               finish('skip');
-              setOpen(false);
             }}
             type='button'
           >
@@ -213,4 +211,3 @@ export const Onboarding: React.FC<OnboardingProps> = ({
 };
 
 export default Onboarding;
-

@@ -2,22 +2,48 @@ import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Assistant, RagChunk } from '../../types';
 import { RAGFileUpload } from './RAGFileUpload';
 import { useTursoAssistantStatus } from '../../hooks/useTursoAssistantStatus';
-import { TemplateSelector, AssistantTemplate } from './TemplateSelector';
+import { ASSISTANT_TEMPLATES, TemplateSelector, AssistantTemplate } from './TemplateSelector';
 import { AppContext } from '../core/useAppContext';
 
-interface AssistantEditorProps {
+export type AssistantSaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+export type LeaveGuardResult = boolean | void | Promise<boolean | void>;
+
+export interface AssistantEditorProps {
   assistant: Assistant | null;
   onSave: (assistant: Assistant) => Promise<void> | void;
   onCancel: () => void;
   onShare?: (assistant: Assistant) => void;
   availableAssistants?: Assistant[];
   onDraftChange?: (assistant: Assistant) => void;
+  /** Called whenever the draft crosses the saved/unsaved boundary. */
+  onDirtyChange?: (isDirty: boolean) => void;
+  /** Return false to keep the editor open when a dirty draft is being left. */
+  onBeforeLeave?: (draft: Assistant) => LeaveGuardResult;
+  /** Alias for integrations that call the guard a leave attempt. */
+  onLeaveAttempt?: (draft: Assistant) => LeaveGuardResult;
+  onSaveStatusChange?: (status: AssistantSaveStatus) => void;
+  initialTemplateId?: string;
   showFooterActions?: boolean;
   compact?: boolean;
 }
 
 const MAX_STARTER_PROMPTS = 4;
 const MAX_STARTER_PROMPT_LENGTH = 100;
+const DEFAULT_SYSTEM_PROMPT = '您是一個有用且專業的 AI 助理。';
+
+const signatureForAssistant = (value: Assistant): string =>
+  JSON.stringify({
+    id: value.id,
+    name: value.name,
+    description: value.description,
+    systemPrompt: value.systemPrompt,
+    ragChunks: value.ragChunks ?? [],
+    starterPrompts: value.starterPrompts ?? [],
+    subagentDelegationEnabled: value.subagentDelegationEnabled ?? false,
+    mathToolsEnabled: value.mathToolsEnabled ?? false,
+    webSpeechToolsEnabled: value.webSpeechToolsEnabled ?? false,
+    routableAssistantIds: value.routableAssistantIds ?? [],
+  });
 
 export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   assistant,
@@ -26,6 +52,11 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   onShare,
   availableAssistants,
   onDraftChange,
+  onDirtyChange,
+  onBeforeLeave,
+  onLeaveAttempt,
+  onSaveStatusChange,
+  initialTemplateId,
   showFooterActions = true,
   compact = false,
 }) => {
@@ -41,9 +72,17 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   const [routableAssistantIds, setRoutableAssistantIds] = useState<string[]>([]);
   const appContext = useContext(AppContext);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<AssistantSaveStatus>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [persistenceState, setPersistenceState] = useState<
+    NonNullable<React.ComponentProps<typeof RAGFileUpload>['persistenceState']>
+  >(assistant?.ragChunks?.length ? 'saved' : 'idle');
+  const [advancedOpen, setAdvancedOpen] = useState(Boolean(assistant));
+  const [pendingTemplate, setPendingTemplate] = useState<AssistantTemplate | null>(null);
   const [highlightFields, setHighlightFields] = useState(false);
   const hydratedAssistantIdRef = useRef<string | null | undefined>(undefined);
   const isHydratedRef = useRef(false);
+  const initialSignatureRef = useRef<string | null>(null);
 
   if (hydratedAssistantIdRef.current !== (assistant?.id ?? null)) {
     hydratedAssistantIdRef.current = assistant?.id ?? null;
@@ -92,10 +131,37 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   }, [assistant, draftAssistant, onDraftChange]);
 
   useEffect(() => {
+    const baseline: Assistant = assistant
+      ? {
+          ...assistant,
+          description: assistant.description || '',
+          systemPrompt: assistant.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+          ragChunks: assistant.ragChunks || [],
+          starterPrompts: assistant.starterPrompts || [],
+          subagentDelegationEnabled: assistant.subagentDelegationEnabled ?? false,
+          mathToolsEnabled: assistant.mathToolsEnabled ?? false,
+          webSpeechToolsEnabled: assistant.webSpeechToolsEnabled ?? false,
+          routableAssistantIds: assistant.routableAssistantIds ?? [],
+        }
+      : {
+          id: '',
+          name: '',
+          description: '',
+          systemPrompt: DEFAULT_SYSTEM_PROMPT,
+          ragChunks: [],
+          starterPrompts: [],
+          createdAt: 0,
+          subagentDelegationEnabled: false,
+          mathToolsEnabled: false,
+          webSpeechToolsEnabled: false,
+          routableAssistantIds: [],
+        };
+    initialSignatureRef.current = signatureForAssistant(baseline);
+
     if (assistant) {
       setName(assistant.name);
       setDescription(assistant.description || '');
-      setSystemPrompt(assistant.systemPrompt);
+      setSystemPrompt(assistant.systemPrompt || DEFAULT_SYSTEM_PROMPT);
       setRagChunks(assistant.ragChunks || []);
       setStarterPrompts(assistant.starterPrompts || []);
       setNewStarterPrompt('');
@@ -115,8 +181,106 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       setWebSpeechToolsEnabled(false);
       setRoutableAssistantIds([]);
     }
+    setAdvancedOpen(Boolean(assistant));
+    setPendingTemplate(null);
+    setSaveStatus('idle');
+    setSaveError(null);
+    setPersistenceState(assistant?.ragChunks?.length ? 'saved' : 'idle');
+    onSaveStatusChange?.('idle');
     isHydratedRef.current = true;
-  }, [assistant]);
+  }, [assistant, onSaveStatusChange]);
+
+  const isDirty =
+    isHydratedRef.current &&
+    initialSignatureRef.current !== null &&
+    signatureForAssistant(draftAssistant) !== initialSignatureRef.current;
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isDirty) {
+      return;
+    }
+
+    const handleBeforeUnload = (event: Event) => {
+      event.preventDefault();
+      (event as unknown as { returnValue: string }).returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isDirty]);
+
+  useEffect(() => {
+    if (assistant || !initialTemplateId) {
+      return;
+    }
+    const template = ASSISTANT_TEMPLATES.find(item => item.id === initialTemplateId);
+    if (!template) {
+      return;
+    }
+    setName(template.name);
+    setDescription(template.description);
+    setSystemPrompt(template.systemPrompt);
+    setHighlightFields(true);
+    setTimeout(() => setHighlightFields(false), 1000);
+  }, [assistant, initialTemplateId]);
+
+  const updateSaveStatus = (status: AssistantSaveStatus) => {
+    setSaveStatus(status);
+    onSaveStatusChange?.(status);
+  };
+
+  const hasMeaningfulDraft = (): boolean =>
+    Boolean(
+      name.trim() ||
+        description.trim() ||
+        (systemPrompt.trim() && systemPrompt.trim() !== DEFAULT_SYSTEM_PROMPT) ||
+        starterPrompts.length > 0 ||
+        newStarterPrompt.trim() ||
+        ragChunks.length > 0 ||
+        subagentDelegationEnabled ||
+        mathToolsEnabled ||
+        webSpeechToolsEnabled ||
+        routableAssistantIds.length > 0,
+    );
+
+  const applyTemplate = (template: AssistantTemplate) => {
+    setName(template.name);
+    setDescription(template.description);
+    setSystemPrompt(template.systemPrompt);
+    setPendingTemplate(null);
+    setAdvancedOpen(false);
+    setHighlightFields(true);
+    setTimeout(() => setHighlightFields(false), 1000);
+  };
+
+  const handleTemplateSelect = (template: AssistantTemplate) => {
+    if (hasMeaningfulDraft()) {
+      setPendingTemplate(template);
+      return;
+    }
+    applyTemplate(template);
+  };
+
+  const handleCancel = async () => {
+    if (isDirty) {
+      const guard = onBeforeLeave ?? onLeaveAttempt;
+      if (guard) {
+        const result = await guard(draftAssistant);
+        if (result === false) {
+          return;
+        }
+      } else if (
+        typeof window !== 'undefined' &&
+        !window.confirm('尚有未保存的變更，確定要離開嗎？')
+      ) {
+        return;
+      }
+    }
+    onCancel();
+  };
 
   // 將輸入框中尚未按「新增」的建議提問一併納入；驗證失敗回傳 null（呼叫端應中止）。
   const commitPendingStarterPrompt = (): string[] | null => {
@@ -126,10 +290,14 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
     }
     if (starterPrompts.length >= MAX_STARTER_PROMPTS) {
       alert('建議提問最多只能設定 4 條。');
+      setSaveError('建議提問最多只能設定 4 條。');
+      updateSaveStatus('error');
       return null;
     }
     if (pendingPrompt.length > MAX_STARTER_PROMPT_LENGTH) {
       alert(`建議提問請控制在 ${MAX_STARTER_PROMPT_LENGTH} 字以內。`);
+      setSaveError(`建議提問請控制在 ${MAX_STARTER_PROMPT_LENGTH} 字以內。`);
+      updateSaveStatus('error');
       return null;
     }
     const nextPrompts = [...starterPrompts, pendingPrompt];
@@ -145,6 +313,8 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
 
     if (!name.trim()) {
       alert('助理名稱為必填。');
+      setSaveError('請輸入助理名稱後再保存。');
+      updateSaveStatus('error');
       return;
     }
 
@@ -154,6 +324,9 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
     }
 
     setIsSaving(true);
+    setSaveError(null);
+    updateSaveStatus('saving');
+    setPersistenceState('saving');
     try {
       const assistantId = assistant?.id || `asst_${Date.now()}`;
       const newAssistant: Assistant = {
@@ -170,11 +343,15 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         routableAssistantIds,
       };
 
-      console.log('Assistant saved locally. Use migration settings to sync to Turso if needed.');
-
       await onSave(newAssistant);
+      initialSignatureRef.current = signatureForAssistant(newAssistant);
+      setPersistenceState('saved');
+      updateSaveStatus('saved');
     } catch (error) {
-      console.error('Failed to save assistant:', error);
+      const message = error instanceof Error ? error.message : '未知錯誤';
+      setSaveError(`保存失敗：${message}。內容仍保留在表單中，請重試。`);
+      setPersistenceState('error');
+      updateSaveStatus('error');
     } finally {
       setIsSaving(false);
     }
@@ -182,6 +359,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
 
   const handleRagChunksChange = (newChunks: RagChunk[]) => {
     setRagChunks(newChunks);
+    setPersistenceState('idle');
   };
 
   const handleAddStarterPrompt = () => {
@@ -195,7 +373,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   return (
     <div
       data-testid='assistant-editor'
-      className={`chat-scroll flex h-full flex-col overflow-y-auto ${
+      className={`chat-scroll relative flex h-full flex-col overflow-y-auto ${
         compact ? 'bg-[#141c26] p-5' : 'bg-gradient-to-br from-gray-800 to-gray-900 p-8'
       }`}
     >
@@ -209,16 +387,36 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         {assistant ? '編輯助理' : '新增助理'}
       </h2>
 
-      {!assistant && (
-        <TemplateSelector
-          onSelectTemplate={(template: AssistantTemplate) => {
-            setName(template.name);
-            setDescription(template.description);
-            setSystemPrompt(template.systemPrompt);
-            setHighlightFields(true);
-            setTimeout(() => setHighlightFields(false), 1000);
-          }}
-        />
+      {!assistant && <TemplateSelector onSelectTemplate={handleTemplateSelect} />}
+
+      {pendingTemplate && (
+        <div
+          className='mb-6 rounded-xl border border-amber-500/60 bg-amber-950/30 p-4 text-amber-100'
+          data-testid='template-overwrite-confirmation'
+          role='alert'
+        >
+          <p className='font-semibold'>目前的編輯內容會被樣板覆蓋</p>
+          <p className='mt-1 text-sm text-amber-200/80'>
+            若要套用「{pendingTemplate.name}
+            」，現有名稱、描述與系統提示將被替換；其他進階資料會保留。
+          </p>
+          <div className='mt-3 flex flex-wrap gap-2'>
+            <button
+              className='rounded-lg bg-amber-500 px-3 py-2 text-sm font-semibold text-amber-950 transition hover:bg-amber-400'
+              onClick={() => applyTemplate(pendingTemplate)}
+              type='button'
+            >
+              套用並覆蓋
+            </button>
+            <button
+              className='rounded-lg border border-amber-400/60 px-3 py-2 text-sm font-semibold text-amber-100 transition hover:bg-amber-900/40'
+              onClick={() => setPendingTemplate(null)}
+              type='button'
+            >
+              取消套用
+            </button>
+          </div>
+        </div>
       )}
 
       <div className='mb-6'>
@@ -258,192 +456,231 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         />
       </div>
 
-      <div className='mb-6'>
-        <label htmlFor='systemPrompt' className='mb-2 block text-sm font-semibold text-gray-300'>
-          系統提示
-        </label>
-        <textarea
-          id='systemPrompt'
-          value={systemPrompt}
-          onChange={e => setSystemPrompt(e.target.value)}
-          rows={8}
-          className={`w-full resize-none rounded-xl border-2 bg-gray-700/80 px-4 py-3 text-white placeholder-gray-400 shadow-inner transition-all duration-300 focus:border-cyan-500/50 focus:bg-gray-700 focus:ring-2 focus:ring-cyan-500/50 ${
-            highlightFields
-              ? 'animate-pulse border-cyan-500 bg-gray-750/90 ring-4 ring-cyan-500/30'
-              : 'border-gray-600/50'
-          }`}
-          placeholder='定義助理的角色、個性和指導。'
-        />
-      </div>
-
-      <div className='mb-6'>
-        <label className='mb-2 block text-sm font-semibold text-gray-300'>
-          建議提問
-          <span className='ml-2 text-xs text-gray-500'>(最多 4 條，每條建議 100 字以內)</span>
-        </label>
-        <div className='space-y-3'>
-          <div className='flex gap-3'>
-            <input
-              type='text'
-              value={newStarterPrompt}
-              onChange={e => setNewStarterPrompt(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                  e.preventDefault();
-                  handleAddStarterPrompt();
-                }
-              }}
-              className='flex-1 rounded-xl border border-gray-600/50 bg-gray-700/80 px-4 py-3 text-white placeholder-gray-400 shadow-inner transition-all duration-300 focus:border-cyan-500/50 focus:bg-gray-700 focus:ring-2 focus:ring-cyan-500/50'
-              placeholder='例如：幫我整理這份教材的重點'
-            />
-            <button
-              type='button'
-              onClick={handleAddStarterPrompt}
-              className='rounded-xl border border-cyan-500/40 bg-cyan-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-cyan-500'
+      <details
+        className='mb-6 rounded-xl border border-gray-700/60 bg-gray-900/30 p-4'
+        data-testid='advanced-settings'
+        open={advancedOpen}
+        onToggle={event => setAdvancedOpen(event.currentTarget.open)}
+      >
+        <summary className='cursor-pointer list-none text-sm font-semibold text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400'>
+          進階設定
+          <span className='ml-2 text-xs font-normal text-gray-500'>
+            系統提示、建議提問、工具與教材
+          </span>
+        </summary>
+        <div className='mt-5'>
+          <div className='mb-6'>
+            <label
+              htmlFor='systemPrompt'
+              className='mb-2 block text-sm font-semibold text-gray-300'
             >
-              新增
-            </button>
+              系統提示
+            </label>
+            <textarea
+              id='systemPrompt'
+              value={systemPrompt}
+              onChange={e => setSystemPrompt(e.target.value)}
+              rows={8}
+              className={`w-full resize-none rounded-xl border-2 bg-gray-700/80 px-4 py-3 text-white placeholder-gray-400 shadow-inner transition-all duration-300 focus:border-cyan-500/50 focus:bg-gray-700 focus:ring-2 focus:ring-cyan-500/50 ${
+                highlightFields
+                  ? 'animate-pulse border-cyan-500 bg-gray-750/90 ring-4 ring-cyan-500/30'
+                  : 'border-gray-600/50'
+              }`}
+              placeholder='定義助理的角色、個性和指導。'
+            />
           </div>
-          <ul className='space-y-2'>
-            {starterPrompts.map((prompt, index) => (
-              <li
-                key={`${prompt}-${index}`}
-                className='flex items-center justify-between rounded-xl border border-gray-700/50 bg-gray-800/60 px-4 py-3 text-sm text-gray-200'
-              >
-                <span>{prompt}</span>
+
+          <div className='mb-6'>
+            <label className='mb-2 block text-sm font-semibold text-gray-300'>
+              建議提問
+              <span className='ml-2 text-xs text-gray-500'>(最多 4 條，每條建議 100 字以內)</span>
+            </label>
+            <div className='space-y-3'>
+              <div className='flex gap-3'>
+                <input
+                  type='text'
+                  value={newStarterPrompt}
+                  onChange={e => setNewStarterPrompt(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      handleAddStarterPrompt();
+                    }
+                  }}
+                  className='flex-1 rounded-xl border border-gray-600/50 bg-gray-700/80 px-4 py-3 text-white placeholder-gray-400 shadow-inner transition-all duration-300 focus:border-cyan-500/50 focus:bg-gray-700 focus:ring-2 focus:ring-cyan-500/50'
+                  placeholder='例如：幫我整理這份教材的重點'
+                />
                 <button
                   type='button'
-                  onClick={() => handleRemoveStarterPrompt(index)}
-                  className='rounded-lg px-3 py-1 text-xs text-rose-200 transition hover:bg-rose-500/10 hover:text-rose-100'
+                  onClick={handleAddStarterPrompt}
+                  className='rounded-xl border border-cyan-500/40 bg-cyan-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-cyan-500'
                 >
-                  刪除
+                  新增
                 </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-
-      <div className='mb-6'>
-        <label
-          htmlFor='subagent-delegation-enabled'
-          className='flex cursor-pointer select-none items-start gap-3'
-        >
-          <input
-            id='subagent-delegation-enabled'
-            type='checkbox'
-            checked={subagentDelegationEnabled}
-            onChange={e => setSubagentDelegationEnabled(e.target.checked)}
-            disabled={isSaving}
-            className='mt-1 h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0'
-            aria-describedby='subagent-delegation-help'
-          />
-          <span className='flex flex-col'>
-            <span className='text-sm font-semibold text-gray-300'>
-              Subagent delegation (平行子代理人委派)
-            </span>
-            <span
-              id='subagent-delegation-help'
-              className='mt-1 text-xs leading-relaxed text-gray-500'
-            >
-              開啟後,主模型可把研究或受限 HTML 工作委派給 1-4 個子代理人並行處理。這會增加 token
-              成本,且 shared mode 會在執行時強制停用。
-            </span>
-          </span>
-        </label>
-      </div>
-
-      <div className='mb-6'>
-        <label
-          htmlFor='math-tools-enabled'
-          className='flex cursor-pointer select-none items-start gap-3'
-        >
-          <input
-            id='math-tools-enabled'
-            type='checkbox'
-            checked={mathToolsEnabled}
-            onChange={e => setMathToolsEnabled(e.target.checked)}
-            disabled={isSaving}
-            className='mt-1 h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0'
-            aria-describedby='math-tools-help'
-          />
-          <span className='flex flex-col'>
-            <span className='text-sm font-semibold text-gray-300'>數學計算與幾何繪圖工具</span>
-            <span id='math-tools-help' className='mt-1 text-xs leading-relaxed text-gray-500'>
-              開啟後，助理可使用數學計算與幾何繪圖工具。Ollama
-              目前不支援工具呼叫，因此無法使用此功能。
-            </span>
-          </span>
-        </label>
-      </div>
-
-      <div className='mb-6'>
-        <label
-          htmlFor='web-speech-tools-enabled'
-          className='flex cursor-pointer select-none items-start gap-3'
-        >
-          <input
-            id='web-speech-tools-enabled'
-            type='checkbox'
-            checked={webSpeechToolsEnabled}
-            onChange={e => setWebSpeechToolsEnabled(e.target.checked)}
-            disabled={isSaving}
-            className='mt-1 h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0'
-            aria-describedby='web-speech-tools-help'
-          />
-          <span className='flex flex-col'>
-            <span className='text-sm font-semibold text-gray-300'>語音發音與聽說練習工具</span>
-            <span id='web-speech-tools-help' className='mt-1 text-xs leading-relaxed text-gray-500'>
-              開啟後，助理可產生瀏覽器原生 Web Speech
-              發音卡，適合英文與其他語言聽說練習；此模式會停用 HTML 專案工具。
-            </span>
-          </span>
-        </label>
-      </div>
-
-      <div className='mb-6'>
-        <fieldset>
-          <legend className='text-sm font-semibold text-gray-300'>可轉接助理</legend>
-          <p className='mt-1 text-xs text-gray-500'>
-            僅勾選可由此助理建議轉接的目標；分享模式下目標也必須已分享。
-          </p>
-          <div className='mt-3 space-y-2'>
-            {routableAssistants
-              .filter(item => item.id !== assistant?.id)
-              .map(item => (
-                <label
-                  key={item.id}
-                  className='flex cursor-pointer items-center gap-2 text-sm text-gray-200'
-                >
-                  <input
-                    type='checkbox'
-                    checked={routableAssistantIds.includes(item.id)}
-                    disabled={isSaving}
-                    onChange={event =>
-                      setRoutableAssistantIds(current =>
-                        event.target.checked
-                          ? [...new Set([...current, item.id])]
-                          : current.filter(id => id !== item.id),
-                      )
-                    }
-                  />
-                  {item.name}
-                </label>
-              ))}
+              </div>
+              <ul className='space-y-2'>
+                {starterPrompts.map((prompt, index) => (
+                  <li
+                    key={`${prompt}-${index}`}
+                    className='flex items-center justify-between rounded-xl border border-gray-700/50 bg-gray-800/60 px-4 py-3 text-sm text-gray-200'
+                  >
+                    <span>{prompt}</span>
+                    <button
+                      type='button'
+                      onClick={() => handleRemoveStarterPrompt(index)}
+                      className='rounded-lg px-3 py-1 text-xs text-rose-200 transition hover:bg-rose-500/10 hover:text-rose-100'
+                    >
+                      刪除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
-        </fieldset>
-      </div>
 
-      <RAGFileUpload
-        ragChunks={ragChunks}
-        onRagChunksChange={handleRagChunksChange}
-        disabled={isSaving}
-      />
+          <div className='mb-6'>
+            <label
+              htmlFor='subagent-delegation-enabled'
+              className='flex cursor-pointer select-none items-start gap-3'
+            >
+              <input
+                id='subagent-delegation-enabled'
+                type='checkbox'
+                checked={subagentDelegationEnabled}
+                onChange={e => setSubagentDelegationEnabled(e.target.checked)}
+                disabled={isSaving}
+                className='mt-1 h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0'
+                aria-describedby='subagent-delegation-help'
+              />
+              <span className='flex flex-col'>
+                <span className='text-sm font-semibold text-gray-300'>
+                  Subagent delegation (平行子代理人委派)
+                </span>
+                <span
+                  id='subagent-delegation-help'
+                  className='mt-1 text-xs leading-relaxed text-gray-500'
+                >
+                  開啟後,主模型可把研究或受限 HTML 工作委派給 1-4 個子代理人並行處理。這會增加 token
+                  成本,且 shared mode 會在執行時強制停用。
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <div className='mb-6'>
+            <label
+              htmlFor='math-tools-enabled'
+              className='flex cursor-pointer select-none items-start gap-3'
+            >
+              <input
+                id='math-tools-enabled'
+                type='checkbox'
+                checked={mathToolsEnabled}
+                onChange={e => setMathToolsEnabled(e.target.checked)}
+                disabled={isSaving}
+                className='mt-1 h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0'
+                aria-describedby='math-tools-help'
+              />
+              <span className='flex flex-col'>
+                <span className='text-sm font-semibold text-gray-300'>數學計算與幾何繪圖工具</span>
+                <span id='math-tools-help' className='mt-1 text-xs leading-relaxed text-gray-500'>
+                  開啟後，助理可使用數學計算與幾何繪圖工具。Ollama
+                  目前不支援工具呼叫，因此無法使用此功能。
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <div className='mb-6'>
+            <label
+              htmlFor='web-speech-tools-enabled'
+              className='flex cursor-pointer select-none items-start gap-3'
+            >
+              <input
+                id='web-speech-tools-enabled'
+                type='checkbox'
+                checked={webSpeechToolsEnabled}
+                onChange={e => setWebSpeechToolsEnabled(e.target.checked)}
+                disabled={isSaving}
+                className='mt-1 h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0'
+                aria-describedby='web-speech-tools-help'
+              />
+              <span className='flex flex-col'>
+                <span className='text-sm font-semibold text-gray-300'>語音發音與聽說練習工具</span>
+                <span
+                  id='web-speech-tools-help'
+                  className='mt-1 text-xs leading-relaxed text-gray-500'
+                >
+                  開啟後，助理可產生瀏覽器原生 Web Speech
+                  發音卡，適合英文與其他語言聽說練習；此模式會停用 HTML 專案工具。
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <div className='mb-6'>
+            <fieldset>
+              <legend className='text-sm font-semibold text-gray-300'>可轉接助理</legend>
+              <p className='mt-1 text-xs text-gray-500'>
+                僅勾選可由此助理建議轉接的目標；分享模式下目標也必須已分享。
+              </p>
+              <div className='mt-3 space-y-2'>
+                {routableAssistants
+                  .filter(item => item.id !== assistant?.id)
+                  .map(item => (
+                    <label
+                      key={item.id}
+                      className='flex cursor-pointer items-center gap-2 text-sm text-gray-200'
+                    >
+                      <input
+                        type='checkbox'
+                        checked={routableAssistantIds.includes(item.id)}
+                        disabled={isSaving}
+                        onChange={event =>
+                          setRoutableAssistantIds(current =>
+                            event.target.checked
+                              ? [...new Set([...current, item.id])]
+                              : current.filter(id => id !== item.id),
+                          )
+                        }
+                      />
+                      {item.name}
+                    </label>
+                  ))}
+              </div>
+            </fieldset>
+          </div>
+
+          <RAGFileUpload
+            ragChunks={ragChunks}
+            onRagChunksChange={handleRagChunksChange}
+            disabled={isSaving}
+            persistenceState={persistenceState}
+          />
+        </div>
+      </details>
 
       {showFooterActions && (
-        <div className='mt-auto flex items-center justify-between'>
+        <div className='sticky bottom-0 z-10 mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-gray-700/70 bg-gray-900/95 py-4 backdrop-blur'>
+          <div className='min-h-10 flex-1 text-sm' aria-live='polite'>
+            {saveStatus === 'saving' && (
+              <p className='text-cyan-300' data-testid='assistant-save-status' role='status'>
+                正在保存助理…
+              </p>
+            )}
+            {saveStatus === 'saved' && (
+              <p className='text-emerald-300' data-testid='assistant-save-status' role='status'>
+                已保存於這台裝置。
+              </p>
+            )}
+            {saveStatus === 'error' && saveError && (
+              <p className='text-rose-300' data-testid='assistant-save-status' role='alert'>
+                {saveError}
+              </p>
+            )}
+          </div>
           {/* Left side - Share section (only show for existing assistants) */}
-          <div className='flex-1'>
+          <div>
             {assistant && (
               <div className='space-y-2'>
                 <div className='flex items-center space-x-2'>
@@ -480,8 +717,9 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
           <div className='flex space-x-4'>
             <button
               data-testid='cancel-button'
-              onClick={onCancel}
+              onClick={() => void handleCancel()}
               className='rounded-xl bg-gray-600/80 px-6 py-3 font-semibold text-white transition-all duration-300 hover:-translate-y-0.5 hover:bg-gray-500 hover:shadow-lg'
+              type='button'
             >
               取消
             </button>
@@ -490,6 +728,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
               onClick={handleSave}
               className='rounded-xl bg-gradient-to-r from-cyan-600 to-cyan-500 px-8 py-3 font-bold text-white transition-all duration-300 hover:-translate-y-0.5 hover:from-cyan-500 hover:to-cyan-400 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:transform-none'
               disabled={isSaving}
+              type='button'
             >
               {isSaving ? (
                 <span className='flex items-center gap-2'>
