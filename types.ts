@@ -35,6 +35,10 @@ export interface Assistant {
   ragChunks?: RagChunk[];
   starterPrompts?: string[];
   createdAt: number;
+  /** Local navigation metadata; persisted with the assistant, never sent to providers. */
+  isPinned?: boolean;
+  category?: string;
+  lastOpenedAt?: number;
   isShared?: boolean;
   /**
    * 子代理人委派開關。預設 false: 僅在明確 opt-in 時暴露 delegateToSubagents。
@@ -351,6 +355,10 @@ export interface ChatSession {
   updatedAt?: number;
   tokenCount: number;
   tokenUsage?: SessionTokenUsage;
+  /** Local navigation metadata; persisted with the session, never sent to providers. */
+  isPinned?: boolean;
+  category?: string;
+  lastOpenedAt?: number;
   activeProjectId?: string | null;
   // 壓縮相關欄位
   compactContext?: CompactContext; // 壓縮的對話上下文
@@ -386,6 +394,10 @@ export interface HtmlProject {
   lastPrompt?: string;
   lastBuildError?: string | null;
   tags?: string[];
+  /** Local navigation metadata for the workspace search surface. */
+  isPinned?: boolean;
+  category?: string;
+  lastOpenedAt?: number;
 }
 
 export type HtmlProjectTodoStatus = 'pending' | 'in_progress' | 'completed';

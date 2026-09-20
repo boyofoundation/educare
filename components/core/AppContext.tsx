@@ -24,8 +24,15 @@ import { htmlProjectStore } from '../../services/htmlProjectStore';
 import { htmlProjectImportService } from '../../services/htmlProjectImportService';
 import { importAssistantPackageFile } from '../../services/assistantPackageService';
 import { getTemplateFiles } from '../../services/htmlProjectTemplates';
+import type { LocalSearchResult } from '../../services/localSearchService';
 import { AppContext } from './useAppContext';
-import type { ViewMode, AppState, AppAction, AppContextValue } from './AppContext.types';
+import type {
+  ViewMode,
+  AppState,
+  AppAction,
+  AppContextValue,
+  NavigationRequest,
+} from './AppContext.types';
 
 // Load embedding config from localStorage
 const loadEmbeddingConfig = (): EmbeddingConfig => {
@@ -84,7 +91,21 @@ const initialState: AppState = {
   projectToolActivity: [],
   agentRunState: null,
   pendingHandoffSession: null,
+  providerReturnView: null,
+  focusedMessageTarget: null,
+  editorDirty: false,
+  pendingNavigation: null,
 };
+
+const sortSessionsForNavigation = (sessions: ChatSession[]): ChatSession[] =>
+  [...sessions].sort((left, right) => {
+    if (Boolean(left.isPinned) !== Boolean(right.isPinned)) {
+      return left.isPinned ? -1 : 1;
+    }
+    const leftTime = left.lastOpenedAt ?? left.updatedAt ?? left.createdAt;
+    const rightTime = right.lastOpenedAt ?? right.updatedAt ?? right.createdAt;
+    return rightTime - leftTime;
+  });
 
 function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -219,6 +240,14 @@ function appReducer(state: AppState, action: AppAction): AppState {
       };
     case 'SET_PENDING_HANDOFF_SESSION':
       return { ...state, pendingHandoffSession: action.payload };
+    case 'SET_PROVIDER_RETURN_VIEW':
+      return { ...state, providerReturnView: action.payload };
+    case 'SET_FOCUSED_MESSAGE_TARGET':
+      return { ...state, focusedMessageTarget: action.payload };
+    case 'SET_EDITOR_DIRTY':
+      return { ...state, editorDirty: action.payload };
+    case 'SET_PENDING_NAVIGATION':
+      return { ...state, pendingNavigation: action.payload };
     default:
       return state;
   }
@@ -261,9 +290,11 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
     async (assistantId: string, changeView = true) => {
       const assistant = await db.getAssistant(assistantId);
       if (assistant) {
-        dispatch({ type: 'SET_CURRENT_ASSISTANT', payload: { ...assistant } });
+        const nextAssistant = { ...assistant, lastOpenedAt: Date.now() };
+        await db.saveAssistant(nextAssistant);
+        dispatch({ type: 'SET_CURRENT_ASSISTANT', payload: nextAssistant });
         const assistantSessions = await db.getSessionsForAssistant(assistant.id);
-        const sortedSessions = assistantSessions.sort((a, b) => b.createdAt - a.createdAt);
+        const sortedSessions = sortSessionsForNavigation(assistantSessions);
         dispatch({ type: 'SET_SESSIONS', payload: sortedSessions });
 
         if (sortedSessions.length > 0) {
@@ -341,7 +372,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
             payload: [assistant],
           });
           const assistantSessions = await db.getSessionsForAssistant(assistant.id);
-          const sortedSessions = assistantSessions.sort((a, b) => b.createdAt - a.createdAt);
+          const sortedSessions = sortSessionsForNavigation(assistantSessions);
           dispatch({ type: 'SET_SESSIONS', payload: sortedSessions });
 
           if (sortedSessions.length > 0) {
@@ -368,6 +399,8 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   const saveAssistant = useCallback(
     async (assistant: Assistant) => {
       await db.saveAssistant(assistant);
+      // Only clear the editor guard after IndexedDB confirms the durable write.
+      dispatch({ type: 'SET_EDITOR_DIRTY', payload: false });
       const storedAssistants = await db.getAllAssistants();
       dispatch({
         type: 'SET_ASSISTANTS',
@@ -453,7 +486,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       }
 
       const assistantSessions = await db.getSessionsForAssistant(state.currentAssistant.id);
-      const sortedSessions = assistantSessions.sort((a, b) => b.createdAt - a.createdAt);
+      const sortedSessions = sortSessionsForNavigation(assistantSessions);
       dispatch({ type: 'SET_SESSIONS', payload: sortedSessions });
 
       if (state.currentSession?.id === sessionId) {
@@ -474,8 +507,242 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   }, []);
 
   // Set view mode
-  const setViewMode = useCallback((mode: ViewMode) => {
-    dispatch({ type: 'SET_VIEW_MODE', payload: mode });
+  const setViewMode = useCallback(
+    (mode: ViewMode) => {
+      if (state.editorDirty && mode !== state.viewMode) {
+        dispatch({ type: 'SET_PENDING_NAVIGATION', payload: { viewMode: mode } });
+        return;
+      }
+      dispatch({ type: 'SET_VIEW_MODE', payload: mode });
+    },
+    [state.editorDirty, state.viewMode],
+  );
+
+  const setEditorDirty = useCallback((dirty: boolean) => {
+    dispatch({ type: 'SET_EDITOR_DIRTY', payload: dirty });
+  }, []);
+
+  const navigate = useCallback(
+    (request: NavigationRequest): { allowed: boolean } => {
+      if (
+        state.editorDirty &&
+        (request.viewMode !== state.viewMode || request.sessionId !== state.currentSession?.id)
+      ) {
+        dispatch({ type: 'SET_PENDING_NAVIGATION', payload: request });
+        return { allowed: false };
+      }
+
+      if (request.sessionId) {
+        const targetSession = state.sessions.find(session => session.id === request.sessionId);
+        if (targetSession) {
+          dispatch({ type: 'SET_CURRENT_SESSION', payload: targetSession });
+        }
+      }
+      dispatch({ type: 'SET_PENDING_NAVIGATION', payload: null });
+      dispatch({ type: 'SET_VIEW_MODE', payload: request.viewMode });
+      return { allowed: true };
+    },
+    [state.currentSession?.id, state.editorDirty, state.sessions, state.viewMode],
+  );
+
+  const confirmPendingNavigation = useCallback(() => {
+    const request = state.pendingNavigation;
+    if (!request) {
+      return;
+    }
+
+    dispatch({ type: 'SET_EDITOR_DIRTY', payload: false });
+    dispatch({ type: 'SET_PENDING_NAVIGATION', payload: null });
+    if (request.sessionId) {
+      const targetSession = state.sessions.find(session => session.id === request.sessionId);
+      if (targetSession) {
+        dispatch({ type: 'SET_CURRENT_SESSION', payload: targetSession });
+      }
+    }
+    dispatch({ type: 'SET_VIEW_MODE', payload: request.viewMode });
+  }, [state.pendingNavigation, state.sessions]);
+
+  const cancelPendingNavigation = useCallback(() => {
+    dispatch({ type: 'SET_PENDING_NAVIGATION', payload: null });
+  }, []);
+
+  const openProviderSettings = useCallback(
+    (returnTo: ViewMode = 'chat') => {
+      dispatch({ type: 'SET_PROVIDER_RETURN_VIEW', payload: returnTo });
+      navigate({ viewMode: 'provider_settings' });
+    },
+    [navigate],
+  );
+
+  const closeProviderSettings = useCallback(() => {
+    const returnView = state.providerReturnView ?? 'settings';
+    dispatch({ type: 'SET_PROVIDER_RETURN_VIEW', payload: null });
+    dispatch({ type: 'SET_VIEW_MODE', payload: returnView });
+  }, [state.providerReturnView]);
+
+  const updateSessionMetadata = useCallback(
+    async (sessionId: string, patch: Partial<Pick<ChatSession, 'title' | 'isPinned' | 'category'>>) => {
+      const session = state.sessions.find(item => item.id === sessionId);
+      if (!session) {
+        return;
+      }
+
+      const nextSession: ChatSession = {
+        ...session,
+        ...patch,
+        updatedAt: Date.now(),
+      };
+      await db.saveSession(nextSession);
+      dispatch({ type: 'UPDATE_SESSION', payload: nextSession });
+    },
+    [state.sessions],
+  );
+
+  const openSession = useCallback(
+    async (sessionId: string) => {
+      const session = state.sessions.find(item => item.id === sessionId);
+      if (!session) {
+        return;
+      }
+
+      if (!navigate({ viewMode: 'chat', sessionId }).allowed) {
+        return;
+      }
+
+      const nextSession: ChatSession = {
+        ...session,
+        lastOpenedAt: Date.now(),
+      };
+      await db.saveSession(nextSession);
+      dispatch({ type: 'UPDATE_SESSION', payload: nextSession });
+      dispatch({ type: 'SET_CURRENT_SESSION', payload: nextSession });
+      dispatch({ type: 'SET_VIEW_MODE', payload: 'chat' });
+    },
+    [navigate, state.sessions],
+  );
+
+  const renameSession = useCallback(
+    async (sessionId: string, title: string) => {
+      const nextTitle = title.trim();
+      if (!nextTitle) {
+        return;
+      }
+      await updateSessionMetadata(sessionId, { title: nextTitle });
+    },
+    [updateSessionMetadata],
+  );
+
+  const toggleSessionPinned = useCallback(
+    async (sessionId: string) => {
+      const session = state.sessions.find(item => item.id === sessionId);
+      if (!session) {
+        return;
+      }
+      await updateSessionMetadata(sessionId, { isPinned: !session.isPinned });
+    },
+    [state.sessions, updateSessionMetadata],
+  );
+
+  const setSessionCategory = useCallback(
+    async (sessionId: string, category: string) => {
+      await updateSessionMetadata(sessionId, { category: category.trim() || undefined });
+    },
+    [updateSessionMetadata],
+  );
+
+  const updateAssistantMetadata = useCallback(
+    async (
+      assistantId: string,
+      patch: Partial<Pick<Assistant, 'isPinned' | 'category' | 'lastOpenedAt'>>,
+    ) => {
+      const assistant = state.assistants.find(item => item.id === assistantId);
+      if (!assistant) {
+        return;
+      }
+
+      const nextAssistant = { ...assistant, ...patch };
+      await db.saveAssistant(nextAssistant);
+      const nextAssistants = state.assistants.map(item =>
+        item.id === assistantId ? nextAssistant : item,
+      );
+      dispatch({ type: 'SET_ASSISTANTS', payload: nextAssistants });
+      if (state.currentAssistant?.id === assistantId) {
+        dispatch({ type: 'SET_CURRENT_ASSISTANT', payload: nextAssistant });
+      }
+    },
+    [state.assistants, state.currentAssistant?.id],
+  );
+
+  const toggleAssistantPinned = useCallback(
+    async (assistantId: string) => {
+      const assistant = state.assistants.find(item => item.id === assistantId);
+      if (assistant) {
+        await updateAssistantMetadata(assistantId, { isPinned: !assistant.isPinned });
+      }
+    },
+    [state.assistants, updateAssistantMetadata],
+  );
+
+  const setAssistantCategory = useCallback(
+    async (assistantId: string, category: string) => {
+      await updateAssistantMetadata(assistantId, { category: category.trim() || undefined });
+    },
+    [updateAssistantMetadata],
+  );
+
+  const openSearchResult = useCallback(
+    async (result: LocalSearchResult) => {
+      if (state.isShared || state.bundleMode || state.isBundleImportRoute) {
+        return;
+      }
+
+      if (!navigate({ viewMode: 'chat' }).allowed) {
+        return;
+      }
+
+      if (result.assistantId && result.assistantId !== state.currentAssistant?.id) {
+        await selectAssistant(result.assistantId, true);
+      }
+
+      if (result.sessionId) {
+        const sessions = result.assistantId
+          ? await db.getSessionsForAssistant(result.assistantId)
+          : state.sessions;
+        const targetSession = sessions.find(session => session.id === result.sessionId);
+        if (targetSession) {
+          dispatch({ type: 'SET_CURRENT_SESSION', payload: targetSession });
+        }
+      }
+
+      if (result.kind === 'message' && result.sessionId && result.messageIndex !== undefined) {
+        dispatch({
+          type: 'SET_FOCUSED_MESSAGE_TARGET',
+          payload: {
+            sessionId: result.sessionId,
+            messageIndex: result.messageIndex,
+            requestId: `${result.id}:${Date.now()}`,
+          },
+        });
+      }
+
+      if (result.kind === 'project' && result.projectId) {
+        dispatch({ type: 'SET_ACTIVE_PROJECT', payload: result.projectId });
+        dispatch({ type: 'SET_PROJECT_WORKSPACE_OPEN', payload: true });
+      }
+    },
+    [
+      navigate,
+      selectAssistant,
+      state.bundleMode,
+      state.currentAssistant?.id,
+      state.isBundleImportRoute,
+      state.isShared,
+      state.sessions,
+    ],
+  );
+
+  const clearFocusedMessage = useCallback(() => {
+    dispatch({ type: 'SET_FOCUSED_MESSAGE_TARGET', payload: null });
   }, []);
 
   // Set bundle sandbox mode. An optional in-memory bundle enters creator preview
@@ -1017,6 +1284,20 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       deleteSession,
       updateSession,
       setViewMode,
+      setEditorDirty,
+      navigate,
+      confirmPendingNavigation,
+      cancelPendingNavigation,
+      openProviderSettings,
+      closeProviderSettings,
+      openSession,
+      renameSession,
+      toggleSessionPinned,
+      setSessionCategory,
+      toggleAssistantPinned,
+      setAssistantCategory,
+      openSearchResult,
+      clearFocusedMessage,
       setBundleMode,
       toggleSidebar,
       setSidebarOpen,
