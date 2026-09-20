@@ -20,6 +20,11 @@ import {
 import { ToolCall, type ProviderUsageMetadata } from './llmAdapter';
 import { providerManager, initializeProviders } from './providerRegistry';
 import {
+  getProviderErrorMetadata,
+  ProviderRequestError,
+  type BeforeProviderRequest,
+} from './providers/providerRequest';
+import {
   buildKnowledgeSearchResponse,
   hasKnowledgeChunks,
   type KnowledgeSearchArgs,
@@ -116,6 +121,16 @@ export interface StreamChatParams {
    */
   signal?: AbortSignal;
   /**
+   * Called immediately before every provider transport request, including
+   * nested tool-loop requests. Controllers use this to enforce run budgets at
+   * the request boundary rather than only between top-level turns.
+   */
+  beforeProviderRequest?: BeforeProviderRequest;
+  /** Awaited immediately before a tool's side effect starts. */
+  beforeToolExecution?: (record: ToolCallRecord) => void | Promise<void>;
+  /** Awaited after a tool reaches a trusted terminal result. */
+  afterToolExecution?: (record: ToolCallRecord) => void | Promise<void>;
+  /**
    * Pack set override (G2). When present and non-empty, BYPASSES intent
    * classification — the override pack is used directly as `selectedPackSet`,
    * htmlProjectToolEnabled is forced true, and `effectiveIntentDecision` is
@@ -164,6 +179,8 @@ export interface StreamChatParams {
     fullText: string,
   ) => void;
 }
+
+export type { BeforeProviderRequest, ProviderRequestContext } from './providers/providerRequest';
 
 const mergeMessageImages = (
   current: MessageImage[],
@@ -300,6 +317,59 @@ const mergeSubagentUsageTotals = (
   };
 };
 
+const localizeProviderError = (error: unknown, providerDisplayName: string): Error => {
+  const metadata = getProviderErrorMetadata(error);
+  const message = error instanceof Error ? error.message : String(error);
+  const searchableText = `${message} ${metadata.code ?? ''} ${metadata.status ?? ''} ${metadata.statusCode ?? ''}`;
+  const isAuthError =
+    metadata.status === 401 ||
+    metadata.status === 403 ||
+    metadata.statusCode === 401 ||
+    metadata.statusCode === 403 ||
+    /api[ _-]?key|unauthori[sz]ed|forbidden|credential|invalid[_ -]?token|authentication/i.test(
+      searchableText,
+    );
+  const isRateLimitError =
+    metadata.status === 429 ||
+    metadata.statusCode === 429 ||
+    /rate[ _-]?limit|quota|resource[_ -]?exhausted/i.test(searchableText);
+  const isNetworkError =
+    /failed to fetch|network|timeout|timed out|connection|offline|load failed/i.test(
+      searchableText,
+    );
+
+  if (isAuthError) {
+    return new ProviderRequestError(
+      `API 金鑰錯誤：請檢查 ${providerDisplayName} 的 API 金鑰是否正確。`,
+      {
+        ...metadata,
+        retryable: false,
+      },
+    );
+  }
+
+  if (isRateLimitError) {
+    return new ProviderRequestError(`API 配額不足：${providerDisplayName} 的使用配額已達上限。`, {
+      ...metadata,
+      retryable: true,
+    });
+  }
+
+  if (isNetworkError) {
+    return new ProviderRequestError(`網路連接錯誤：無法連接到 ${providerDisplayName} 服務。`, {
+      ...metadata,
+      retryable: true,
+    });
+  }
+
+  // Unknown failures are deliberately non-retryable.  A caller must opt into
+  // retry semantics explicitly through the structured `retryable` field.
+  return new ProviderRequestError(message || 'AI 服務請求失敗。', {
+    ...metadata,
+    retryable: metadata.retryable ?? false,
+  });
+};
+
 export const streamChat = async (params: StreamChatParams) => {
   const {
     systemPrompt,
@@ -319,6 +389,9 @@ export const streamChat = async (params: StreamChatParams) => {
     routableTargets = [],
     htmlProjectEnabled = false,
     projectBootstrapEnabled = false,
+    beforeProviderRequest,
+    beforeToolExecution,
+    afterToolExecution,
     onChunk,
     onImages,
     onProjectToolActivity,
@@ -542,8 +615,8 @@ export const streamChat = async (params: StreamChatParams) => {
           code?: string;
           summary?: string;
         },
-      ) => {
-        onToolCallActivity?.({
+      ): ToolCallRecord => {
+        const record: ToolCallRecord = {
           id: toolCallId,
           name: call.name,
           startedAt: toolStartedAt,
@@ -551,10 +624,18 @@ export const streamChat = async (params: StreamChatParams) => {
           code: options?.code,
           summary: truncateToolSummary(options?.summary),
           durationMs: Date.now() - toolStartedAt,
-        });
+        };
+        onToolCallActivity?.(record);
+        return record;
       };
 
       emitToolRecord('running');
+      await beforeToolExecution?.({
+        id: toolCallId,
+        name: call.name,
+        startedAt: toolStartedAt,
+        status: 'running',
+      });
 
       try {
         let result: unknown;
@@ -772,8 +853,9 @@ export const streamChat = async (params: StreamChatParams) => {
         }
 
         const resultRecord = result as Record<string, unknown> | undefined;
+        let terminalRecord: ToolCallRecord;
         if (resultRecord?.ok === false && resultRecord.recoverable === true) {
-          emitToolRecord('recoverable_error', {
+          terminalRecord = emitToolRecord('recoverable_error', {
             code: typeof resultRecord.code === 'string' ? resultRecord.code : undefined,
             summary:
               typeof resultRecord.message === 'string'
@@ -783,7 +865,7 @@ export const streamChat = async (params: StreamChatParams) => {
                   : undefined,
           });
         } else if (resultRecord?.ok === false) {
-          emitToolRecord('failed', {
+          terminalRecord = emitToolRecord('failed', {
             code: typeof resultRecord.code === 'string' ? resultRecord.code : undefined,
             summary:
               typeof resultRecord.message === 'string'
@@ -793,7 +875,7 @@ export const streamChat = async (params: StreamChatParams) => {
                   : undefined,
           });
         } else {
-          emitToolRecord('ok', {
+          terminalRecord = emitToolRecord('ok', {
             summary:
               typeof resultRecord?.summary === 'string'
                 ? resultRecord.summary
@@ -802,6 +884,8 @@ export const streamChat = async (params: StreamChatParams) => {
                   : undefined,
           });
         }
+
+        await afterToolExecution?.(terminalRecord);
 
         return result;
       } catch (error) {
@@ -861,6 +945,9 @@ export const streamChat = async (params: StreamChatParams) => {
       executeTool: tools.length > 0 ? executeTool : undefined,
       signal,
       toolChoice: htmlProjectToolChoice,
+      beforeProviderRequest,
+      beforeToolExecution,
+      afterToolExecution,
     };
 
     for await (const response of activeProvider.streamChat(chatParams)) {
@@ -940,18 +1027,6 @@ export const streamChat = async (params: StreamChatParams) => {
 
     console.error('LLM streaming error:', error);
 
-    if (error instanceof Error) {
-      if (error.message.includes('API key') || error.message.includes('unauthorized')) {
-        throw new Error(`API 金鑰錯誤：請檢查 ${activeProvider.displayName} 的 API 金鑰是否正確。`);
-      }
-      if (error.message.includes('rate limit') || error.message.includes('quota')) {
-        throw new Error(`API 配額不足：${activeProvider.displayName} 的使用配額已達上限。`);
-      }
-      if (error.message.includes('network') || error.message.includes('fetch')) {
-        throw new Error(`網路連接錯誤：無法連接到 ${activeProvider.displayName} 服務。`);
-      }
-    }
-
-    throw error;
+    throw localizeProviderError(error, activeProvider.displayName);
   }
 };

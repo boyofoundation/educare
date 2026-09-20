@@ -25,6 +25,19 @@ const STORAGE_KEYS = {
   ACTIVE_PROVIDER: 'active_provider',
 } as const;
 
+const TEMPORARY_STORAGE_KEY = 'educare_temporary_api_keys';
+
+/**
+ * Credentials entered for a newly configured provider are ephemeral by default.
+ * `persistent` is intentionally an explicit opt-in; `session` survives route
+ * changes/reloads in the current tab but is not written to localStorage.
+ */
+export type ApiKeyPersistence = 'memory' | 'session' | 'persistent';
+
+export interface ApiKeyStorageOptions {
+  persistence?: ApiKeyPersistence;
+}
+
 export interface UserApiKeys {
   // AI Provider API Keys
   geminiApiKey?: string;
@@ -45,6 +58,9 @@ export interface UserApiKeys {
  * API KEY 管理器
  */
 export class ApiKeyManager {
+  private static memoryApiKeys: UserApiKeys = {};
+  private static sessionApiKeysSuppressed = false;
+
   /**
    * 檢查是否有用戶設定的 Gemini API KEY
    */
@@ -98,80 +114,56 @@ export class ApiKeyManager {
    * 獲取 Gemini API KEY (用戶設定)
    */
   static getGeminiApiKey(): string | null {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return localStorage.getItem(STORAGE_KEYS.GEMINI_API_KEY);
+    return this.getEffectiveValue('geminiApiKey', STORAGE_KEYS.GEMINI_API_KEY);
   }
 
   /**
    * 獲取 Turso 寫入 API KEY (用戶設定)
    */
   static getTursoWriteApiKey(): string | null {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return localStorage.getItem(STORAGE_KEYS.TURSO_WRITE_API_KEY);
+    return this.getEffectiveValue('tursoWriteApiKey', STORAGE_KEYS.TURSO_WRITE_API_KEY);
   }
 
   /**
    * 獲取 OpenAI API KEY (用戶設定)
    */
   static getOpenaiApiKey(): string | null {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return localStorage.getItem(STORAGE_KEYS.OPENAI_API_KEY);
+    return this.getEffectiveValue('openaiApiKey', STORAGE_KEYS.OPENAI_API_KEY);
   }
 
   /**
    * 獲取 Groq API KEY (用戶設定)
    */
   static getGroqApiKey(): string | null {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return localStorage.getItem(STORAGE_KEYS.GROQ_API_KEY);
+    return this.getEffectiveValue('groqApiKey', STORAGE_KEYS.GROQ_API_KEY);
   }
 
   /**
    * 獲取 OpenRouter API KEY (用戶設定)
    */
   static getOpenrouterApiKey(): string | null {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return localStorage.getItem(STORAGE_KEYS.OPENROUTER_API_KEY);
+    return this.getEffectiveValue('openrouterApiKey', STORAGE_KEYS.OPENROUTER_API_KEY);
   }
 
   /**
    * 獲取 LM Studio API KEY (用戶設定)
    */
   static getLmstudioApiKey(): string | null {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return localStorage.getItem(STORAGE_KEYS.LMSTUDIO_API_KEY);
+    return this.getEffectiveValue('lmstudioApiKey', STORAGE_KEYS.LMSTUDIO_API_KEY);
   }
 
   /**
    * 獲取 Ollama Base URL (用戶設定)
    */
   static getOllamaBaseUrl(): string | null {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return localStorage.getItem(STORAGE_KEYS.OLLAMA_BASE_URL);
+    return this.getEffectiveValue('ollamaBaseUrl', STORAGE_KEYS.OLLAMA_BASE_URL);
   }
 
   /**
    * 獲取 LM Studio Base URL (用戶設定)
    */
   static getLmstudioBaseUrl(): string | null {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return localStorage.getItem(STORAGE_KEYS.LMSTUDIO_BASE_URL);
+    return this.getEffectiveValue('lmstudioBaseUrl', STORAGE_KEYS.LMSTUDIO_BASE_URL);
   }
 
   // 不再需要獨立的 getTursoWriteUrl()，因為使用共用 URL
@@ -214,10 +206,21 @@ export class ApiKeyManager {
   /**
    * 設定用戶 API KEY
    */
-  static setUserApiKeys(keys: UserApiKeys): void {
+  static setUserApiKeys(
+    keys: UserApiKeys,
+    options: ApiKeyStorageOptions = { persistence: 'session' },
+  ): void {
     if (typeof window === 'undefined') {
       return;
     }
+
+    const persistence = options.persistence ?? 'session';
+    if (persistence !== 'persistent') {
+      this.setTemporaryApiKeys(keys, persistence);
+      return;
+    }
+
+    this.clearTemporaryApiKeys();
 
     // AI Provider API Keys
     if (keys.geminiApiKey) {
@@ -286,36 +289,209 @@ export class ApiKeyManager {
       return;
     }
 
+    this.clearTemporaryApiKeys();
+
     Object.values(STORAGE_KEYS).forEach(key => {
       localStorage.removeItem(key);
     });
   }
 
   /**
+   * Store credentials without touching the legacy persistent key store.
+   * Memory scope is useful for a single interaction; session scope intentionally
+   * uses sessionStorage so a page refresh does not silently lose a configured tab.
+   */
+  static setTemporaryApiKeys(
+    keys: UserApiKeys,
+    persistence: Exclude<ApiKeyPersistence, 'persistent'> = 'session',
+  ): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const sanitized = this.sanitizeApiKeys(keys);
+    if (persistence === 'memory') {
+      this.removeTemporarySessionApiKeys();
+      this.sessionApiKeysSuppressed = true;
+      this.memoryApiKeys = sanitized;
+      return;
+    }
+
+    try {
+      // Replace the session record rather than allowing a failed write to leave
+      // an older credential visible through getUserApiKeys().
+      this.removeTemporarySessionApiKeys();
+      sessionStorage.setItem(TEMPORARY_STORAGE_KEY, JSON.stringify(sanitized));
+      this.sessionApiKeysSuppressed = false;
+      this.memoryApiKeys = {};
+    } catch {
+      // Private browsing or a blocked sessionStorage must not turn an ephemeral
+      // credential entry into a persistent fallback.
+      this.removeTemporarySessionApiKeys();
+      this.sessionApiKeysSuppressed = true;
+      this.memoryApiKeys = sanitized;
+    }
+  }
+
+  static clearTemporaryApiKeys(): void {
+    this.memoryApiKeys = {};
+    this.sessionApiKeysSuppressed = false;
+    if (typeof window !== 'undefined') {
+      this.removeTemporarySessionApiKeys();
+    }
+  }
+
+  static getApiKeyPersistence(): 'none' | 'temporary' | 'persistent' {
+    if (
+      Object.keys(this.memoryApiKeys).length > 0 ||
+      Object.keys(this.getSessionApiKeys()).length > 0
+    ) {
+      return 'temporary';
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        return Object.values(STORAGE_KEYS).some(key => Boolean(localStorage.getItem(key)))
+          ? 'persistent'
+          : 'none';
+      } catch {
+        return 'none';
+      }
+    }
+    return 'none';
+  }
+
+  /**
    * 獲取所有用戶 API KEY
    */
   static getUserApiKeys(): UserApiKeys {
+    const temporary = {
+      ...this.getSessionApiKeys(),
+      ...this.memoryApiKeys,
+    };
     const lmstudioApiKey =
-      this.getLmstudioApiKey() || this.getProviderApiKey('lmstudio') || undefined;
+      temporary.lmstudioApiKey ||
+      this.getStoredApiKey(STORAGE_KEYS.LMSTUDIO_API_KEY) ||
+      this.getProviderApiKey('lmstudio') ||
+      undefined;
 
     // Get API keys from both localStorage (new system) and providerManager (existing system)
     return {
       // AI Provider API Keys - check both systems
-      geminiApiKey: this.getGeminiApiKey() || this.getProviderApiKey('gemini') || undefined,
-      openaiApiKey: this.getOpenaiApiKey() || this.getProviderApiKey('openai') || undefined,
-      groqApiKey: this.getGroqApiKey() || this.getProviderApiKey('groq') || undefined,
+      geminiApiKey:
+        temporary.geminiApiKey ||
+        this.getStoredApiKey(STORAGE_KEYS.GEMINI_API_KEY) ||
+        this.getProviderApiKey('gemini') ||
+        undefined,
+      openaiApiKey:
+        temporary.openaiApiKey ||
+        this.getStoredApiKey(STORAGE_KEYS.OPENAI_API_KEY) ||
+        this.getProviderApiKey('openai') ||
+        undefined,
+      groqApiKey:
+        temporary.groqApiKey ||
+        this.getStoredApiKey(STORAGE_KEYS.GROQ_API_KEY) ||
+        this.getProviderApiKey('groq') ||
+        undefined,
       openrouterApiKey:
-        this.getOpenrouterApiKey() || this.getProviderApiKey('openrouter') || undefined,
+        temporary.openrouterApiKey ||
+        this.getStoredApiKey(STORAGE_KEYS.OPENROUTER_API_KEY) ||
+        this.getProviderApiKey('openrouter') ||
+        undefined,
       lmstudioApiKey,
       // Local Provider Base URLs
-      ollamaBaseUrl: this.getOllamaBaseUrl() || this.getProviderBaseUrl('ollama') || undefined,
+      ollamaBaseUrl:
+        temporary.ollamaBaseUrl ||
+        this.getStoredApiKey(STORAGE_KEYS.OLLAMA_BASE_URL) ||
+        this.getProviderBaseUrl('ollama') ||
+        undefined,
       lmstudioBaseUrl:
-        this.getLmstudioBaseUrl() || this.getProviderBaseUrl('lmstudio') || undefined,
+        temporary.lmstudioBaseUrl ||
+        this.getStoredApiKey(STORAGE_KEYS.LMSTUDIO_BASE_URL) ||
+        this.getProviderBaseUrl('lmstudio') ||
+        undefined,
       // Database API Key
-      tursoWriteApiKey: this.getTursoWriteApiKey() || undefined,
+      tursoWriteApiKey:
+        temporary.tursoWriteApiKey ||
+        this.getStoredApiKey(STORAGE_KEYS.TURSO_WRITE_API_KEY) ||
+        undefined,
       // Active provider
-      provider: localStorage.getItem(STORAGE_KEYS.ACTIVE_PROVIDER) || undefined,
+      provider:
+        temporary.provider || this.getStoredApiKey(STORAGE_KEYS.ACTIVE_PROVIDER) || undefined,
     };
+  }
+
+  private static getStoredApiKey(key: string): string | null {
+    if (typeof window === 'undefined') {
+      return null;
+    }
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  private static getSessionApiKeys(): UserApiKeys {
+    if (typeof window === 'undefined' || this.sessionApiKeysSuppressed) {
+      return {};
+    }
+    try {
+      const raw = sessionStorage.getItem(TEMPORARY_STORAGE_KEY);
+      if (!raw) {
+        return {};
+      }
+      const parsed: unknown = JSON.parse(raw);
+      return this.sanitizeApiKeys(parsed);
+    } catch {
+      try {
+        sessionStorage.removeItem(TEMPORARY_STORAGE_KEY);
+      } catch {
+        // Ignore unavailable storage.
+      }
+      return {};
+    }
+  }
+
+  private static removeTemporarySessionApiKeys(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      sessionStorage.removeItem(TEMPORARY_STORAGE_KEY);
+    } catch {
+      // Ignore unavailable storage; the suppression flag prevents stale reads.
+    }
+  }
+
+  private static getEffectiveValue(field: keyof UserApiKeys, storedKey: string): string | null {
+    const temporary = { ...this.getSessionApiKeys(), ...this.memoryApiKeys };
+    return temporary[field] || this.getStoredApiKey(storedKey);
+  }
+
+  private static sanitizeApiKeys(value: unknown): UserApiKeys {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {};
+    }
+
+    const candidate = value as Record<string, unknown>;
+    const result: UserApiKeys = {};
+    const fields: Array<keyof UserApiKeys> = [
+      'geminiApiKey',
+      'openaiApiKey',
+      'groqApiKey',
+      'openrouterApiKey',
+      'lmstudioApiKey',
+      'ollamaBaseUrl',
+      'lmstudioBaseUrl',
+      'tursoWriteApiKey',
+      'provider',
+    ];
+    fields.forEach(field => {
+      if (typeof candidate[field] === 'string' && candidate[field].trim()) {
+        result[field] = candidate[field] as string;
+      }
+    });
+    return result;
   }
 
   /**

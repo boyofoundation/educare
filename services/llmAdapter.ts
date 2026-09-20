@@ -241,6 +241,15 @@ export interface SessionProviderOverride {
   config: ProviderConfig;
 }
 
+/**
+ * Session-scoped provider overrides are keyed by provider so editing one
+ * provider cannot discard another provider's temporary credentials.
+ *
+ * The storage reader still accepts the legacy single `{ type, config }`
+ * representation and normalizes it into this map.
+ */
+export type SessionProviderOverrides = Partial<Record<ProviderType, SessionProviderOverride>>;
+
 export interface BundleProviderOverrideSource {
   kind: 'bundle';
   bundleId: string;
@@ -250,6 +259,11 @@ export interface BundleProviderOverrideSource {
 interface BundleProviderOverride extends SessionProviderOverride {
   source: BundleProviderOverrideSource;
 }
+
+const BUNDLE_SOURCE_TOKEN = Symbol('bundle-source-token');
+type OwnedBundleProviderOverrideSource = BundleProviderOverrideSource & {
+  [BUNDLE_SOURCE_TOKEN]?: symbol;
+};
 
 export const BUNDLE_SESSION_PROVIDER_STORAGE_KEY = 'educare_bundle_session_provider';
 
@@ -262,16 +276,34 @@ const emitProviderSettingsChanged = (): void => {
   }
 };
 
+const getBundleSourceToken = (source: BundleProviderOverrideSource): symbol | undefined =>
+  (source as OwnedBundleProviderOverrideSource)[BUNDLE_SOURCE_TOKEN];
+
+const ensureBundleSourceToken = (source: BundleProviderOverrideSource): symbol => {
+  const existing = getBundleSourceToken(source);
+  if (existing) {
+    return existing;
+  }
+  const token = Symbol('bundle-source-owner');
+  Object.defineProperty(source, BUNDLE_SOURCE_TOKEN, {
+    configurable: false,
+    enumerable: false,
+    value: token,
+  });
+  return token;
+};
+
 export class ProviderManager {
   private static instance: ProviderManager;
   private providers: Map<ProviderType, LLMProvider> = new Map();
   private settings: ProviderSettings;
-  private sessionProviderOverride: SessionProviderOverride | null;
+  private sessionProviderOverrides: SessionProviderOverrides;
   private bundleProviderOverride: BundleProviderOverride | null = null;
+  private bundleProviderOperation: Promise<void> = Promise.resolve();
 
   private constructor() {
     this.settings = this.loadSettings();
-    this.sessionProviderOverride = this.loadSessionProviderOverride();
+    this.sessionProviderOverrides = this.loadSessionProviderOverrides();
   }
 
   static getInstance(): ProviderManager {
@@ -316,32 +348,177 @@ export class ProviderManager {
     return DEFAULT_PROVIDER_SETTINGS;
   }
 
-  private loadSessionProviderOverride(): SessionProviderOverride | null {
+  private cloneSessionProviderOverrides(
+    overrides: SessionProviderOverrides,
+  ): SessionProviderOverrides {
+    return Object.fromEntries(
+      Object.entries(overrides).map(([type, override]) => [
+        type,
+        override
+          ? {
+              type: override.type,
+              config: { ...override.config },
+            }
+          : override,
+      ]),
+    ) as SessionProviderOverrides;
+  }
+
+  private readSessionProviderStorage(): string | null {
     if (typeof sessionStorage === 'undefined') {
       return null;
     }
-
     try {
-      const raw = sessionStorage.getItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY);
-      if (!raw) {
-        return null;
-      }
-      const parsed = JSON.parse(raw) as Partial<SessionProviderOverride>;
-      if (!parsed.type || !parsed.config || !(parsed.type in DEFAULT_PROVIDER_SETTINGS.providers)) {
-        return null;
-      }
-      const type = parsed.type as ProviderType;
-      return {
-        type,
-        config: sanitizeProviderConfig(
-          DEFAULT_PROVIDER_SETTINGS.providers[type].config,
-          parsed.config,
-        ),
-      };
+      return sessionStorage.getItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY);
     } catch {
-      sessionStorage.removeItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY);
       return null;
     }
+  }
+
+  private restoreSessionProviderStorage(value: string | null): void {
+    if (typeof sessionStorage === 'undefined') {
+      return;
+    }
+    try {
+      if (value === null) {
+        sessionStorage.removeItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY);
+      } else {
+        sessionStorage.setItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY, value);
+      }
+    } catch {
+      // Storage failures are handled by the caller's in-memory rollback.
+    }
+  }
+
+  private writeSessionProviderOverrides(overrides: SessionProviderOverrides): void {
+    if (typeof sessionStorage === 'undefined') {
+      return;
+    }
+
+    const entries = Object.entries(overrides).filter(([, override]) => Boolean(override));
+    if (entries.length === 0) {
+      sessionStorage.removeItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY);
+      return;
+    }
+
+    sessionStorage.setItem(
+      BUNDLE_SESSION_PROVIDER_STORAGE_KEY,
+      JSON.stringify(Object.fromEntries(entries)),
+    );
+  }
+
+  private parseSessionProviderOverride(
+    value: unknown,
+    expectedType?: ProviderType,
+  ): SessionProviderOverride | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const candidate = value as Partial<SessionProviderOverride>;
+    const type = candidate.type ?? expectedType;
+    if (
+      !type ||
+      !(type in DEFAULT_PROVIDER_SETTINGS.providers) ||
+      (expectedType !== undefined && type !== expectedType) ||
+      !candidate.config ||
+      typeof candidate.config !== 'object' ||
+      Array.isArray(candidate.config)
+    ) {
+      return null;
+    }
+
+    return {
+      type,
+      config: sanitizeProviderConfig(
+        DEFAULT_PROVIDER_SETTINGS.providers[type].config,
+        candidate.config,
+      ),
+    };
+  }
+
+  private loadSessionProviderOverrides(): SessionProviderOverrides {
+    const raw = this.readSessionProviderStorage();
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('invalid session provider settings');
+      }
+
+      // Backward-compatible reader for the previous single-slot format.
+      const legacyOverride = this.parseSessionProviderOverride(parsed);
+      if (legacyOverride) {
+        return { [legacyOverride.type]: legacyOverride };
+      }
+
+      const overrides: SessionProviderOverrides = {};
+      for (const providerType of Object.keys(
+        DEFAULT_PROVIDER_SETTINGS.providers,
+      ) as ProviderType[]) {
+        const override = this.parseSessionProviderOverride(
+          (parsed as Record<string, unknown>)[providerType],
+          providerType,
+        );
+        if (override) {
+          overrides[providerType] = override;
+        }
+      }
+      return overrides;
+    } catch {
+      this.restoreSessionProviderStorage(null);
+      return {};
+    }
+  }
+
+  private getProviderConfigForType(type: ProviderType): ProviderConfig {
+    if (this.bundleProviderOverride?.type === type) {
+      return { ...this.bundleProviderOverride.config };
+    }
+    const sessionOverride = this.sessionProviderOverrides[type];
+    if (sessionOverride) {
+      return { ...sessionOverride.config };
+    }
+    return sanitizeProviderConfig(
+      DEFAULT_PROVIDER_SETTINGS.providers[type].config,
+      this.settings.providers[type]?.config,
+    );
+  }
+
+  private getActiveSessionProviderOverride(): SessionProviderOverride | null {
+    const activeOverride = this.sessionProviderOverrides[this.settings.activeProvider];
+    if (activeOverride) {
+      return activeOverride;
+    }
+
+    const overrides = Object.values(this.sessionProviderOverrides);
+    return overrides.at(-1) ?? null;
+  }
+
+  private async restoreProviderConfig(type: ProviderType, config: ProviderConfig): Promise<void> {
+    const provider = this.providers.get(type);
+    if (!provider) {
+      return;
+    }
+    try {
+      provider.reinitialize?.();
+      await provider.initialize(config);
+    } catch {
+      // The caller must still retain the previous logical override/storage even
+      // when a provider cannot be reinitialized during rollback.
+    }
+  }
+
+  private enqueueBundleProviderOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const queuedOperation = this.bundleProviderOperation.then(operation, operation);
+    this.bundleProviderOperation = queuedOperation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queuedOperation;
   }
 
   async setSessionProviderConfig(
@@ -357,22 +534,46 @@ export class ProviderManager {
       DEFAULT_PROVIDER_SETTINGS.providers[type].config,
       config,
     );
-    const override = { type, config: configured };
-    this.sessionProviderOverride = override;
-    sessionStorage.setItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY, JSON.stringify(override));
 
-    if (provider.reinitialize) {
-      provider.reinitialize();
+    const previousOverrides = this.cloneSessionProviderOverrides(this.sessionProviderOverrides);
+    const previousStorage = this.readSessionProviderStorage();
+    const previousConfig = this.getProviderConfigForType(type);
+    const nextOverrides = this.cloneSessionProviderOverrides(previousOverrides);
+    nextOverrides[type] = { type, config: { ...configured } };
+
+    try {
+      provider.reinitialize?.();
+      await provider.initialize(configured);
+    } catch {
+      await this.restoreProviderConfig(type, previousConfig);
+      throw new Error('無法啟用分頁服務商設定。');
     }
-    await provider.initialize(configured);
+
+    try {
+      this.writeSessionProviderOverrides(nextOverrides);
+      this.sessionProviderOverrides = nextOverrides;
+    } catch {
+      this.restoreSessionProviderStorage(previousStorage);
+      this.sessionProviderOverrides = previousOverrides;
+      await this.restoreProviderConfig(type, previousConfig);
+      throw new Error('無法保存分頁服務商設定。');
+    }
+
     emitProviderSettingsChanged();
   }
 
-  clearSessionProviderConfig(): void {
-    this.sessionProviderOverride = null;
-    if (typeof sessionStorage !== 'undefined') {
-      sessionStorage.removeItem(BUNDLE_SESSION_PROVIDER_STORAGE_KEY);
+  clearSessionProviderConfig(type?: ProviderType): void {
+    const nextOverrides = this.cloneSessionProviderOverrides(this.sessionProviderOverrides);
+    if (type) {
+      delete nextOverrides[type];
+    } else {
+      for (const providerType of Object.keys(nextOverrides) as ProviderType[]) {
+        delete nextOverrides[providerType];
+      }
     }
+
+    this.writeSessionProviderOverrides(nextOverrides);
+    this.sessionProviderOverrides = nextOverrides;
     emitProviderSettingsChanged();
   }
 
@@ -381,115 +582,177 @@ export class ProviderManager {
     type: ProviderType,
     config: Partial<ProviderConfig>,
   ): Promise<void> {
-    const provider = this.providers.get(type);
-    if (
-      !provider ||
-      source.kind !== 'bundle' ||
-      !source.bundleId ||
-      !source.credentialFingerprint
-    ) {
-      throw new Error('無法啟用隨附服務商設定。');
-    }
-
-    const previousOverride = this.bundleProviderOverride;
-    const configured = sanitizeProviderConfig(
-      DEFAULT_PROVIDER_SETTINGS.providers[type].config,
-      config,
-    );
-    this.bundleProviderOverride = {
-      source: { ...source },
-      type,
-      config: configured,
-    };
-
-    try {
-      if (provider.reinitialize) {
-        provider.reinitialize();
+    return this.enqueueBundleProviderOperation(async () => {
+      const provider = this.providers.get(type);
+      if (
+        !provider ||
+        source.kind !== 'bundle' ||
+        !source.bundleId ||
+        !source.credentialFingerprint
+      ) {
+        throw new Error('無法啟用隨附服務商設定。');
       }
-      await provider.initialize(configured);
-      emitProviderSettingsChanged();
-    } catch {
-      this.bundleProviderOverride = null;
-      provider.reinitialize?.();
 
-      if (previousOverride) {
-        const previousProvider = this.providers.get(previousOverride.type);
-        try {
-          if (!previousProvider) {
-            throw new Error('Previous bundle provider is unavailable.');
-          }
-          previousProvider.reinitialize?.();
-          await previousProvider.initialize(previousOverride.config);
-          this.bundleProviderOverride = previousOverride;
-        } catch {
-          this.bundleProviderOverride = null;
+      const previousOverride = this.bundleProviderOverride;
+      const configured = sanitizeProviderConfig(
+        DEFAULT_PROVIDER_SETTINGS.providers[type].config,
+        config,
+      );
+      ensureBundleSourceToken(source);
+      this.bundleProviderOverride = {
+        // Retain the exact source object as the ownership token. A stale async
+        // cleanup must not clear a newer override with the same field values.
+        source,
+        type,
+        config: configured,
+      };
+
+      try {
+        if (provider.reinitialize) {
+          provider.reinitialize();
         }
-      }
+        await provider.initialize(configured);
+        emitProviderSettingsChanged();
+      } catch {
+        this.bundleProviderOverride = null;
+        provider.reinitialize?.();
 
-      throw new Error('無法啟用隨附服務商設定。');
-    }
+        if (previousOverride) {
+          const previousProvider = this.providers.get(previousOverride.type);
+          try {
+            if (!previousProvider) {
+              throw new Error('Previous bundle provider is unavailable.');
+            }
+            previousProvider.reinitialize?.();
+            await previousProvider.initialize(previousOverride.config);
+            this.bundleProviderOverride = previousOverride;
+          } catch {
+            this.bundleProviderOverride = null;
+          }
+        }
+
+        throw new Error('無法啟用隨附服務商設定。');
+      }
+    });
   }
 
   getBundleProviderOverrideSource(): BundleProviderOverrideSource | null {
-    return this.bundleProviderOverride ? { ...this.bundleProviderOverride.source } : null;
+    if (!this.bundleProviderOverride) {
+      return null;
+    }
+    const source = { ...this.bundleProviderOverride.source };
+    const token = getBundleSourceToken(this.bundleProviderOverride.source);
+    if (token) {
+      Object.defineProperty(source, BUNDLE_SOURCE_TOKEN, {
+        configurable: false,
+        enumerable: false,
+        value: token,
+      });
+    }
+    return source;
   }
 
   matchesBundleProviderOverride(source: BundleProviderOverrideSource): boolean {
+    const currentSource = this.bundleProviderOverride?.source;
+    const sourceToken = getBundleSourceToken(source);
+    const currentToken = currentSource ? getBundleSourceToken(currentSource) : undefined;
     return (
       source.kind === 'bundle' &&
-      this.bundleProviderOverride?.source.bundleId === source.bundleId &&
-      this.bundleProviderOverride.source.credentialFingerprint === source.credentialFingerprint
+      currentSource?.bundleId === source.bundleId &&
+      currentSource?.credentialFingerprint === source.credentialFingerprint &&
+      (!sourceToken || !currentToken || sourceToken === currentToken)
     );
   }
 
   async clearBundleProviderConfig(source: BundleProviderOverrideSource): Promise<boolean> {
-    if (!this.matchesBundleProviderOverride(source)) {
-      return false;
-    }
-
-    const bundleProviderType = this.bundleProviderOverride!.type;
-    this.bundleProviderOverride = null;
-
-    const activeProviderType = this.sessionProviderOverride?.type ?? this.settings.activeProvider;
-    const configFor = (type: ProviderType): ProviderConfig =>
-      type === this.sessionProviderOverride?.type
-        ? this.sessionProviderOverride.config
-        : sanitizeProviderConfig(
-            DEFAULT_PROVIDER_SETTINGS.providers[type].config,
-            this.settings.providers[type]?.config,
-          );
-    const resetProvider = async (type: ProviderType) => {
-      const provider = this.providers.get(type);
-      if (!provider) {
-        return;
+    return this.enqueueBundleProviderOperation(async () => {
+      if (!this.matchesBundleProviderOverride(source)) {
+        return false;
       }
 
-      provider.reinitialize?.();
-      await provider.initialize(configFor(type));
-    };
+      const bundleProviderType = this.bundleProviderOverride!.type;
+      this.bundleProviderOverride = null;
 
-    try {
-      await resetProvider(bundleProviderType);
-    } catch {
-      // reinitialize above has already removed the bundle credential; continue restoring the active provider.
-    }
+      const activeSessionOverride = this.getActiveSessionProviderOverride();
+      const activeProviderType = activeSessionOverride?.type ?? this.settings.activeProvider;
+      const configFor = (type: ProviderType): ProviderConfig =>
+        this.sessionProviderOverrides[type]?.config ??
+        sanitizeProviderConfig(
+          DEFAULT_PROVIDER_SETTINGS.providers[type].config,
+          this.settings.providers[type]?.config,
+        );
+      const resetProvider = async (type: ProviderType) => {
+        const provider = this.providers.get(type);
+        if (!provider) {
+          return;
+        }
 
-    if (activeProviderType !== bundleProviderType) {
+        provider.reinitialize?.();
+        await provider.initialize(configFor(type));
+      };
+
       try {
-        await resetProvider(activeProviderType);
+        await resetProvider(bundleProviderType);
       } catch {
-        // Cleanup must not reactivate the encrypted bundle credential when a fallback provider is unavailable.
+        // reinitialize above has already removed the bundle credential; continue restoring the active provider.
       }
-    }
 
-    emitProviderSettingsChanged();
-    return true;
+      if (activeProviderType !== bundleProviderType) {
+        try {
+          await resetProvider(activeProviderType);
+        } catch {
+          // Cleanup must not reactivate the encrypted bundle credential when a fallback provider is unavailable.
+        }
+      }
+
+      emitProviderSettingsChanged();
+      return true;
+    });
   }
 
-  getSessionProviderConfig(): SessionProviderOverride | null {
-    return this.sessionProviderOverride
-      ? { ...this.sessionProviderOverride, config: { ...this.sessionProviderOverride.config } }
-      : null;
+  getSessionProviderConfigs(): SessionProviderOverrides {
+    return this.cloneSessionProviderOverrides(this.sessionProviderOverrides);
+  }
+
+  getSessionProviderConfig(type?: ProviderType): SessionProviderOverride | null {
+    const override = type
+      ? this.sessionProviderOverrides[type]
+      : this.getActiveSessionProviderOverride();
+    return override ? { ...override, config: { ...override.config } } : null;
+  }
+
+  /**
+   * Returns global provider settings with all temporary provider overrides
+   * applied. Bundle memory credentials remain the highest-priority source.
+   */
+  getEffectiveProviderSettings(): ProviderSettings {
+    const effectiveProviders = Object.fromEntries(
+      (Object.keys(DEFAULT_PROVIDER_SETTINGS.providers) as ProviderType[]).map(providerType => {
+        const providerSettings = this.settings.providers[providerType];
+        const sessionOverride = this.sessionProviderOverrides[providerType];
+        const bundleOverride =
+          this.bundleProviderOverride?.type === providerType ? this.bundleProviderOverride : null;
+        return [
+          providerType,
+          {
+            ...providerSettings,
+            enabled: providerSettings.enabled || Boolean(sessionOverride || bundleOverride),
+            config: {
+              ...providerSettings.config,
+              ...(sessionOverride?.config ?? {}),
+              ...(bundleOverride?.config ?? {}),
+            },
+          },
+        ];
+      }),
+    ) as ProviderSettings['providers'];
+
+    const activeOverride = this.bundleProviderOverride ?? this.getActiveSessionProviderOverride();
+    return {
+      ...this.settings,
+      activeProvider: activeOverride?.type ?? this.settings.activeProvider,
+      providers: effectiveProviders,
+    };
   }
 
   saveSettings(): void {
@@ -503,7 +766,7 @@ export class ProviderManager {
    * config 提供本地 provider 能力查詢所需的 baseUrl。
    */
   getActiveModelInfo(): { provider: ProviderType; model: string; config: ProviderConfig } | null {
-    const activeOverride = this.bundleProviderOverride ?? this.sessionProviderOverride;
+    const activeOverride = this.bundleProviderOverride ?? this.getActiveSessionProviderOverride();
     const providerType = activeOverride?.type ?? this.settings.activeProvider;
     const config = activeOverride?.config ?? this.settings.providers[providerType]?.config;
     const model =
@@ -519,14 +782,18 @@ export class ProviderManager {
   }
 
   getProvider(type?: ProviderType): LLMProvider | null {
-    const providerType = type || this.sessionProviderOverride?.type || this.settings.activeProvider;
+    const providerType =
+      type ||
+      this.bundleProviderOverride?.type ||
+      this.getActiveSessionProviderOverride()?.type ||
+      this.settings.activeProvider;
     return this.providers.get(providerType) || null;
   }
 
   getActiveProvider(): LLMProvider | null {
     return this.getProvider(
       this.bundleProviderOverride?.type ??
-        this.sessionProviderOverride?.type ??
+        this.getActiveSessionProviderOverride()?.type ??
         this.settings.activeProvider,
     );
   }
@@ -580,7 +847,7 @@ export class ProviderManager {
   isProviderEnabled(type: ProviderType): boolean {
     return (
       this.bundleProviderOverride?.type === type ||
-      this.sessionProviderOverride?.type === type ||
+      Boolean(this.sessionProviderOverrides[type]) ||
       this.settings.providers[type]?.enabled ||
       false
     );

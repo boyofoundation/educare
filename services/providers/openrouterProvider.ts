@@ -1,5 +1,6 @@
 import { LLMProvider, ProviderConfig, ChatParams, StreamingResponse } from '../llmAdapter';
 import { streamOpenAICompatibleChat } from './openAICompatibleToolUtils';
+import { wrapProviderError } from './providerRequest';
 
 interface OpenRouterModel {
   id: string;
@@ -88,9 +89,7 @@ export class OpenRouterProvider implements LLMProvider {
       });
     } catch (error) {
       console.error('OpenRouter streaming error:', error);
-      throw new Error(
-        `OpenRouter API 錯誤: ${error instanceof Error ? error.message : '未知錯誤'}`,
-      );
+      throw wrapProviderError(error, 'OpenRouter API 錯誤');
     }
   }
 }

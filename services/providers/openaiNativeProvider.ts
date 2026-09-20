@@ -1,5 +1,6 @@
 import { LLMProvider, ProviderConfig, ChatParams, StreamingResponse } from '../llmAdapter';
 import { streamOpenAICompatibleChat } from './openAICompatibleToolUtils';
+import { wrapProviderError } from './providerRequest';
 
 interface OpenAIModel {
   id: string;
@@ -80,7 +81,7 @@ export class OpenAINativeProvider implements LLMProvider {
       });
     } catch (error) {
       console.error('OpenAI streaming error:', error);
-      throw new Error(`OpenAI API 錯誤: ${error instanceof Error ? error.message : '未知錯誤'}`);
+      throw wrapProviderError(error, 'OpenAI API 錯誤');
     }
   }
 }

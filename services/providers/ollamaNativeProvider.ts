@@ -6,6 +6,11 @@ import {
   type ProviderUsageMetadata,
 } from '../llmAdapter';
 import { buildRagPreamble } from './ragContextPreamble';
+import {
+  createProviderResponseError,
+  runBeforeProviderRequest,
+  wrapProviderError,
+} from './providerRequest';
 
 interface OllamaModel {
   name: string;
@@ -115,6 +120,12 @@ export class OllamaNativeProvider implements LLMProvider {
     ];
 
     try {
+      await runBeforeProviderRequest(params, {
+        provider: this.name,
+        model,
+        requestType: 'stream',
+        requestIndex: 0,
+      });
       const response = await fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
         headers: {
@@ -133,10 +144,7 @@ export class OllamaNativeProvider implements LLMProvider {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(
-          `Ollama API error: ${response.status} ${response.statusText} - ${errorText}`,
-        );
+        throw await createProviderResponseError(response, this.name);
       }
 
       const reader = response.body?.getReader();
@@ -217,7 +225,7 @@ export class OllamaNativeProvider implements LLMProvider {
       };
     } catch (error) {
       console.error('Ollama streaming error:', error);
-      throw new Error(`Ollama API 錯誤: ${error instanceof Error ? error.message : '未知錯誤'}`);
+      throw wrapProviderError(error, 'Ollama API 錯誤');
     }
   }
 }

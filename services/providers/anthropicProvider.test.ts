@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicProvider } from './anthropicProvider';
 import { TOOL_LOOP_CONTRACT_CASES } from './toolLoopContract.cases';
+import type { ProviderChatParams } from './providerRequest';
 
 const TOOL_DEFINITIONS = [
   {
@@ -178,6 +179,74 @@ describe('AnthropicProvider', () => {
     const secondBody = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string);
     expect(firstBody.tool_choice).toEqual({ type: 'tool', name: 'render_preview' });
     expect(secondBody.tool_choice).toEqual({ type: 'auto' });
+  });
+
+  it('checks the request boundary before the initial and nested tool requests', async () => {
+    const provider = new AnthropicProvider();
+    await provider.initialize({ apiKey: 'anthropic-test-key', model: 'claude-opus-4-8' });
+
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          content: [
+            {
+              type: 'tool_use',
+              id: 'call-1',
+              name: 'render_preview',
+              input: { projectId: 'project-1' },
+            },
+          ],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          content: [{ type: 'text', text: 'done' }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+      );
+
+    const beforeProviderRequest = vi.fn();
+    const params = {
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'hello',
+      tools: [...TOOL_DEFINITIONS],
+      executeTool: vi.fn().mockResolvedValue({ ok: true }),
+      beforeProviderRequest,
+    } as ProviderChatParams;
+
+    const responses = [];
+    for await (const chunk of provider.streamChat(params)) {
+      responses.push(chunk);
+    }
+
+    expect(beforeProviderRequest).toHaveBeenCalledTimes(2);
+    expect(beforeProviderRequest.mock.calls.map(([context]) => context)).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'claude-opus-4-8',
+        requestType: 'initial',
+        requestIndex: 0,
+      },
+      {
+        provider: 'anthropic',
+        model: 'claude-opus-4-8',
+        requestType: 'tool-round',
+        requestIndex: 1,
+        cumulativeUsage: {
+          source: 'api',
+          inputTokens: 1,
+          outputTokens: 1,
+          totalTokens: 2,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+        },
+      },
+    ]);
+    expect(responses.at(-1)?.metadata?.usage).toEqual(
+      expect.objectContaining({ source: 'api', inputTokens: 2, outputTokens: 2, totalTokens: 4 }),
+    );
   });
 
   it('supports multiple tool rounds before yielding final text', async () => {

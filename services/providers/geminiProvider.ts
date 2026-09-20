@@ -25,6 +25,11 @@ import {
   isStopRouteToolResult,
 } from '../htmlProjectToolLoopControl';
 import { resolveToolPolicy } from './toolPolicyUtils';
+import {
+  mergeProviderUsageMetadata,
+  runBeforeProviderRequest,
+  wrapProviderError,
+} from './providerRequest';
 
 interface GeminiListedModel {
   name?: string;
@@ -456,14 +461,22 @@ export class GeminiProvider implements LLMProvider {
 
     try {
       const chat = await this.createChat(params, finalSystemPrompt, model);
+      let requestIndex = 0;
+      let usage: ProviderUsageMetadata | undefined;
 
       if (params.tools?.length && params.executeTool) {
+        await runBeforeProviderRequest(params, {
+          provider: this.name,
+          model,
+          requestType: 'initial',
+          requestIndex: requestIndex++,
+        });
         let response = await chat.sendMessage({
           message: this.buildUserMessage(params),
           config: this.buildChatConfig(params, finalSystemPrompt, false, model),
         });
         let toolRoundCount = 0;
-        let usage = buildGeminiUsageMetadata(response);
+        usage = mergeProviderUsageMetadata(undefined, buildGeminiUsageMetadata(response));
         const repeatTracker = new Map<string, number>();
         const repeatedRecoverableErrors = new Map<string, RepeatedRecoverableErrorEntry>();
 
@@ -642,26 +655,28 @@ export class GeminiProvider implements LLMProvider {
             return;
           }
 
+          await runBeforeProviderRequest(params, {
+            provider: this.name,
+            model,
+            requestType: 'tool-round',
+            requestIndex: requestIndex++,
+            ...(usage ? { cumulativeUsage: usage } : {}),
+          });
           response = await chat.sendMessage({
             message: toolResponses,
             config: this.buildChatConfig(params, finalSystemPrompt, true, model),
           });
-          const latestUsage = buildGeminiUsageMetadata(response);
-          if (latestUsage?.source === 'api') {
-            usage = {
-              source: 'api',
-              inputTokens: (usage?.inputTokens ?? 0) + (latestUsage.inputTokens ?? 0),
-              outputTokens: (usage?.outputTokens ?? 0) + (latestUsage.outputTokens ?? 0),
-              totalTokens: (usage?.totalTokens ?? 0) + (latestUsage.totalTokens ?? 0),
-              cachedInputTokens:
-                (usage?.cachedInputTokens ?? 0) + (latestUsage.cachedInputTokens ?? 0),
-              reasoningTokens: (usage?.reasoningTokens ?? 0) + (latestUsage.reasoningTokens ?? 0),
-              toolUseTokens: (usage?.toolUseTokens ?? 0) + (latestUsage.toolUseTokens ?? 0),
-            };
-          }
+          usage = mergeProviderUsageMetadata(usage, buildGeminiUsageMetadata(response));
         }
       }
 
+      await runBeforeProviderRequest(params, {
+        provider: this.name,
+        model,
+        requestType: 'stream',
+        requestIndex: requestIndex++,
+        ...(usage ? { cumulativeUsage: usage } : {}),
+      });
       const stream = await chat.sendMessageStream({
         message: this.buildUserMessage(params),
         config: this.buildChatConfig(params, finalSystemPrompt, false, model),
@@ -698,8 +713,15 @@ export class GeminiProvider implements LLMProvider {
         model,
         streamedImages,
       );
+      usage = mergeProviderUsageMetadata(
+        usage,
+        aggregatedResponse ? buildGeminiUsageMetadata(aggregatedResponse) : undefined,
+      );
       completion.metadata = {
         ...completion.metadata,
+        promptTokenCount: usage?.inputTokens ?? completion.metadata?.promptTokenCount ?? 0,
+        candidatesTokenCount: usage?.outputTokens ?? completion.metadata?.candidatesTokenCount ?? 0,
+        usage: usage ?? { source: 'unavailable' },
         toolRoundCount: 0,
         repeatedRecoverableErrors: [],
         finishReason: 'complete',
@@ -707,7 +729,7 @@ export class GeminiProvider implements LLMProvider {
       yield completion;
     } catch (error) {
       console.error('Gemini streaming error:', error);
-      throw error;
+      throw wrapProviderError(error, 'Gemini API 錯誤');
     }
   }
 }

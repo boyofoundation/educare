@@ -2,10 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
 import {
   ASSISTANT_PACKAGE_FORMAT,
+  ASSISTANT_PACKAGE_MAX_ENTRIES,
+  ASSISTANT_PACKAGE_MAX_UNCOMPRESSED_BYTES,
   ASSISTANT_PACKAGE_SCHEMA_VERSION,
+  AssistantPackageArchiveError,
   buildAssistantPackageZip,
   buildImportedAssistant,
+  inspectAssistantPackageArchive,
   parseAssistantPackage,
+  previewAssistantPackage,
   ParsedAssistantPackage,
 } from './assistantPackageService';
 import { Assistant, RagChunk } from '../types';
@@ -120,6 +125,28 @@ describe('assistantPackageService', () => {
           content: '畢氏定理…',
         },
       ]);
+    });
+
+    it('preserves material provenance while remaining compatible with legacy chunks', () => {
+      const ragChunks: RagChunk[] = [
+        {
+          fileName: 'lesson.md',
+          content: 'water cycle',
+          documentId: 'document-water',
+          contentHash: 'hash-water',
+          sourceVersion: 2,
+          sourceLocation: { paragraph: 3, startOffset: 10, endOffset: 21 },
+          sourceType: 'file',
+          chunkId: 'document-water:v2:chunk-0-hash',
+        },
+        { fileName: 'legacy.txt', content: 'old import' },
+      ];
+
+      const parsed = parseAssistantPackage(
+        buildAssistantPackageZip(createAssistant({ ragChunks })),
+      );
+
+      expect(parsed.ragChunks).toEqual(ragChunks);
     });
 
     it('strips relevanceScore from rag chunks during export', () => {
@@ -249,6 +276,48 @@ describe('assistantPackageService', () => {
 
       expect(() => parseAssistantPackage(zipBytes)).toThrow('知識庫片段 #1 格式錯誤。');
     });
+
+    it('rejects unsafe material paths before import', () => {
+      const zipBytes = zipSync({
+        'manifest.json': createManifestJson(),
+        'assistant.json': createAssistantJson(),
+        'rag-chunks.json': strToU8(
+          JSON.stringify([{ fileName: '../secrets.txt', content: '不要匯入' }]),
+        ),
+      });
+
+      expect(() => parseAssistantPackage(zipBytes)).toThrow('知識庫片段 #1 檔名不安全。');
+    });
+  });
+
+  describe('previewAssistantPackage', () => {
+    it('returns a prompt-free untrusted preview with public materials only', () => {
+      const bytes = buildAssistantPackageZip(
+        createAssistant({
+          ragChunks: [
+            { fileName: 'algebra.md', content: '公式解' },
+            { fileName: 'geometry.md', content: '畢氏定理' },
+          ],
+        }),
+      );
+
+      const preview = previewAssistantPackage(bytes);
+
+      expect(preview).toMatchObject({
+        format: ASSISTANT_PACKAGE_FORMAT,
+        schemaVersion: ASSISTANT_PACKAGE_SCHEMA_VERSION,
+        assistantName: 'Math Tutor',
+        materialCount: 2,
+        materialNames: ['algebra.md', 'geometry.md'],
+        trust: 'untrusted',
+      });
+      expect(preview.classification).toMatchObject({
+        kind: 'assistant-package',
+        credentialsIncluded: false,
+        personalDataIncluded: false,
+        previewRequired: true,
+      });
+    });
   });
 
   describe('parseAssistantPackage without rag-chunks.json', () => {
@@ -262,6 +331,82 @@ describe('assistantPackageService', () => {
 
       expect(parsed.ragChunks).toEqual([]);
       expect(parsed.assistant.name).toBe('Math Tutor');
+    });
+  });
+
+  describe('bounded archive inspection', () => {
+    const readUint32 = (bytes: Uint8Array, offset: number): number =>
+      (bytes[offset] |
+        (bytes[offset + 1] << 8) |
+        (bytes[offset + 2] << 16) |
+        (bytes[offset + 3] << 24)) >>>
+      0;
+    const writeUint16 = (bytes: Uint8Array, offset: number, value: number): void => {
+      bytes[offset] = value & 0xff;
+      bytes[offset + 1] = (value >>> 8) & 0xff;
+    };
+    const writeUint32 = (bytes: Uint8Array, offset: number, value: number): void => {
+      bytes[offset] = value & 0xff;
+      bytes[offset + 1] = (value >>> 8) & 0xff;
+      bytes[offset + 2] = (value >>> 16) & 0xff;
+      bytes[offset + 3] = (value >>> 24) & 0xff;
+    };
+    const findEndOfCentralDirectory = (bytes: Uint8Array): number => {
+      for (let offset = bytes.length - 22; offset >= 0; offset -= 1) {
+        if (readUint32(bytes, offset) === 0x06054b50) {
+          return offset;
+        }
+      }
+      throw new Error('test ZIP missing EOCD');
+    };
+
+    it('rejects a central-directory size declaration above the pre-inflate cap', () => {
+      const bytes = buildAssistantPackageZip(createAssistant());
+      const endOffset = findEndOfCentralDirectory(bytes);
+      const centralDirectoryOffset = readUint32(bytes, endOffset + 16);
+      writeUint32(bytes, centralDirectoryOffset + 24, ASSISTANT_PACKAGE_MAX_UNCOMPRESSED_BYTES + 1);
+
+      expect(() => inspectAssistantPackageArchive(bytes)).toThrow(AssistantPackageArchiveError);
+    });
+
+    it('rejects an entry-count declaration above the pre-inflate cap', () => {
+      const bytes = buildAssistantPackageZip(createAssistant());
+      const endOffset = findEndOfCentralDirectory(bytes);
+      writeUint16(bytes, endOffset + 8, ASSISTANT_PACKAGE_MAX_ENTRIES + 1);
+      writeUint16(bytes, endOffset + 10, ASSISTANT_PACKAGE_MAX_ENTRIES + 1);
+
+      expect(() => inspectAssistantPackageArchive(bytes)).toThrow(/5,000/);
+    });
+
+    it('rejects declared/output size mismatches after bounded inspection', () => {
+      const bytes = buildAssistantPackageZip(createAssistant());
+      const endOffset = findEndOfCentralDirectory(bytes);
+      const centralDirectoryOffset = readUint32(bytes, endOffset + 16);
+      const declaredSize = readUint32(bytes, centralDirectoryOffset + 24);
+      writeUint32(bytes, centralDirectoryOffset + 24, declaredSize + 1);
+
+      expect(() => parseAssistantPackage(bytes)).toThrow(/宣告大小與解壓內容不一致/);
+    });
+
+    it('rejects an underreported central-directory size before output truncation', () => {
+      const bytes = buildAssistantPackageZip(createAssistant());
+      const endOffset = findEndOfCentralDirectory(bytes);
+      const centralDirectoryOffset = readUint32(bytes, endOffset + 16);
+      const declaredSize = readUint32(bytes, centralDirectoryOffset + 24);
+      writeUint32(bytes, centralDirectoryOffset + 24, declaredSize - 1);
+
+      expect(() => parseAssistantPackage(bytes)).toThrow(/宣告大小與解壓內容不一致/);
+    });
+
+    it('rejects a misleading local-header size before inflating the payload', () => {
+      const bytes = buildAssistantPackageZip(createAssistant());
+      const endOffset = findEndOfCentralDirectory(bytes);
+      const centralDirectoryOffset = readUint32(bytes, endOffset + 16);
+      const localHeaderOffset = readUint32(bytes, centralDirectoryOffset + 42);
+      const declaredSize = readUint32(bytes, centralDirectoryOffset + 24);
+      writeUint32(bytes, localHeaderOffset + 22, declaredSize - 1);
+
+      expect(() => parseAssistantPackage(bytes)).toThrow(/宣告大小與解壓內容不一致/);
     });
   });
 

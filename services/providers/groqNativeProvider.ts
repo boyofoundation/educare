@@ -1,5 +1,6 @@
 import { LLMProvider, ProviderConfig, ChatParams, StreamingResponse } from '../llmAdapter';
 import { streamOpenAICompatibleChat } from './openAICompatibleToolUtils';
+import { wrapProviderError } from './providerRequest';
 
 interface GroqModel {
   id: string;
@@ -89,7 +90,7 @@ export class GroqNativeProvider implements LLMProvider {
       });
     } catch (error) {
       console.error('Groq streaming error:', error);
-      throw new Error(`Groq API 錯誤: ${error instanceof Error ? error.message : '未知錯誤'}`);
+      throw wrapProviderError(error, 'Groq API 錯誤');
     }
   }
 }

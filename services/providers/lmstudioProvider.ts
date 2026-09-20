@@ -1,5 +1,6 @@
 import { LLMProvider, ProviderConfig, ChatParams, StreamingResponse } from '../llmAdapter';
 import { streamOpenAICompatibleChat } from './openAICompatibleToolUtils';
+import { wrapProviderError } from './providerRequest';
 
 interface LMStudioModel {
   id: string;
@@ -92,7 +93,7 @@ export class LMStudioProvider implements LLMProvider {
       });
     } catch (error) {
       console.error('LM Studio streaming error:', error);
-      throw new Error(`LM Studio API 錯誤: ${error instanceof Error ? error.message : '未知錯誤'}`);
+      throw wrapProviderError(error, 'LM Studio API 錯誤');
     }
   }
 }

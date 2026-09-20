@@ -8,8 +8,11 @@ import {
   BundleRecord,
   BundleValidationResult,
   EncryptedProviderSettingsEnvelope,
+  RagSourceLocation,
+  RagSourceType,
   VersionedAgentBundle,
 } from '../types';
+import { getTransferClassification, type TransferClassification } from './fileTransferPolicy';
 
 export const AGENT_BUNDLE_FORMAT = 'educare-agent-bundle';
 export const AGENT_BUNDLE_SCHEMA_VERSION = 1;
@@ -29,6 +32,19 @@ export interface AgentBundleMetadata {
   version: string;
 }
 
+export interface AgentBundlePreview {
+  classification: TransferClassification;
+  format: typeof AGENT_BUNDLE_FORMAT;
+  schemaVersion: number;
+  name: string;
+  version: string;
+  agentCount: number;
+  materialCount: number;
+  materialNames: string[];
+  hasProtectedCredentials: boolean;
+  trust: 'untrusted';
+}
+
 const issue = (code: BundleIssue['code'], message: string, nextStep: string): BundleIssue => ({
   code,
   message,
@@ -37,6 +53,58 @@ const issue = (code: BundleIssue['code'], message: string, nextStep: string): Bu
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const parseSourceLocation = (raw: unknown): RagSourceLocation | undefined => {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const location: RagSourceLocation = {};
+  if (Number.isInteger(raw.page) && (raw.page as number) > 0) {
+    location.page = raw.page as number;
+  }
+  if (Number.isInteger(raw.paragraph) && (raw.paragraph as number) > 0) {
+    location.paragraph = raw.paragraph as number;
+  }
+  if (Number.isInteger(raw.startOffset) && (raw.startOffset as number) >= 0) {
+    location.startOffset = raw.startOffset as number;
+  }
+  if (Number.isInteger(raw.endOffset) && (raw.endOffset as number) >= 0) {
+    location.endOffset = raw.endOffset as number;
+  }
+  return Object.keys(location).length > 0 ? location : undefined;
+};
+
+const parseMaterialProvenance = (
+  raw: unknown,
+): {
+  documentId?: string;
+  contentHash?: string;
+  sourceVersion?: number;
+  sourceLocation?: RagSourceLocation;
+  sourceType?: RagSourceType;
+  chunkId?: string;
+} => {
+  if (!isRecord(raw)) {
+    return {};
+  }
+  const sourceLocation = parseSourceLocation(raw.sourceLocation);
+  return {
+    ...(typeof raw.documentId === 'string' && raw.documentId.trim()
+      ? { documentId: raw.documentId }
+      : {}),
+    ...(typeof raw.contentHash === 'string' && raw.contentHash.trim()
+      ? { contentHash: raw.contentHash }
+      : {}),
+    ...(Number.isInteger(raw.sourceVersion) && (raw.sourceVersion as number) > 0
+      ? { sourceVersion: raw.sourceVersion as number }
+      : {}),
+    ...(sourceLocation ? { sourceLocation } : {}),
+    ...(raw.sourceType === 'file' || raw.sourceType === 'legacy-import'
+      ? { sourceType: raw.sourceType as RagSourceType }
+      : {}),
+    ...(typeof raw.chunkId === 'string' && raw.chunkId.trim() ? { chunkId: raw.chunkId } : {}),
+  };
+};
 
 const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
   Object.keys(value).every(key => keys.includes(key)) && keys.every(key => key in value);
@@ -99,6 +167,18 @@ const sanitizeFileName = (name: string): string => {
   return cleaned || 'agent-bundle';
 };
 
+const isSafeMaterialPath = (fileName: string): boolean => {
+  const normalized = fileName.trim().replace(/\\/g, '/');
+  return Boolean(
+    normalized &&
+      normalized.length <= 512 &&
+      !normalized.startsWith('/') &&
+      !/^[A-Za-z]:\//.test(normalized) &&
+      !normalized.split('/').some(segment => segment === '..' || segment === '.') &&
+      !Array.from(normalized).some(char => char.charCodeAt(0) <= 31),
+  );
+};
+
 const bytesFor = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
 
 const removeImportedBundleNamespace = (id: string, importedBundleId?: string): string => {
@@ -126,7 +206,11 @@ export const getBundleContentFingerprint = async (
       description: agent.description,
       systemPrompt: agent.systemPrompt,
       starterPrompts: agent.starterPrompts,
-      ragChunks: agent.ragChunks.map(({ fileName, content }) => ({ fileName, content })),
+      ragChunks: agent.ragChunks.map(chunk => ({
+        fileName: chunk.fileName,
+        content: chunk.content,
+        ...parseMaterialProvenance(chunk),
+      })),
       ...(agent.icon === undefined ? {} : { icon: agent.icon }),
       ...(agent.modelParams === undefined ? {} : { modelParams: agent.modelParams }),
       ...(agent.mathToolsEnabled === undefined ? {} : { mathToolsEnabled: agent.mathToolsEnabled }),
@@ -273,14 +357,28 @@ const parseAgent = (
           undefined,
           errors,
         );
+        const safeFileName = validFileName && isSafeMaterialPath(chunk.fileName as string);
+        if (validFileName && !safeFileName) {
+          errors.push(
+            issue(
+              'missing-field',
+              `${label}.ragChunks[${chunkIndex}].fileName 檔名不安全。`,
+              '請移除路徑穿越或控制字元後重新匯出。',
+            ),
+          );
+        }
         const validContent = validateString(
           chunk.content,
           `${label}.ragChunks[${chunkIndex}].content`,
           MAX_CHUNK_CONTENT_LENGTH,
           errors,
         );
-        return validFileName && validContent
-          ? { fileName: chunk.fileName, content: chunk.content }
+        return safeFileName && validContent
+          ? {
+              fileName: chunk.fileName,
+              content: chunk.content,
+              ...parseMaterialProvenance(chunk),
+            }
           : null;
       })
     : [];
@@ -341,7 +439,7 @@ const parseAgent = (
     systemPrompt: raw.systemPrompt as string,
     starterPrompts: raw.starterPrompts as string[],
     ragChunks: chunks.filter(
-      (chunk): chunk is { fileName: string; content: string } => chunk !== null,
+      (chunk): chunk is AgentBundleAgent['ragChunks'][number] => chunk !== null,
     ),
     ...(icon === undefined ? {} : { icon }),
     ...(modelParams === undefined ? {} : { modelParams }),
@@ -555,6 +653,24 @@ export const validateBundle = (raw: unknown): BundleValidationResult => {
   return { bundle, errors, warnings };
 };
 
+/** Build a prompt-free preview for a validated bundle before activation. */
+export const previewAgentBundle = (bundle: VersionedAgentBundle): AgentBundlePreview => ({
+  classification: getTransferClassification('agent-bundle', {
+    credentialsIncluded: Boolean(bundle.encryptedProviderSettings),
+  }),
+  format: AGENT_BUNDLE_FORMAT,
+  schemaVersion: bundle.manifest.schemaVersion,
+  name: bundle.manifest.name,
+  version: bundle.manifest.version,
+  agentCount: bundle.agents.length,
+  materialCount: bundle.agents.reduce((count, agent) => count + agent.ragChunks.length, 0),
+  materialNames: bundle.agents.flatMap(agent => agent.ragChunks.map(chunk => chunk.fileName)),
+  hasProtectedCredentials:
+    bundle.manifest.schemaVersion === AGENT_BUNDLE_ENCRYPTED_SCHEMA_VERSION &&
+    Boolean(bundle.encryptedProviderSettings),
+  trust: 'untrusted',
+});
+
 export const buildAgentBundle = (
   assistants: Assistant[],
   entryAgentId: string,
@@ -576,7 +692,11 @@ export const buildAgentBundle = (
     description: assistant.description ?? '',
     systemPrompt: assistant.systemPrompt ?? '',
     starterPrompts: assistant.starterPrompts ?? [],
-    ragChunks: (assistant.ragChunks ?? []).map(({ fileName, content }) => ({ fileName, content })),
+    ragChunks: (assistant.ragChunks ?? []).map(chunk => ({
+      fileName: chunk.fileName,
+      content: chunk.content,
+      ...parseMaterialProvenance(chunk),
+    })),
     ...(assistant.mathToolsEnabled === true ? { mathToolsEnabled: true } : {}),
     ...(assistant.webSpeechToolsEnabled === true ? { webSpeechToolsEnabled: true } : {}),
   })),
@@ -657,7 +777,11 @@ export const buildImportedBundle = (bundle: VersionedAgentBundle): BundleRecord 
       description: agent.description,
       systemPrompt: agent.systemPrompt,
       starterPrompts: [...agent.starterPrompts],
-      ragChunks: agent.ragChunks.map(({ fileName, content }) => ({ fileName, content })),
+      ragChunks: agent.ragChunks.map(chunk => ({
+        fileName: chunk.fileName,
+        content: chunk.content,
+        ...parseMaterialProvenance(chunk),
+      })),
       ...(agent.icon === undefined ? {} : { icon: agent.icon }),
       ...(agent.modelParams === undefined ? {} : { modelParams: { ...agent.modelParams } }),
       ...(agent.mathToolsEnabled === undefined ? {} : { mathToolsEnabled: agent.mathToolsEnabled }),

@@ -67,6 +67,141 @@ describe('ProviderManager session provider configuration', () => {
     );
   });
 
+  it('keeps independent session overrides for multiple providers and exposes effective settings', async () => {
+    const gemini = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: [],
+      requiresApiKey: true,
+      supportsLocalMode: false,
+      initialize: vi.fn().mockResolvedValue(undefined),
+      isAvailable: vi.fn(() => true),
+      streamChat: vi.fn(),
+    } satisfies LlmAdapter.LLMProvider;
+    const openai = {
+      name: 'openai',
+      displayName: 'OpenAI',
+      supportedModels: [],
+      requiresApiKey: true,
+      supportsLocalMode: false,
+      initialize: vi.fn().mockResolvedValue(undefined),
+      isAvailable: vi.fn(() => true),
+      streamChat: vi.fn(),
+    } satisfies LlmAdapter.LLMProvider;
+    const manager = ProviderManager.getInstance();
+    manager.registerProvider('gemini', gemini);
+    manager.registerProvider('openai', openai);
+
+    await manager.setSessionProviderConfig('gemini', { apiKey: 'gemini-session-key' });
+    await manager.setSessionProviderConfig('openai', { apiKey: 'openai-session-key' });
+
+    expect(manager.getSessionProviderConfigs()).toMatchObject({
+      gemini: { type: 'gemini', config: { apiKey: 'gemini-session-key' } },
+      openai: { type: 'openai', config: { apiKey: 'openai-session-key' } },
+    });
+    expect(JSON.parse(sessionStorage.getItem(bundleSessionProviderStorageKey) as string)).toEqual(
+      expect.objectContaining({
+        gemini: expect.objectContaining({
+          config: expect.objectContaining({ apiKey: 'gemini-session-key' }),
+        }),
+        openai: expect.objectContaining({
+          config: expect.objectContaining({ apiKey: 'openai-session-key' }),
+        }),
+      }),
+    );
+    expect(manager.getEffectiveProviderSettings().providers.gemini.config.apiKey).toBe(
+      'gemini-session-key',
+    );
+    expect(manager.getEffectiveProviderSettings().providers.openai.config.apiKey).toBe(
+      'openai-session-key',
+    );
+
+    manager.clearSessionProviderConfig('openai');
+    expect(manager.getSessionProviderConfig('gemini')?.config.apiKey).toBe('gemini-session-key');
+    expect(manager.getSessionProviderConfig('openai')).toBeNull();
+  });
+
+  it('loads the legacy single-slot session format into the keyed override map', () => {
+    sessionValues.set(
+      bundleSessionProviderStorageKey,
+      JSON.stringify({ type: 'gemini', config: { apiKey: 'legacy-session-key' } }),
+    );
+    const manager = ProviderManager.getInstance();
+
+    expect(manager.getSessionProviderConfigs()).toMatchObject({
+      gemini: { type: 'gemini', config: { apiKey: 'legacy-session-key' } },
+    });
+  });
+
+  it('rolls back the previous session override and storage when initialization fails', async () => {
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: [],
+      requiresApiKey: true,
+      supportsLocalMode: false,
+      initialize: vi
+        .fn<() => Promise<void>>()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('unavailable'))
+        .mockResolvedValueOnce(undefined),
+      reinitialize: vi.fn(),
+      isAvailable: vi.fn(() => true),
+      streamChat: vi.fn(),
+    } satisfies LlmAdapter.LLMProvider;
+    const manager = ProviderManager.getInstance();
+    manager.registerProvider('gemini', provider);
+
+    await manager.setSessionProviderConfig('gemini', { apiKey: 'previous-key' });
+    const previousStorage = sessionStorage.getItem(bundleSessionProviderStorageKey);
+
+    await expect(
+      manager.setSessionProviderConfig('gemini', { apiKey: 'failing-key' }),
+    ).rejects.toThrow('無法啟用分頁服務商設定。');
+
+    expect(manager.getSessionProviderConfig('gemini')).toMatchObject({
+      config: { apiKey: 'previous-key' },
+    });
+    expect(sessionStorage.getItem(bundleSessionProviderStorageKey)).toBe(previousStorage);
+    expect(provider.initialize).toHaveBeenLastCalledWith(
+      expect.objectContaining({ apiKey: 'previous-key' }),
+    );
+  });
+
+  it('rolls back the previous session override when session storage commit fails', async () => {
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: [],
+      requiresApiKey: true,
+      supportsLocalMode: false,
+      initialize: vi.fn().mockResolvedValue(undefined),
+      reinitialize: vi.fn(),
+      isAvailable: vi.fn(() => true),
+      streamChat: vi.fn(),
+    } satisfies LlmAdapter.LLMProvider;
+    const manager = ProviderManager.getInstance();
+    manager.registerProvider('gemini', provider);
+
+    await manager.setSessionProviderConfig('gemini', { apiKey: 'previous-key' });
+    const previousStorage = sessionStorage.getItem(bundleSessionProviderStorageKey);
+    vi.mocked(sessionStorage.setItem).mockImplementationOnce(() => {
+      throw new Error('quota');
+    });
+
+    await expect(manager.setSessionProviderConfig('gemini', { apiKey: 'new-key' })).rejects.toThrow(
+      '無法保存分頁服務商設定。',
+    );
+
+    expect(manager.getSessionProviderConfig('gemini')).toMatchObject({
+      config: { apiKey: 'previous-key' },
+    });
+    expect(sessionStorage.getItem(bundleSessionProviderStorageKey)).toBe(previousStorage);
+    expect(provider.initialize).toHaveBeenLastCalledWith(
+      expect.objectContaining({ apiKey: 'previous-key' }),
+    );
+  });
+
   it('keeps bundle credentials in memory and clears only a matching bundle source', async () => {
     const provider = {
       name: 'gemini',
@@ -154,6 +289,59 @@ describe('ProviderManager session provider configuration', () => {
       expect.objectContaining({ apiKey: 'recipient-session-key' }),
     );
     expect(manager.getActiveProvider()).toBe(openai);
+  });
+
+  it('serializes bundle cleanup before a replacement so stale cleanup cannot reapply old config', async () => {
+    let resolveCleanup: (() => void) | undefined;
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: [],
+      requiresApiKey: true,
+      supportsLocalMode: false,
+      initialize: vi
+        .fn<() => Promise<void>>()
+        .mockResolvedValueOnce(undefined)
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>(resolve => {
+              resolveCleanup = resolve;
+            }),
+        )
+        .mockResolvedValueOnce(undefined),
+      reinitialize: vi.fn(),
+      isAvailable: vi.fn(() => true),
+      streamChat: vi.fn(),
+    } satisfies LlmAdapter.LLMProvider;
+    const manager = ProviderManager.getInstance();
+    manager.registerProvider('gemini', provider);
+    const previousSource = {
+      kind: 'bundle' as const,
+      bundleId: 'bundle-previous',
+      credentialFingerprint: 'previous-fingerprint',
+    };
+    const nextSource = {
+      kind: 'bundle' as const,
+      bundleId: 'bundle-next',
+      credentialFingerprint: 'next-fingerprint',
+    };
+
+    await manager.setBundleProviderConfig(previousSource, 'gemini', { apiKey: 'previous-key' });
+    const cleanup = manager.clearBundleProviderConfig(previousSource);
+    const replacement = manager.setBundleProviderConfig(nextSource, 'gemini', {
+      apiKey: 'next-key',
+    });
+
+    await Promise.resolve();
+    expect(provider.initialize).toHaveBeenCalledTimes(2);
+    resolveCleanup?.();
+    await Promise.all([cleanup, replacement]);
+
+    expect(manager.matchesBundleProviderOverride(previousSource)).toBe(false);
+    expect(manager.matchesBundleProviderOverride(nextSource)).toBe(true);
+    expect(provider.initialize).toHaveBeenLastCalledWith(
+      expect.objectContaining({ apiKey: 'next-key' }),
+    );
   });
 
   it('restores the previous bundle credential override when initialization fails', async () => {

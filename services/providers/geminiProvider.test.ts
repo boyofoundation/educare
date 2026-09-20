@@ -3,6 +3,7 @@ import { FunctionCallingConfigMode } from '@google/genai';
 import { GeminiProvider } from './geminiProvider';
 import { ApiKeyManager } from '../apiKeyManager';
 import { TOOL_LOOP_CONTRACT_CASES } from './toolLoopContract.cases';
+import type { ProviderChatParams } from './providerRequest';
 import {
   DRAW_GEOMETRY_TOOL_DESCRIPTION,
   DRAW_GEOMETRY_TOOL_NAME,
@@ -546,6 +547,7 @@ describe('GeminiProvider', () => {
           functionCalls: [
             { id: 'call-1', name: 'render_preview', args: { projectId: 'project-1' } },
           ],
+          usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 3 },
         },
         {
           text: 'Preview ready',
@@ -556,10 +558,12 @@ describe('GeminiProvider', () => {
     });
 
     const executeTool = vi.fn().mockResolvedValue({ ok: true });
+    const beforeProviderRequest = vi.fn();
     const responses = await collectResponses(provider, {
       tools: [...TOOL_DEFINITIONS],
       executeTool,
-    });
+      beforeProviderRequest,
+    } as Partial<ProviderChatParams>);
 
     expect(executeTool).toHaveBeenCalledWith({
       name: 'render_preview',
@@ -574,9 +578,40 @@ describe('GeminiProvider', () => {
       ],
     });
     expect(sendMessageStream).not.toHaveBeenCalled();
+    expect(beforeProviderRequest).toHaveBeenCalledTimes(2);
+    expect(beforeProviderRequest.mock.calls.map(([context]) => context)).toEqual([
+      {
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        requestType: 'initial',
+        requestIndex: 0,
+      },
+      {
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        requestType: 'tool-round',
+        requestIndex: 1,
+        cumulativeUsage: {
+          source: 'api',
+          inputTokens: 2,
+          outputTokens: 3,
+          totalTokens: 5,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+          toolUseTokens: 0,
+        },
+      },
+    ]);
     expect(responses).toEqual([
       expect.objectContaining({ text: 'Preview ready', isComplete: false }),
-      expect.objectContaining({ isComplete: true }),
+      expect.objectContaining({
+        isComplete: true,
+        metadata: expect.objectContaining({
+          promptTokenCount: 7,
+          candidatesTokenCount: 11,
+          usage: expect.objectContaining({ source: 'api', totalTokens: 18 }),
+        }),
+      }),
     ]);
   });
 

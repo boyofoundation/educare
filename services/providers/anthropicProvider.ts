@@ -12,6 +12,12 @@ import {
   isStopRouteToolResult,
 } from '../htmlProjectToolLoopControl';
 import { resolveToolPolicy } from './toolPolicyUtils';
+import {
+  createProviderResponseError,
+  mergeProviderUsageMetadata,
+  runBeforeProviderRequest,
+  wrapProviderError,
+} from './providerRequest';
 
 interface AnthropicTextBlock {
   type: 'text';
@@ -191,7 +197,22 @@ export class AnthropicProvider implements LLMProvider {
   private async createMessage(
     body: Record<string, unknown>,
     signal?: AbortSignal,
+    params?: ChatParams,
+    model?: string,
+    requestType: 'initial' | 'tool-round' = 'initial',
+    requestIndex = 0,
+    cumulativeUsage?: ProviderUsageMetadata,
   ): Promise<AnthropicMessageResponse> {
+    if (params && model) {
+      await runBeforeProviderRequest(params, {
+        provider: this.name,
+        model,
+        requestType,
+        requestIndex,
+        ...(cumulativeUsage ? { cumulativeUsage } : {}),
+      });
+    }
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -204,8 +225,7 @@ export class AnthropicProvider implements LLMProvider {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`${response.status} ${response.statusText} - ${errorText}`);
+      throw await createProviderResponseError(response, this.name);
     }
 
     return (await response.json()) as AnthropicMessageResponse;
@@ -247,10 +267,21 @@ export class AnthropicProvider implements LLMProvider {
     }
 
     try {
-      let response = await this.createMessage(requestBody, params.signal);
+      let requestIndex = 0;
+      let response = await this.createMessage(
+        requestBody,
+        params.signal,
+        params,
+        model,
+        'initial',
+        requestIndex++,
+      );
       let promptTokenCount = response.usage?.input_tokens || 0;
       let candidatesTokenCount = response.usage?.output_tokens || 0;
-      let usage = buildAnthropicUsageMetadata(response.usage);
+      let usage = mergeProviderUsageMetadata(
+        undefined,
+        buildAnthropicUsageMetadata(response.usage),
+      );
       const maxToolRounds = Math.max(
         1,
         Math.round(Number(params.maxToolRounds ?? this.config.maxToolRounds ?? 20)),
@@ -449,19 +480,16 @@ export class AnthropicProvider implements LLMProvider {
             tool_choice: this.buildToolChoice(toolChoice, true),
           },
           params.signal,
+          params,
+          model,
+          'tool-round',
+          requestIndex++,
+          usage,
         );
 
         promptTokenCount += response.usage?.input_tokens || 0;
         candidatesTokenCount += response.usage?.output_tokens || 0;
-        usage = buildAnthropicUsageMetadata({
-          input_tokens: promptTokenCount,
-          output_tokens: candidatesTokenCount,
-          cache_creation_input_tokens:
-            (usage?.cacheCreationInputTokens ?? 0) +
-            (response.usage?.cache_creation_input_tokens ?? 0),
-          cache_read_input_tokens:
-            (usage?.cacheReadInputTokens ?? 0) + (response.usage?.cache_read_input_tokens ?? 0),
-        });
+        usage = mergeProviderUsageMetadata(usage, buildAnthropicUsageMetadata(response.usage));
         toolRoundCount += 1;
 
         if (stopRoute) {
@@ -517,11 +545,12 @@ export class AnthropicProvider implements LLMProvider {
           toolRoundCount,
           repeatedRecoverableErrors: [...repeatedRecoverableErrors.values()],
           finishReason: 'complete',
+          usage,
         },
       };
     } catch (error) {
       console.error('Anthropic streaming error:', error);
-      throw new Error(`Anthropic API 錯誤: ${error instanceof Error ? error.message : '未知錯誤'}`);
+      throw wrapProviderError(error, 'Anthropic API 錯誤');
     }
   }
 }

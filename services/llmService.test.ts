@@ -1910,6 +1910,165 @@ describe('streamChat', () => {
     });
   });
 
+  it('forwards the request-boundary callback to the active provider', async () => {
+    const beforeProviderRequest = vi.fn();
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'hello',
+      assistantId: 'assistant-1',
+      beforeProviderRequest,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    expect(observedChatParams[0]?.beforeProviderRequest).toBe(beforeProviderRequest);
+  });
+
+  it('awaits tool durability hooks around the tool side effect', async () => {
+    const events: string[] = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<unknown>;
+        await executeTool({
+          name: 'routeToAssistant',
+          args: {
+            targetAssistantId: 'assistant-math',
+            reason: 'Math expertise required',
+            handoffSummary: 'Route after durable marker.',
+          },
+        });
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'route me',
+      assistantId: 'assistant-1',
+      routableTargets: [
+        { id: 'assistant-math', name: 'Math Tutor', description: 'Solves advanced math problems' },
+      ],
+      beforeToolExecution: async () => {
+        events.push('before');
+      },
+      onRouteProposal: () => {
+        events.push('side-effect');
+      },
+      afterToolExecution: async () => {
+        events.push('after');
+      },
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    expect(events).toEqual(['before', 'side-effect', 'after']);
+  });
+
+  it('localizes authentication failures without losing status, code, or non-retryable state', async () => {
+    const authError = Object.assign(new Error('invalid API key'), {
+      status: 401,
+      code: 'invalid_api_key',
+      retryable: true,
+    });
+    mockGetActiveProvider.mockReturnValue({
+      name: 'openai',
+      displayName: 'OpenAI',
+      supportedModels: ['gpt-4o'],
+      isAvailable: () => true,
+      streamChat: vi.fn(() => {
+        throw authError;
+      }),
+    });
+
+    const { streamChat } = await import('./llmService');
+    await expect(
+      streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'hello',
+        assistantId: 'assistant-1',
+        onChunk: vi.fn(),
+        onComplete: vi.fn(),
+      }),
+    ).rejects.toMatchObject({
+      message: 'API 金鑰錯誤：請檢查 OpenAI 的 API 金鑰是否正確。',
+      status: 401,
+      statusCode: 401,
+      code: 'invalid_api_key',
+      retryable: false,
+    });
+  });
+
+  it('fails closed for an unknown provider failure', async () => {
+    mockGetActiveProvider.mockReturnValue({
+      name: 'openai',
+      displayName: 'OpenAI',
+      supportedModels: ['gpt-4o'],
+      isAvailable: () => true,
+      streamChat: vi.fn(() => {
+        throw new Error('unexpected provider failure');
+      }),
+    });
+
+    const { streamChat } = await import('./llmService');
+    await expect(
+      streamChat({
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'hello',
+        assistantId: 'assistant-1',
+        onChunk: vi.fn(),
+        onComplete: vi.fn(),
+      }),
+    ).rejects.toMatchObject({
+      message: 'unexpected provider failure',
+      retryable: false,
+    });
+  });
+
   describe('project bootstrap (createProject without an active project)', () => {
     const buildProvider = (body: (params: Record<string, unknown>) => Promise<void> | void) => ({
       name: 'gemini',

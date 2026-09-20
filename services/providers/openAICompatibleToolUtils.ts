@@ -13,6 +13,12 @@ import {
 } from '../htmlProjectToolLoopControl';
 import { readSseDataLines } from './sse';
 import { resolveToolPolicy } from './toolPolicyUtils';
+import {
+  createProviderResponseError,
+  mergeProviderUsageMetadata,
+  runBeforeProviderRequest,
+  wrapProviderError,
+} from './providerRequest';
 
 interface OpenAICompatibleToolCall {
   id?: string;
@@ -465,6 +471,8 @@ const fetchToolCallResponse = async (
   options: StreamOptions,
   messages: OpenAICompatibleMessage[],
   forceAutoToolChoice = false,
+  requestIndex = 0,
+  cumulativeUsage?: ProviderUsageMetadata,
 ) => {
   const {
     endpoint,
@@ -476,6 +484,14 @@ const fetchToolCallResponse = async (
   } = options;
 
   const { visibleTools } = resolveToolPolicy(params);
+
+  await runBeforeProviderRequest(params, {
+    provider: options.providerName,
+    model: options.model,
+    requestType: forceAutoToolChoice ? 'tool-round' : 'initial',
+    requestIndex,
+    ...(cumulativeUsage ? { cumulativeUsage } : {}),
+  });
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -493,8 +509,7 @@ const fetchToolCallResponse = async (
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`${response.status} ${response.statusText} - ${errorText}`);
+    throw await createProviderResponseError(response, options.providerName);
   }
 
   return (await response.json()) as OpenAICompatibleResponse;
@@ -522,6 +537,7 @@ export async function* streamOpenAICompatibleChat(
   let promptTokenCount = 0;
   let candidatesTokenCount = 0;
   let usage: ProviderUsageMetadata | undefined;
+  let requestIndex = 0;
   const { visibleTools } = resolveToolPolicy(params);
   const MAX_OPENAI_COMPATIBLE_TOOL_ROUNDS = Math.max(
     1,
@@ -553,22 +569,19 @@ export async function* streamOpenAICompatibleChat(
         return;
       }
 
-      const toolResponse = await fetchToolCallResponse(options, messages, toolRoundCount > 0);
+      const toolResponse = await fetchToolCallResponse(
+        options,
+        messages,
+        toolRoundCount > 0,
+        requestIndex++,
+        usage,
+      );
       const assistantMessage = toolResponse.choices?.[0]?.message;
 
       promptTokenCount += toolResponse.usage?.prompt_tokens || 0;
       candidatesTokenCount += toolResponse.usage?.completion_tokens || 0;
       const latestUsage = buildOpenAICompatibleUsageMetadata(toolResponse.usage);
-      if (latestUsage?.source === 'api') {
-        usage = {
-          source: 'api',
-          inputTokens: (usage?.inputTokens ?? 0) + (latestUsage.inputTokens ?? 0),
-          outputTokens: (usage?.outputTokens ?? 0) + (latestUsage.outputTokens ?? 0),
-          totalTokens: (usage?.totalTokens ?? 0) + (latestUsage.totalTokens ?? 0),
-          cachedInputTokens: (usage?.cachedInputTokens ?? 0) + (latestUsage.cachedInputTokens ?? 0),
-          reasoningTokens: (usage?.reasoningTokens ?? 0) + (latestUsage.reasoningTokens ?? 0),
-        };
-      }
+      usage = mergeProviderUsageMetadata(usage, latestUsage);
 
       const assistantImages = normalizeOpenAICompatibleImages(assistantMessage?.images);
       const assistantText =
@@ -715,31 +728,47 @@ export async function* streamOpenAICompatibleChat(
     }
   }
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers,
-    signal: params.signal,
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: true,
-      stream_options: {
-        include_usage: true,
-      },
-      temperature: params.temperature || defaultTemperature,
-      max_tokens: params.maxTokens || defaultMaxTokens,
-    }),
+  await runBeforeProviderRequest(params, {
+    provider: providerName,
+    model,
+    requestType: 'stream',
+    requestIndex: requestIndex++,
+    ...(usage ? { cumulativeUsage: usage } : {}),
   });
 
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      signal: params.signal,
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: true,
+        stream_options: {
+          include_usage: true,
+        },
+        temperature: params.temperature || defaultTemperature,
+        max_tokens: params.maxTokens || defaultMaxTokens,
+      }),
+    });
+  } catch (error) {
+    throw wrapProviderError(error, `${providerName} API request failed`);
+  }
+
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`${response.status} ${response.statusText} - ${errorText}`);
+    throw await createProviderResponseError(response, providerName);
   }
 
   const reader = response.body?.getReader();
   if (!reader) {
     throw new Error('Failed to get response reader');
   }
+
+  let streamUsage: ProviderUsageMetadata | undefined;
+  let streamPromptTokenCount = 0;
+  let streamCandidatesTokenCount = 0;
 
   for await (const data of readSseDataLines(reader)) {
     if (data === '[DONE]') {
@@ -781,11 +810,15 @@ export async function* streamOpenAICompatibleChat(
     }
 
     if (parsed.usage) {
-      promptTokenCount = parsed.usage.prompt_tokens || promptTokenCount;
-      candidatesTokenCount = parsed.usage.completion_tokens || candidatesTokenCount;
-      usage = buildOpenAICompatibleUsageMetadata(parsed.usage);
+      streamPromptTokenCount = parsed.usage.prompt_tokens ?? streamPromptTokenCount;
+      streamCandidatesTokenCount = parsed.usage.completion_tokens ?? streamCandidatesTokenCount;
+      streamUsage = buildOpenAICompatibleUsageMetadata(parsed.usage);
     }
   }
+
+  promptTokenCount += streamPromptTokenCount;
+  candidatesTokenCount += streamCandidatesTokenCount;
+  usage = mergeProviderUsageMetadata(usage, streamUsage);
 
   yield {
     text: '',

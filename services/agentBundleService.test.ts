@@ -10,6 +10,7 @@ import {
   downloadBundleJson,
   estimateBundleSize,
   parseBundleText,
+  previewAgentBundle,
   serializeBundle,
 } from './agentBundleService';
 
@@ -105,6 +106,41 @@ describe('agentBundleService', () => {
       expect(estimateBundleSize(bundle)).toBe(
         new TextEncoder().encode(JSON.stringify(bundle)).length,
       );
+    });
+
+    it('round-trips material provenance needed for exact-source citations', () => {
+      const bundle = buildAgentBundle(
+        [
+          createAssistant({
+            ragChunks: [
+              {
+                fileName: 'lesson.md',
+                content: 'water cycle',
+                documentId: 'document-water',
+                contentHash: 'hash-water',
+                sourceVersion: 2,
+                sourceLocation: { paragraph: 4 },
+                sourceType: 'file',
+                chunkId: 'document-water:v2:chunk-0-hash',
+              },
+            ],
+          }),
+        ],
+        'math-tutor',
+        [],
+        { name: 'STEM Team', description: 'A pair of teaching assistants.', version: '1.0.0' },
+      );
+
+      const parsed = parseBundleText(serializeBundle(bundle));
+
+      expect(parsed.errors).toEqual([]);
+      expect(parsed.bundle?.agents[0].ragChunks[0]).toMatchObject({
+        documentId: 'document-water',
+        contentHash: 'hash-water',
+        sourceVersion: 2,
+        sourceLocation: { paragraph: 4 },
+        chunkId: 'document-water:v2:chunk-0-hash',
+      });
     });
   });
 
@@ -323,6 +359,30 @@ describe('agentBundleService', () => {
       expect(result.bundle?.agents[0].ragChunks[0]).not.toHaveProperty('vector');
     });
 
+    it('rejects unsafe material paths before accepting the bundle', () => {
+      const result = parseBundleText(
+        JSON.stringify(
+          createBundle({
+            agents: [
+              createAssistantBundleAgent({
+                ragChunks: [{ fileName: '../secret.txt', content: '不要匯入' }],
+              }),
+            ],
+          }),
+        ),
+      );
+
+      expect(result.bundle).toBeNull();
+      expect(result.errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: 'missing-field',
+            message: expect.stringContaining('檔名不安全'),
+          }),
+        ]),
+      );
+    });
+
     it('rejects oversized individual values before accepting the bundle', () => {
       const result = parseBundleText(
         JSON.stringify(
@@ -395,6 +455,49 @@ describe('agentBundleService', () => {
         },
       });
       expect(imported.sizeBytes).toBe(estimateBundleSize(imported.bundle));
+    });
+  });
+
+  describe('previewAgentBundle', () => {
+    it('returns an untrusted, prompt-free preview without credentials for public bundles', () => {
+      const preview = previewAgentBundle(createBundle());
+
+      expect(preview).toMatchObject({
+        format: AGENT_BUNDLE_FORMAT,
+        schemaVersion: AGENT_BUNDLE_SCHEMA_VERSION,
+        name: 'STEM Team',
+        version: '1.0.0',
+        agentCount: 1,
+        materialCount: 1,
+        materialNames: ['algebra.md'],
+        hasProtectedCredentials: false,
+        trust: 'untrusted',
+      });
+      expect(preview.classification).toMatchObject({
+        kind: 'agent-bundle',
+        credentialsIncluded: false,
+        personalDataIncluded: false,
+        previewRequired: true,
+      });
+    });
+
+    it('marks encrypted provider settings as protected credentials', () => {
+      const bundle = createBundle({
+        manifest: { ...createBundle().manifest, schemaVersion: 2 as const },
+        encryptedProviderSettings: {
+          v: 1 as const,
+          algorithm: 'AES-GCM' as const,
+          kdf: { name: 'PBKDF2' as const, hash: 'SHA-256' as const, iterations: 100_000 },
+          salt: 'a'.repeat(22),
+          iv: 'b'.repeat(16),
+          ciphertext: 'c'.repeat(32),
+        },
+      });
+
+      const preview = previewAgentBundle(bundle);
+
+      expect(preview.hasProtectedCredentials).toBe(true);
+      expect(preview.classification.credentialsIncluded).toBe(true);
     });
   });
 

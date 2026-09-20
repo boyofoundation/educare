@@ -8,13 +8,20 @@ import { CryptoService } from './cryptoService';
 import {
   applyProviderSettingsPayload,
   buildProviderSettingsPayload,
+  buildLegacyProviderSettingsShareUrl,
+  buildProviderSettingsShareEntryUrl,
   buildProviderSettingsShareUrl,
   clearProviderSettingsShareFromUrl,
   decryptProviderSettingsPayload,
   encryptProviderSettingsPayload,
   extractProviderSettingsShareFromUrl,
   getProviderDisplayName,
+  getProviderSettingsTransferClassification,
   getShareableProviderSummary,
+  parseProviderSettingsShareFile,
+  PROVIDER_SETTINGS_SHARE_CIPHERTEXT_MAX_LENGTH,
+  PROVIDER_SETTINGS_SHARE_FILE_MAX_BYTES,
+  serializeProviderSettingsShareFile,
   validateProviderSettingsPayload,
   type SharedProviderSettingsPayload,
 } from './providerSettingsShareService';
@@ -27,6 +34,7 @@ vi.mock('./providerRegistry', () => ({
     enableProvider: vi.fn(),
     setActiveProvider: vi.fn(),
     getProvider: vi.fn(),
+    setSessionProviderConfig: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -253,28 +261,134 @@ describe('providerSettingsShareService', () => {
         }),
       ).toThrow('分享內容缺少 API 金鑰或端點網址');
     });
+
+    it('rejects malformed config field types without throwing a runtime TypeError', () => {
+      expect(() =>
+        validateProviderSettingsPayload({
+          ...buildPayload(),
+          config: { model: 42, apiKey: 'openai-key' },
+        } as unknown as SharedProviderSettingsPayload),
+      ).toThrow('分享內容缺少模型設定');
+
+      expect(() =>
+        validateProviderSettingsPayload({
+          ...buildPayload(),
+          config: { model: 'gpt-4o-mini', apiKey: 42 },
+        } as unknown as SharedProviderSettingsPayload),
+      ).toThrow('分享內容中的連線設定無效');
+    });
   });
 
   describe('URL helpers', () => {
-    it('builds, extracts, and clears the provider settings share param', () => {
+    it('builds a payload-free entry URL and preserves legacy URL reading', () => {
       const shareUrl = buildProviderSettingsShareUrl('encrypted-payload');
-      expect(shareUrl).toBe('http://localhost:3000/settings?ps=encrypted-payload');
+      expect(shareUrl).toBe('http://localhost:3000/settings?ps=file');
+      expect(buildProviderSettingsShareEntryUrl()).toBe(shareUrl);
+      expect(shareUrl).not.toContain('encrypted-payload');
 
-      window.history.replaceState({}, '', shareUrl);
+      const legacyUrl = buildLegacyProviderSettingsShareUrl('encrypted-payload');
+      expect(legacyUrl).toBe('http://localhost:3000/settings?ps=encrypted-payload');
+
+      window.history.replaceState({}, '', legacyUrl);
       expect(extractProviderSettingsShareFromUrl()).toBe('encrypted-payload');
 
       clearProviderSettingsShareFromUrl();
       expect(extractProviderSettingsShareFromUrl()).toBeNull();
       expect(window.location.search).toBe('');
     });
+
+    it('serializes and validates encrypted settings files without exposing ciphertext in a URL', async () => {
+      const encryptedPayload = await encryptProviderSettingsPayload(
+        buildPayload(),
+        'test-password',
+      );
+      const fileText = serializeProviderSettingsShareFile(encryptedPayload);
+      expect(fileText).toContain('educare-provider-settings-share');
+      expect(parseProviderSettingsShareFile(fileText)).toBe(encryptedPayload);
+      expect(() => parseProviderSettingsShareFile('{"format":"wrong"}')).toThrow(
+        '分享檔案格式錯誤或內容已損毀',
+      );
+      expect(getProviderSettingsTransferClassification()).toMatchObject({
+        kind: 'provider-settings',
+        credentialsIncluded: true,
+        previewRequired: true,
+        trust: 'untrusted',
+      });
+    });
+
+    it('rejects oversized, extra-key, invalid-date, and oversized-ciphertext files before decrypt', async () => {
+      const encryptedPayload = await encryptProviderSettingsPayload(
+        buildPayload(),
+        'test-password',
+      );
+      const parsed = JSON.parse(serializeProviderSettingsShareFile(encryptedPayload)) as Record<
+        string,
+        unknown
+      >;
+
+      expect(() =>
+        parseProviderSettingsShareFile(JSON.stringify({ ...parsed, unexpected: true })),
+      ).toThrow('分享檔案格式錯誤或內容已損毀');
+      expect(() =>
+        parseProviderSettingsShareFile(JSON.stringify({ ...parsed, createdAt: 'not-a-date' })),
+      ).toThrow('分享檔案格式錯誤或內容已損毀');
+      expect(() =>
+        parseProviderSettingsShareFile('x'.repeat(PROVIDER_SETTINGS_SHARE_FILE_MAX_BYTES + 1)),
+      ).toThrow('分享檔案格式錯誤或內容已損毀');
+
+      const oversizedEnvelope = btoa(
+        JSON.stringify({
+          iv: 'abcdefghijklmnop',
+          salt: 'abcdefghijklmnopqrstuv',
+          data: 'a'.repeat(PROVIDER_SETTINGS_SHARE_CIPHERTEXT_MAX_LENGTH + 1),
+        }),
+      )
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/g, '');
+      const oversizedFile = JSON.stringify({ ...parsed, encryptedPayload: oversizedEnvelope });
+      expect(() => parseProviderSettingsShareFile(oversizedFile)).toThrow(
+        '分享檔案格式錯誤或內容已損毀',
+      );
+    });
   });
 
   describe('applyProviderSettingsPayload', () => {
-    it('updates provider settings, enables the provider, and initializes it', async () => {
+    it('keeps imported settings temporary by default', async () => {
+      await applyProviderSettingsPayload(buildPayload());
+
+      expect(providerManager.setSessionProviderConfig).toHaveBeenCalledWith('openai', {
+        model: 'gpt-4o-mini',
+        apiKey: 'openai-key',
+        baseUrl: 'https://api.openai.example/v1',
+      });
+      expect(providerManager.updateProviderConfig).not.toHaveBeenCalled();
+      expect(providerManager.enableProvider).not.toHaveBeenCalled();
+      expect(providerManager.setActiveProvider).not.toHaveBeenCalled();
+    });
+
+    it('fails closed instead of writing global settings when temporary storage is unavailable', async () => {
+      const manager = providerManager as unknown as Record<string, unknown>;
+      const original = manager.setSessionProviderConfig;
+      delete manager.setSessionProviderConfig;
+
+      try {
+        await expect(applyProviderSettingsPayload(buildPayload())).rejects.toThrow(
+          '目前環境不支援僅此分頁保存',
+        );
+        expect(providerManager.updateProviderConfig).not.toHaveBeenCalled();
+        expect(providerManager.enableProvider).not.toHaveBeenCalled();
+        expect(providerManager.setActiveProvider).not.toHaveBeenCalled();
+      } finally {
+        manager.setSessionProviderConfig = original;
+      }
+    });
+
+    it('updates provider settings, enables the provider, and initializes it when persistence is explicit', async () => {
       const initialize = vi.fn().mockResolvedValue(undefined);
       vi.mocked(providerManager.getProvider).mockReturnValue({ initialize } as never);
 
-      await applyProviderSettingsPayload(buildPayload());
+      await applyProviderSettingsPayload(buildPayload(), { persistence: 'persistent' });
 
       expect(providerManager.updateProviderConfig).toHaveBeenCalledWith('openai', {
         model: 'gpt-4o-mini',
@@ -296,7 +410,9 @@ describe('providerSettingsShareService', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       vi.mocked(providerManager.getProvider).mockReturnValue({ initialize } as never);
 
-      await expect(applyProviderSettingsPayload(buildPayload())).resolves.toBeUndefined();
+      await expect(
+        applyProviderSettingsPayload(buildPayload(), { persistence: 'persistent' }),
+      ).resolves.toBeUndefined();
 
       expect(providerManager.updateProviderConfig).toHaveBeenCalledWith('openai', {
         model: 'gpt-4o-mini',

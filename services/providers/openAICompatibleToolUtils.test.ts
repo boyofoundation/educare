@@ -6,6 +6,7 @@ import {
   DRAW_GEOMETRY_TOOL_NAME,
   DRAW_GEOMETRY_TOOL_SCHEMA,
 } from '../geometryToolService';
+import type { ProviderChatParams, ProviderRequestContext } from './providerRequest';
 
 const TOOL_DEFINITIONS = [
   {
@@ -129,6 +130,88 @@ describe('streamOpenAICompatibleChat', () => {
     expect(body.toolConfig).toBeUndefined();
     expect(body.allowedFunctionNames).toBeUndefined();
     expect(body.functionCallingConfig).toBeUndefined();
+  });
+
+  it('checks the request boundary before each nested tool-loop transport request', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: 'call-1',
+                    type: 'function',
+                    function: {
+                      name: 'search_docs',
+                      arguments: JSON.stringify({ query: 'budget' }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          choices: [{ message: { role: 'assistant', content: 'done' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+
+    const beforeProviderRequest = vi.fn((_context: ProviderRequestContext) => {
+      expect(fetchMock).toHaveBeenCalledTimes(beforeProviderRequest.mock.calls.length - 1);
+    });
+    const responses = [];
+    for await (const chunk of streamOpenAICompatibleChat({
+      endpoint: 'https://example.com/chat/completions',
+      headers: { Authorization: 'Bearer test' },
+      providerName: 'openai',
+      model: 'gpt-4o',
+      params: {
+        systemPrompt: 'You are helpful.',
+        history: [],
+        message: 'hello',
+        tools: [...TOOL_DEFINITIONS],
+        executeTool: vi.fn().mockResolvedValue({ ok: true }),
+        beforeProviderRequest,
+      } as ProviderChatParams,
+    })) {
+      responses.push(chunk);
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(beforeProviderRequest).toHaveBeenCalledTimes(2);
+    expect(beforeProviderRequest.mock.calls.map(([context]) => context)).toEqual([
+      { provider: 'openai', model: 'gpt-4o', requestType: 'initial', requestIndex: 0 },
+      {
+        provider: 'openai',
+        model: 'gpt-4o',
+        requestType: 'tool-round',
+        requestIndex: 1,
+        cumulativeUsage: {
+          source: 'api',
+          inputTokens: 1,
+          outputTokens: 1,
+          totalTokens: 2,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+        },
+      },
+    ]);
+    expect(responses.at(-1)?.metadata).toEqual(
+      expect.objectContaining({
+        promptTokenCount: 2,
+        candidatesTokenCount: 2,
+        usage: expect.objectContaining({ source: 'api', totalTokens: 4 }),
+      }),
+    );
   });
 
   it('prunes visible tools without forcing a tool call', async () => {
