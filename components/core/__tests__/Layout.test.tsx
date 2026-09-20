@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
 import React from 'react';
 
@@ -413,8 +413,9 @@ describe('Layout', () => {
         { timeout: 3000 },
       );
 
-      // 工作區工具常駐顯示，不需先展開任何摺疊區塊。
-      const entry = screen.getByRole('button', { name: '匯入協作包' });
+      // 工作區工具集中在 modal;側欄僅一個觸發鈕。
+      fireEvent.click(screen.getByRole('button', { name: '工作區' }));
+      const entry = await screen.findByRole('button', { name: '匯入協作包' });
       expect(entry).toBeInTheDocument();
       expect(entry).toHaveAttribute('type', 'button');
       await act(async () => {
@@ -422,7 +423,7 @@ describe('Layout', () => {
       });
     });
 
-    it('keeps workspace tools visible without an accordion step', async () => {
+    it('collects workspace tools behind one trigger and modal', async () => {
       render(
         <AppProvider>
           <SidebarStateSeed sessionCount={1} />
@@ -432,11 +433,43 @@ describe('Layout', () => {
         </AppProvider>,
       );
 
-      await screen.findByRole('region', { name: '工作區工具' });
-      expect(screen.getByText('工作區')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: '備課與練習' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: '資料管理' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: '匯入協作包' })).toBeInTheDocument();
+      const trigger = await screen.findByRole('button', { name: '工作區' });
+      expect(trigger).toHaveAttribute('aria-haspopup', 'dialog');
+      // 側欄本身不再直接渲染工具。
+      expect(screen.queryByRole('button', { name: '備課與練習' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '資料管理' })).not.toBeInTheDocument();
+
+      fireEvent.click(trigger);
+      const dialog = await screen.findByRole('dialog', { name: '工作區' });
+      expect(within(dialog).getByRole('button', { name: '備課與練習' })).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: '資料管理' })).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: '匯入協作包' })).toBeInTheDocument();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: '備課與練習' }));
+      expect(screen.queryByRole('dialog', { name: '工作區' })).not.toBeInTheDocument();
+    });
+
+    it('closes the workspace modal with Escape and restores focus to its trigger', async () => {
+      render(
+        <AppProvider>
+          <SidebarStateSeed sessionCount={1} />
+          <Layout>
+            <TestLayoutContent />
+          </Layout>
+        </AppProvider>,
+      );
+
+      const trigger = await screen.findByRole('button', { name: '工作區' });
+      trigger.focus();
+      fireEvent.click(trigger);
+      await screen.findByRole('dialog', { name: '工作區' });
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: '工作區' })).not.toBeInTheDocument();
+        expect(document.activeElement).toBe(trigger);
+      });
     });
 
     it('should render children content correctly', () => {

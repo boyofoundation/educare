@@ -299,7 +299,11 @@ async function openPractice(page: Page): Promise<void> {
     if (await menu.isVisible().catch(() => false)) {
       await menu.click();
     }
-    await page.getByRole('button', { name: '備課與練習', exact: true }).click();
+    const workspaceDialog = page.getByRole('dialog', { name: '工作區' });
+    await page.getByRole('button', { name: '工作區', exact: true }).click();
+    await expect(workspaceDialog).toBeVisible();
+    await workspaceDialog.getByRole('button', { name: '備課與練習', exact: true }).click();
+    await expect(workspaceDialog).toBeHidden();
   }
   await expect(workspace).toBeVisible();
   await expect(page.getByRole('button', { name: '產生題組預覽' })).toBeEnabled();

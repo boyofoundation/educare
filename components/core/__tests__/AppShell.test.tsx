@@ -414,8 +414,10 @@ afterEach(() => {
 });
 
 const expandWorkspaceTools = async (): Promise<void> => {
-  // 工作區工具常駐顯示，無摺疊步驟；等待區塊出現即可。
-  await screen.findByRole('region', { name: '工作區工具' });
+  // 工作區工具集中於 modal;點擊側欄觸發鈕後等待選單開啟。
+  const trigger = await screen.findByRole('button', { name: '工作區' });
+  fireEvent.click(trigger);
+  await screen.findByRole('dialog', { name: '工作區' });
 };
 
 describe('AppShell', () => {
@@ -426,6 +428,7 @@ describe('AppShell', () => {
       await expandWorkspaceTools();
       fireEvent.click(screen.getByRole('button', { name: '資料管理' }));
       expect(await screen.findByTestId('workspace-data-management')).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: '工作區' })).not.toBeInTheDocument();
       expect(screen.queryByText('新增您的第一個助理')).not.toBeInTheDocument();
       const readsBefore = vi.mocked(dbMock.getAllAssistants).mock.calls.length;
       fireEvent.click(screen.getByRole('button', { name: 'refresh imported workspace' }));
@@ -440,6 +443,7 @@ describe('AppShell', () => {
       await expandWorkspaceTools();
       fireEvent.click(screen.getByRole('button', { name: '備課與練習' }));
       expect(await screen.findByTestId('practice-workspace')).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: '工作區' })).not.toBeInTheDocument();
       expect(screen.queryByText('新增您的第一個助理')).not.toBeInTheDocument();
     });
 
@@ -450,6 +454,7 @@ describe('AppShell', () => {
       }));
       render(<AppShell />);
       await screen.findByTestId('shared-assistant');
+      expect(screen.queryByRole('button', { name: '工作區' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: '資料管理' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: '備課與練習' })).not.toBeInTheDocument();
     });

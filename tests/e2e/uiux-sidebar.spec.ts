@@ -161,10 +161,9 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
     const navigation = page.getByRole('navigation', { name: '主要導覽' });
     const conversationButtons = navigation.getByRole('button', { name: /^開啟聊天 / });
 
-    // AppData 完成後會自動續開最近對話;先等 boot 收斂(專案選擇器出現)再驗證結構,
-    // 避免對載入中的暫態斷言。
-    const projectButton = navigation.getByRole('button', { name: 'HTML Projects' });
-    await expect(projectButton).toBeVisible();
+    // AppData 完成後會自動續開最近對話;工作區工具現在集中在 modal，側欄只保留觸發鈕。
+    const workspaceTrigger = navigation.getByRole('button', { name: '工作區', exact: true });
+    await expect(workspaceTrigger).toBeVisible();
     await expect(conversationButtons).toHaveCount(6);
     await expect(navigation.getByText(sessionTitles[6], { exact: true })).toHaveCount(0);
     await expect(navigation.locator('button button')).toHaveCount(0);
@@ -172,13 +171,6 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
     await navigation.getByRole('button', { name: '顯示全部 8 個對話' }).click();
     await expect(conversationButtons).toHaveCount(8);
     await expect(navigation.getByText(sessionTitles[7], { exact: true })).toBeVisible();
-
-    await expect(navigation.getByRole('button', { name: '備課與練習' })).toBeVisible();
-    await expect(navigation.getByRole('button', { name: '資料管理' })).toBeVisible();
-    await expect(navigation.getByRole('button', { name: '匯入協作包' })).toBeVisible();
-    expect(
-      await contrastOf(navigation.getByRole('button', { name: '匯入協作包' })),
-    ).toBeGreaterThanOrEqual(4.5);
 
     await navigation.getByRole('button', { name: '管理助理' }).click();
     const managementMenu = navigation.locator('[aria-label="助理管理選單"]');
@@ -193,7 +185,7 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
       navigation.locator('.custom-select__trigger'),
       navigation.getByRole('button', { name: '搜尋助理、聊天與素材' }),
       navigation.getByRole('button', { name: `開啟聊天 ${sessionTitles[0]}` }),
-      navigation.locator('.sidebar-section-label').filter({ hasText: '工作區' }),
+      workspaceTrigger,
       navigation.getByRole('button', { name: '設定', exact: true }),
       managementMenu.getByRole('button', { name: '編輯助理' }),
     ]) {
@@ -202,8 +194,21 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
     const searchToggle = navigation.getByRole('button', { name: '搜尋助理、聊天與素材' });
     expect(await contrastOf(searchToggle, 'borderTopColor')).toBeGreaterThanOrEqual(3);
 
-    // 完全收起：側欄隱藏、只留浮動展開鈕，且展開鈕在淺色下對比足夠。
     await page.keyboard.press('Escape');
+    await workspaceTrigger.click();
+    const workspaceDialog = page.getByRole('dialog', { name: '工作區' });
+    await expect(workspaceDialog).toBeVisible();
+    const projectButton = workspaceDialog.getByRole('button', { name: 'HTML Projects' });
+    await expect(projectButton).toBeVisible();
+    for (const name of ['備課與練習', '資料管理', '匯入協作包']) {
+      await expect(workspaceDialog.getByRole('button', { name, exact: true })).toBeVisible();
+      expect(
+        await contrastOf(workspaceDialog.getByRole('button', { name, exact: true })),
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+    await workspaceDialog.getByRole('button', { name: '關閉對話框' }).click();
+
+    // 完全收起：側欄隱藏、只留浮動展開鈕，且展開鈕在淺色下對比足夠。
     const collapseToggle = navigation.getByRole('button', { name: '收折側邊欄' });
     await expectTouchTarget(collapseToggle);
     await collapseToggle.click();
@@ -244,13 +249,19 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
       '搜尋助理、聊天與素材',
       '新增聊天',
       '檢視 token 用量',
-      '備課與練習',
-      '資料管理',
-      '匯入協作包',
+      '工作區',
       '設定',
     ]) {
       await expectTouchTarget(navigation.getByRole('button', { name, exact: true }));
     }
+
+    await navigation.getByRole('button', { name: '工作區', exact: true }).click();
+    const workspaceDialog = page.getByRole('dialog', { name: '工作區' });
+    await expect(workspaceDialog).toBeVisible();
+    for (const name of ['備課與練習', '資料管理', '匯入協作包']) {
+      await expectTouchTarget(workspaceDialog.getByRole('button', { name, exact: true }));
+    }
+    await workspaceDialog.getByRole('button', { name: '關閉對話框' }).click();
     await expectNoHorizontalOverflow(page);
   });
 });

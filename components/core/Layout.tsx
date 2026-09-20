@@ -3,6 +3,7 @@ import { useAppContext } from './useAppContext';
 import { OfflineStatusBanner } from './OfflineStatusBanner';
 import { AssistantList } from '../assistant';
 import { ProjectPicker } from '../canvas';
+import Modal from '../ui/Modal';
 import { ChatIcon, TrashIcon, SettingsIcon, PlusIcon } from '../ui/Icons';
 import { ChatSession, SessionTokenUsage } from '../../types';
 import { useTursoAssistantStatus } from '../../hooks/useTursoAssistantStatus';
@@ -109,6 +110,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
   const [retrySessionAction, setRetrySessionAction] = useState<(() => void) | null>(null);
   const [showAllSessions, setShowAllSessions] = useState(false);
+  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [openSessionMenuId, setOpenSessionMenuId] = useState<string | null>(null);
   const sessionMenuRef = useRef<globalThis.HTMLDivElement | null>(null);
   const sessionMenuTriggerRef = useRef<globalThis.HTMLButtonElement | null>(null);
@@ -1036,85 +1038,46 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             )}
 
             <section className='sidebar-section sidebar-workspace mt-2 border-t border-gray-700/50 pt-2'>
-              <span className='sidebar-section-label block px-2 pb-1 text-sm font-semibold'>
-                工作區
-              </span>
-              <div
-                id='sidebar-workspace-tools'
-                className='mt-1 space-y-1'
-                role='region'
-                aria-label='工作區工具'
+              <button
+                type='button'
+                data-testid='sidebar-workspace-toggle'
+                onClick={() => setIsWorkspaceOpen(true)}
+                className='ui-control sidebar-tool-link flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-sm'
+                aria-haspopup='dialog'
+                aria-expanded={isWorkspaceOpen}
+                aria-label='工作區'
+                title='工作區'
               >
-                {state.currentAssistant &&
-                  state.currentSession &&
-                  !state.currentAssistant.mathToolsEnabled &&
-                  !state.currentAssistant.webSpeechToolsEnabled && (
-                    <ProjectPicker
-                      assistantId={state.currentAssistant.id}
-                      activeProjectId={state.activeProjectId}
-                      onCreateProject={async () => {
-                        await actions.createProjectForCurrentSession();
-                        closeDrawerIfMobile();
-                      }}
-                      onOpenProject={async projectId => {
-                        await actions.openProjectForCurrentSession(projectId);
-                        closeDrawerIfMobile();
-                      }}
-                      onRenameProject={actions.renameProjectForCurrentSession}
-                      onUploadProjectFiles={actions.uploadFilesToProjectForCurrentSession}
-                      onImportProjectZip={async file => {
-                        await actions.importProjectZipForCurrentSession(file);
-                        closeDrawerIfMobile();
-                      }}
-                      onDeleteProject={actions.deleteProjectForCurrentSession}
-                      variant='sidebar'
-                    />
-                  )}
-                {(
-                  [
-                    ['practice', '備課與練習', '習'],
-                    ['data_management', '資料管理', '存'],
-                  ] as const
-                ).map(([viewMode, label, abbreviation]) => (
-                  <button
-                    key={viewMode}
-                    type='button'
-                    onClick={() => requestNavigation({ viewMode })}
-                    className='ui-control sidebar-tool-link flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-sm'
-                    title={label}
-                    aria-label={label}
-                    aria-current={state.viewMode === viewMode ? 'page' : undefined}
-                  >
-                    <span aria-hidden='true' className='text-xs font-semibold'>
-                      {abbreviation}
-                    </span>
-                    <span>{label}</span>
-                  </button>
-                ))}
-                <button
-                  type='button'
-                  onClick={() => requestNavigation({ viewMode: 'bundle_import' })}
-                  className='sidebar-tool-link flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                  title='匯入協作包'
-                  aria-label='匯入協作包'
+                <svg
+                  className='h-4 w-4 flex-shrink-0'
+                  fill='none'
+                  stroke='currentColor'
+                  viewBox='0 0 24 24'
+                  aria-hidden='true'
                 >
-                  <svg
-                    className='h-4 w-4'
-                    fill='none'
-                    stroke='currentColor'
-                    viewBox='0 0 24 24'
-                    aria-hidden='true'
-                  >
-                    <path
-                      strokeLinecap='round'
-                      strokeLinejoin='round'
-                      strokeWidth={2}
-                      d='M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
-                    />
-                  </svg>
-                  <span>匯入協作包</span>
-                </button>
-              </div>
+                  <path
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    strokeWidth={2}
+                    d='M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
+                  />
+                </svg>
+                <span>工作區</span>
+                <svg
+                  className='ml-auto h-4 w-4 flex-shrink-0'
+                  fill='none'
+                  stroke='currentColor'
+                  viewBox='0 0 24 24'
+                  aria-hidden='true'
+                >
+                  <path
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    strokeWidth={2}
+                    d='M9 5l7 7-7 7'
+                  />
+                </svg>
+              </button>
             </section>
 
             {/* Settings stays persistent while secondary tools remain grouped above. */}
@@ -1154,6 +1117,94 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           </svg>
         </button>
       )}
+
+      {/* 工作區選單 modal — 側欄只留一個觸發鈕,工具集中於此。 */}
+      <Modal
+        isOpen={isWorkspaceOpen}
+        onClose={() => setIsWorkspaceOpen(false)}
+        title='工作區'
+        ariaLabel='工作區選單'
+      >
+        <div className='space-y-2' data-testid='workspace-tools'>
+          {state.currentAssistant &&
+            state.currentSession &&
+            !state.currentAssistant.mathToolsEnabled &&
+            !state.currentAssistant.webSpeechToolsEnabled && (
+              <ProjectPicker
+                assistantId={state.currentAssistant.id}
+                activeProjectId={state.activeProjectId}
+                onCreateProject={async () => {
+                  await actions.createProjectForCurrentSession();
+                  setIsWorkspaceOpen(false);
+                  closeDrawerIfMobile();
+                }}
+                onOpenProject={async projectId => {
+                  await actions.openProjectForCurrentSession(projectId);
+                  setIsWorkspaceOpen(false);
+                  closeDrawerIfMobile();
+                }}
+                onRenameProject={actions.renameProjectForCurrentSession}
+                onUploadProjectFiles={actions.uploadFilesToProjectForCurrentSession}
+                onImportProjectZip={async file => {
+                  await actions.importProjectZipForCurrentSession(file);
+                  setIsWorkspaceOpen(false);
+                  closeDrawerIfMobile();
+                }}
+                onDeleteProject={actions.deleteProjectForCurrentSession}
+                variant='sidebar'
+              />
+            )}
+          {(
+            [
+              ['practice', '備課與練習', '習'],
+              ['data_management', '資料管理', '存'],
+            ] as const
+          ).map(([viewMode, label, abbreviation]) => (
+            <button
+              key={viewMode}
+              type='button'
+              onClick={() => {
+                setIsWorkspaceOpen(false);
+                requestNavigation({ viewMode });
+              }}
+              className='ui-control flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm'
+              title={label}
+              aria-label={label}
+              aria-current={state.viewMode === viewMode ? 'page' : undefined}
+            >
+              <span aria-hidden='true' className='text-xs font-semibold'>
+                {abbreviation}
+              </span>
+              <span>{label}</span>
+            </button>
+          ))}
+          <button
+            type='button'
+            onClick={() => {
+              setIsWorkspaceOpen(false);
+              requestNavigation({ viewMode: 'bundle_import' });
+            }}
+            className='ui-control flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm'
+            title='匯入協作包'
+            aria-label='匯入協作包'
+          >
+            <svg
+              className='h-4 w-4 flex-shrink-0'
+              fill='none'
+              stroke='currentColor'
+              aria-hidden='true'
+            >
+              <path
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                strokeWidth={2}
+                d='M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
+              />
+            </svg>
+            <span>匯入協作包</span>
+          </button>
+        </div>
+      </Modal>
 
       {/* Main Content */}
       <main

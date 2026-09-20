@@ -46,7 +46,11 @@ async function openManagement(page: Page): Promise<void> {
   if (await menu.isVisible()) {
     await menu.click();
   }
-  await page.getByRole('button', { name: '資料管理', exact: true }).click();
+  const workspaceDialog = page.getByRole('dialog', { name: '工作區' });
+  await page.getByRole('button', { name: '工作區', exact: true }).click();
+  await expect(workspaceDialog).toBeVisible();
+  await workspaceDialog.getByRole('button', { name: '資料管理', exact: true }).click();
+  await expect(workspaceDialog).toBeHidden();
   await expect(page.getByRole('button', { name: '選擇工作區備份檔', exact: true })).toBeEnabled();
   const navigation = await page
     .getByRole('navigation', { name: '主要導覽', exact: true })
