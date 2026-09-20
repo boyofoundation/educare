@@ -38,6 +38,8 @@ export interface RAGFileUploadProps {
   ragChunks: RagChunk[];
   onRagChunksChange: (chunks: RagChunk[]) => void;
   disabled?: boolean;
+  /** Persistence is owned by the editor; this keeps the upload copy truthful. */
+  persistenceState?: 'idle' | 'saving' | 'saved' | 'error';
 }
 
 export type ViewMode = 'list' | 'edit' | 'new';

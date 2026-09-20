@@ -12,7 +12,7 @@ export interface AssistantTemplate {
   badgeColor: string;
 }
 
-const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
+export const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
   {
     id: 'tpl_english_teaching',
     name: '英文教學',
@@ -102,15 +102,22 @@ const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
 
 interface TemplateSelectorProps {
   onSelectTemplate: (template: AssistantTemplate) => void;
+  className?: string;
 }
 
-export const TemplateSelector: React.FC<TemplateSelectorProps> = ({ onSelectTemplate }) => {
+export const TemplateSelector: React.FC<TemplateSelectorProps> = ({
+  onSelectTemplate,
+  className,
+}) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const activeTemplate = ASSISTANT_TEMPLATES.find(t => t.id === selectedId);
 
   return (
-    <div className='mb-8 bg-gray-900/40 backdrop-blur-md border border-gray-700/40 rounded-2xl p-6 shadow-xl'>
+    <div
+      className={`mb-8 rounded-2xl border border-gray-700/40 bg-gray-900/40 p-6 shadow-xl backdrop-blur-md ${className ?? ''}`}
+      data-testid='template-selector'
+    >
       <div className='flex items-center justify-between mb-4'>
         <div>
           <h3 className='text-lg font-bold text-white flex items-center gap-2'>
@@ -131,8 +138,11 @@ export const TemplateSelector: React.FC<TemplateSelectorProps> = ({ onSelectTemp
           const isSelected = selectedId === template.id;
           return (
             <button
+              aria-pressed={isSelected}
+              aria-label={`${template.name}樣板${isSelected ? '（已選取）' : ''}`}
               key={template.id}
               onClick={() => setSelectedId(template.id)}
+              type='button'
               className={`group relative text-left flex flex-col justify-between p-5 rounded-xl border-2 bg-gradient-to-br ${template.gradient} ${template.borderGlow} transition-all duration-300 cursor-pointer transform hover:-translate-y-1 ${
                 isSelected
                   ? 'border-cyan-500 bg-gray-800/80 scale-[1.01]'
