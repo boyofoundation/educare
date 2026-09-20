@@ -1,6 +1,6 @@
 # 計畫二：功能改善，前端與本機資料優先
 
-狀態：待實作。接續 [UI／UX 計畫](./2026-09-20-uiux-plan.md) U1–U4；現況、基準測試與整體排程見[改善分析](./2026-09-20-improvement-assessment.md)。
+狀態：F1–F6 的 Agent 可執行實作與自動驗證已完成，結果與限制見[功能驗證紀錄](./2026-09-20-functionality-validation.md)。真人試用、教師標註、iOS／Android 實機與 VoiceOver 留待[改善回報](./2026-09-20-uiux-feedback.md)。以下「現況」與估時保留原規劃基準。接續 [UI／UX 計畫](./2026-09-20-uiux-plan.md) U1–U4；基準測試與整體排程見[改善分析](./2026-09-20-improvement-assessment.md)。
 
 ## 需求與技術取捨
 
@@ -104,4 +104,4 @@ Service Worker 需 secure context，安裝／啟用與更新有生命週期，�
 
 每項採最小可驗證提交，擴充既有 service／元件；新增模組限真正的新責任。資料改動先寫 fixture／遷移與故障恢復測試，再編碼；每項附風險和退回舊讀取路徑的方式。執行 typecheck、lint、受影響測試、全套測試與 build；格式只驗改動檔。新 E2E 採固定 fixture＋mock AI／網路攔截，避免需真實 key 才能跑 CI；另列選用供應商 smoke，不將 mock 成功當作七家供應商都已驗證。
 
-每一階段需證明「未設定 Turso 仍可完成核心流程」「無憑證混入一般輸出」「失敗可復原」。完全離線測試必須在 production preview、已準備資產後斷網重開，並記錄哪些第三方資源退化。資料遷移、金鑰暴露或預覽 sandbox 有未解失敗即停止該波放行。這些是後續實作驗收條件，並非本次文件 commit 已完成的功能。
+每一階段需證明「未設定 Turso 仍可完成核心流程」「無憑證混入一般輸出」「失敗可復原」。完全離線測試必須在 production preview、已準備資產後斷網重開，並記錄哪些第三方資源退化。資料遷移、金鑰暴露或預覽 sandbox 有未解失敗即停止該波放行。本次自動驗證包含 1,722 個單元測試及 61 個 headless E2E；精確範圍、效能數字、取消限制與未完成的真人驗收均以[功能驗證紀錄](./2026-09-20-functionality-validation.md)為準。

@@ -71,7 +71,10 @@ test.describe('UIUX integrated acceptance @final', () => {
     expect(await download.failure()).toBeNull();
     const archivePath = await download.path();
     expect(archivePath).not.toBeNull();
-    const importedContext = await browser.newContext({ viewport: MOBILE_VIEWPORT });
+    const importedContext = await browser.newContext({
+      viewport: MOBILE_VIEWPORT,
+      serviceWorkers: 'block',
+    });
     try {
       await importedContext.route('**/*', async route => {
         const request = route.request();
@@ -89,6 +92,10 @@ test.describe('UIUX integrated acceptance @final', () => {
       await importedPage.getByRole('button', { name: /匯入助理／協作包/ }).click();
       const importDialog = importedPage.getByRole('dialog', { name: '匯入助理或協作包' });
       await importDialog.locator('input[type="file"]').setInputFiles(archivePath!);
+      const preview = importedPage.getByRole('dialog', { name: '確認助理包內容' });
+      await expect(preview).toBeVisible();
+      await expect(preview).toContainText('來源尚未驗證');
+      await preview.getByRole('button', { name: '確認並匯入助理' }).click();
       await expect(importDialog).toBeHidden();
       await expect(importedPage.getByRole('main', { name: '聊天對話' })).toBeVisible();
       await expect(

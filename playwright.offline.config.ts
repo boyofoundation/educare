@@ -4,6 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: 'offline-*.spec.ts',
+  outputDir: 'test-results/offline',
   fullyParallel: false,
   workers: 1,
   forbidOnly: true,

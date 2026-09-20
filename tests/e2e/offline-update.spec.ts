@@ -109,6 +109,54 @@ test('N to N+1 waits for both tabs, retains old lazy chunks and local work', asy
   }
 });
 
+test('production update guard waits for the workspace run lease and flushes the latest draft', async ({
+  page,
+  context,
+}) => {
+  const fixture = await releaseServer();
+  try {
+    await seedLocalWork(page, fixture.url);
+    fixture.deploy('N1');
+    await requestUpdate(page);
+    await expect(page.getByLabel('離線與版本狀態')).toContainText('新版已下載');
+    await page.getByLabel('離線與版本狀態').click();
+    await page.evaluate(
+      () =>
+        new Promise<void>(resolve => {
+          void navigator.locks.request('agent-run-educare-local-workspace', async () => {
+            await new Promise<void>(release => {
+              Object.assign(window, { releaseFixtureRun: release });
+              resolve();
+            });
+          });
+        }),
+    );
+    await page.getByRole('button', { name: '已保存，套用更新' }).click();
+    await expect(
+      page.getByText('請先保存內容，並等待對話、匯入或作品寫入完成後再更新。'),
+    ).toBeVisible();
+    expect(await activeVersion(page)).toBe(fixture.version('N'));
+    await page.evaluate(() => {
+      (window as typeof window & { releaseFixtureRun: () => void }).releaseFixtureRun();
+    });
+    await page
+      .getByRole('textbox', { name: '輸入訊息', exact: true })
+      .fill('更新前最後一筆未送出草稿');
+    await page.getByRole('button', { name: '已保存，套用更新' }).click();
+    await expect(
+      page.getByText('更新已啟用；確認內容已保存後，可自行重新整理頁面。'),
+    ).toBeVisible();
+    await expect.poll(() => activeVersion(page)).toBe(fixture.version('N1'));
+    await page.reload();
+    await expect(page.getByRole('textbox', { name: '輸入訊息', exact: true })).toHaveValue(
+      '更新前最後一筆未送出草稿',
+    );
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
 for (const failure of ['network', 'quota'] as const) {
   test(`failed ${failure} candidate preserves previous offline release and data`, async ({
     page,

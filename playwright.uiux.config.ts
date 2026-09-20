@@ -10,6 +10,7 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: 'uiux-*.spec.ts',
+  outputDir: 'test-results/uiux',
   fullyParallel: false,
   workers: 1,
   forbidOnly: true,
@@ -21,6 +22,7 @@ export default defineConfig({
   reporter: [['list'], ['json', { outputFile: 'test-reports/uiux-results.json' }]],
   use: {
     headless: true,
+    serviceWorkers: 'block',
     baseURL: 'http://127.0.0.1:4178/educare/',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
@@ -35,9 +37,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'node ./node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4178',
+    command: 'node ./node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4178 --strictPort',
     url: 'http://127.0.0.1:4178/educare/',
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });
