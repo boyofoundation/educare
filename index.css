@@ -315,6 +315,7 @@ body {
 }
 
 .app-sidebar .sidebar-search-toggle,
+.app-sidebar .sidebar-tool-link,
 .app-sidebar .assistant-action--primary {
   border-width: 1px !important;
   border-style: solid !important;
@@ -331,6 +332,23 @@ body {
 .app-sidebar .sidebar-collapse-toggle:hover .sidebar-collapse-toggle__glyph {
   background: var(--nav-surface-hover) !important;
   color: var(--nav-text) !important;
+}
+
+/* 桌面收折後唯一的浮動展開鈕（在 app-shell 層，不在 .app-sidebar 內）。 */
+.sidebar-expand-toggle {
+  border-color: var(--nav-border-strong) !important;
+  background: var(--nav-surface) !important;
+  color: var(--nav-text-secondary) !important;
+}
+
+.sidebar-expand-toggle:hover {
+  border-color: var(--nav-accent) !important;
+  background: var(--nav-surface-hover) !important;
+  color: var(--nav-text) !important;
+}
+
+.sidebar-expand-toggle:focus-visible {
+  outline-color: var(--nav-focus);
 }
 
 .app-sidebar :where(.sidebar-primary-action, .assistant-avatar--selected),
@@ -772,10 +790,11 @@ body {
 }
 
 :root[data-theme='light'] #root :where([class~='bg-rose-500/10'], [class~='bg-rose-500/15']) {
+  /* WCAG 1.4.11：互動橫幅邊界需 ≥3:1 — 與表面混合而非透明，維持足夠邊界對比。 */
   border-color: color-mix(
     in srgb,
-    var(--appearance-danger) 45%,
-    var(--appearance-border)
+    var(--appearance-danger) 75%,
+    var(--appearance-surface)
   ) !important;
   background: color-mix(in srgb, var(--appearance-danger) 8%, var(--appearance-surface)) !important;
 }
@@ -783,14 +802,40 @@ body {
 :root[data-theme='light'] #root :where([class~='bg-amber-500/10']) {
   border-color: color-mix(
     in srgb,
-    var(--appearance-warning) 45%,
-    var(--appearance-border)
+    var(--appearance-warning) 75%,
+    var(--appearance-surface)
   ) !important;
   background: color-mix(
     in srgb,
     var(--appearance-warning) 10%,
     var(--appearance-surface)
   ) !important;
+}
+
+/* 淺色下警示橫幅內的動作按鈕：改為實心 warning 底 + 白字，邊界與文字對比充足。 */
+:root[data-theme='light'] #root :where([class~='bg-amber-500/10']) button {
+  border-color: var(--appearance-warning) !important;
+  background: var(--appearance-warning) !important;
+  color: #ffffff !important;
+}
+
+:root[data-theme='light'] #root :where([class~='bg-amber-500/10']) button:hover {
+  background: color-mix(in srgb, var(--appearance-warning) 88%, #000000) !important;
+}
+
+/* 淺色下可互動卡片（澄清問答、引用資料、執行設定）邊界需 ≥3:1（WCAG 1.4.11）。 */
+:root[data-theme='light']
+  #root
+  :where(
+    [data-testid='clarify-question-card'],
+    [data-testid='citation-list'],
+    .citation-item,
+    .agent-run-controls-shell,
+    [class~='border-gray-800'],
+    [class~='border-gray-800/60'],
+    [class~='border-gray-800/80']
+  ):not(button):not([role='button']) {
+  border-color: var(--appearance-border-strong) !important;
 }
 
 :root[data-theme='light'] [role='dialog'] [class~='border-gray-700'],
@@ -872,8 +917,8 @@ body {
   :where([data-testid='chat-input-guidance'], [data-testid='chat-draft-persistence-warning']) {
   border-color: color-mix(
     in srgb,
-    var(--appearance-warning) 45%,
-    var(--appearance-border)
+    var(--appearance-warning) 75%,
+    var(--appearance-surface)
   ) !important;
   background: color-mix(
     in srgb,
@@ -896,6 +941,19 @@ body {
   :where([data-testid='chat-input-guidance'], [data-testid='chat-draft-persistence-warning'])
   :where(span, button).text-amber-200 {
   color: var(--appearance-warning) !important;
+}
+
+/* 實心 warning 按鈕（設定 AI 服務商）:白字實底,覆蓋前述 amber 文字改色規則。 */
+:root[data-theme='light'] #root [data-testid='chat-input-guidance'] button,
+:root[data-theme='light'] #root [data-testid='chat-draft-persistence-warning'] button {
+  border-color: var(--appearance-warning) !important;
+  background: var(--appearance-warning) !important;
+  color: #ffffff !important;
+}
+
+:root[data-theme='light'] #root [data-testid='chat-input-guidance'] button:hover,
+:root[data-theme='light'] #root [data-testid='chat-draft-persistence-warning'] button:hover {
+  background: color-mix(in srgb, var(--appearance-warning) 88%, #000000) !important;
 }
 
 /* Code headers and citation metadata are spans/buttons, so the paragraph-only legacy
