@@ -52,7 +52,7 @@ pnpm exec playwright test -c playwright.uiux.config.ts
 
 ## Team、AGY 與清理
 
-`educare-functionality-78f2747a` 的 19 項 task 已終止；18 completed，歷史 task 7 的失敗由 task 8 接替並明確保留。四位 worker 的內容先整合，再封存 source／Team 狀態及 Git stash，才正常 shutdown；沒有由 shutdown 自動產生或合併 commit。四個 worker worktrees／panes 已移除，交付用 feature／UIUX archive branches 亦在合併驗證後清理；主分支原有未提交檔案未覆蓋。未合併且追蹤其他產品線的 `worktree-teacher-centered-ui-ux-redesign` 不屬於本次交付，保留以避免誤刪。
+`educare-functionality-78f2747a` 的 19 項 task 已終止；18 completed，歷史 task 7 的失敗由 task 8 接替並明確保留。四位 worker 的內容先整合，再封存 source／Team 狀態及 Git stash，才正常 shutdown；沒有由 shutdown 自動產生或合併 commit。四個 worker worktrees／panes 已移除，交付用 feature／UIUX archive branches 亦在合併驗證後清理；主分支原有未提交檔案未覆蓋。後續依使用者要求刪除未合併的本地 `worktree-teacher-centered-ui-ux-redesign`；其遠端追蹤 ref 未修改，完整本地 ref 已封存於 release backup bundle。
 
 AGY 嚴格使用 Gemini 3.8 Flash。F1 review 因 Git／Xcode 環境 exit 2 未完成；F3 review 因缺少規定結果／detached sentinel 而 exit 90。均未當成通過、未重試；改由 Codex 獨立審查及本機測試補足。Team／AGY 執行成功與產品驗收是不同證據。
 
