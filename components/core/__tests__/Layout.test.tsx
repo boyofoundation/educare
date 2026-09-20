@@ -295,24 +295,7 @@ describe('Layout', () => {
 
   // Helper to find the sidebar element by its data-testid on the sidebar div
   // The sidebar is the fixed div wrapping the AssistantList
-  const getSidebarDiv = () => {
-    const assistantList = screen.getByTestId('assistant-list');
-    // Walk up to the fixed sidebar container (has translate classes)
-    let el: HTMLElement | null = assistantList.parentElement;
-    while (el) {
-      if (
-        el.className &&
-        (el.className.includes('translate-x-0') ||
-          el.className.includes('-translate-x-full') ||
-          el.className.includes('fixed'))
-      ) {
-        return el;
-      }
-      el = el.parentElement;
-    }
-    // fallback: return direct parent
-    return assistantList.parentElement;
-  };
+  const getSidebarDiv = () => document.querySelector<HTMLElement>('.app-sidebar') as HTMLElement;
 
   describe('formatRelativeTime', () => {
     // 固定基準時間：2026-07-07 12:00:00（本地時區）
@@ -362,7 +345,7 @@ describe('Layout', () => {
       });
     });
 
-    it('should hide the brand wordmark when collapsed but keep the logo mark', async () => {
+    it('unmounts the sidebar contents entirely when collapsed', async () => {
       Object.defineProperty(window, 'innerWidth', {
         value: RESPONSIVE_BREAKPOINTS.desktop + 100,
         writable: true,
@@ -384,9 +367,10 @@ describe('Layout', () => {
       });
 
       await waitFor(() => {
+        // 完全收起：內容（品牌、logo、清單）全部卸載，不再只是 icon rail。
         expect(screen.queryByText('EduCare')).not.toBeInTheDocument();
-        // Logo mark（漸層 SVG）仍然存在
-        expect(document.querySelector('#educare-brand-gradient')).toBeInTheDocument();
+        expect(document.querySelector('#educare-brand-gradient')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('assistant-list')).not.toBeInTheDocument();
       });
     });
   });
@@ -429,17 +413,16 @@ describe('Layout', () => {
         { timeout: 3000 },
       );
 
-      fireEvent.click(screen.getByRole('button', { name: '工作區' }));
+      // 工作區工具常駐顯示，不需先展開任何摺疊區塊。
       const entry = screen.getByRole('button', { name: '匯入協作包' });
       expect(entry).toBeInTheDocument();
-      // Clicking must not throw and should be keyboard-focusable.
       expect(entry).toHaveAttribute('type', 'button');
       await act(async () => {
         fireEvent.click(entry);
       });
     });
 
-    it('keeps secondary workspace tools collapsed until requested', async () => {
+    it('keeps workspace tools visible without an accordion step', async () => {
       render(
         <AppProvider>
           <SidebarStateSeed sessionCount={1} />
@@ -449,14 +432,8 @@ describe('Layout', () => {
         </AppProvider>,
       );
 
-      const workspaceToggle = await screen.findByRole('button', { name: '工作區' });
-      expect(workspaceToggle).toHaveAttribute('aria-expanded', 'false');
-      expect(screen.queryByRole('button', { name: '備課與練習' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: '資料管理' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: '匯入協作包' })).not.toBeInTheDocument();
-
-      fireEvent.click(workspaceToggle);
-
+      await screen.findByRole('region', { name: '工作區工具' });
+      expect(screen.getByText('工作區')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '備課與練習' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '資料管理' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '匯入協作包' })).toBeInTheDocument();
@@ -963,12 +940,14 @@ describe('Layout', () => {
       });
 
       const toggle = screen.getByTestId('sidebar-collapse-toggle');
-      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
       expect(toggle).toHaveAccessibleName('收折側邊欄');
       expect(toggle).toHaveClass('h-11', 'w-11');
+      // Collapsed state has no floating expand button.
+      expect(screen.queryByTestId('sidebar-expand-toggle')).not.toBeInTheDocument();
     });
 
-    it('should collapse to icon rail (w-20 / pl-20) when toggle is clicked', async () => {
+    it('should collapse to fully hidden (w-0, no rail) with only the expand button left', async () => {
       Object.defineProperty(window, 'innerWidth', {
         value: RESPONSIVE_BREAKPOINTS.desktop + 100,
         writable: true,
@@ -990,13 +969,21 @@ describe('Layout', () => {
       });
 
       await waitFor(() => {
-        expect(getSidebarDiv()).toHaveClass('w-20');
-        expect(screen.getByRole('main')).toHaveClass('pl-20');
-        expect(toggle).toHaveAttribute('aria-expanded', 'false');
+        expect(getSidebarDiv()).toHaveClass('w-0');
+        // Main content reclaims the full width — no leftover rail padding.
+        expect(screen.getByRole('main')).not.toHaveClass('pl-20', 'pl-72');
+        // The collapsed sidebar contents are removed from the accessibility tree.
+        expect(getSidebarDiv()).toHaveAttribute('aria-hidden', 'true');
       });
+
+      const expandToggle = screen.getByTestId('sidebar-expand-toggle');
+      expect(expandToggle).toHaveAccessibleName('展開側邊欄');
+      expect(expandToggle).toHaveAttribute('aria-expanded', 'false');
+      // The in-sidebar collapse toggle disappears once collapsed.
+      expect(screen.queryByTestId('sidebar-collapse-toggle')).not.toBeInTheDocument();
     });
 
-    it('should expand back when toggle is clicked again (no dead-end)', async () => {
+    it('should expand back via the floating expand button (no dead-end)', async () => {
       Object.defineProperty(window, 'innerWidth', {
         value: RESPONSIVE_BREAKPOINTS.desktop + 100,
         writable: true,
@@ -1012,22 +999,21 @@ describe('Layout', () => {
         expect(getSidebarDiv()).toHaveClass('w-72');
       });
 
-      const toggle = screen.getByTestId('sidebar-collapse-toggle');
-
       await act(async () => {
-        fireEvent.click(toggle);
+        fireEvent.click(screen.getByTestId('sidebar-collapse-toggle'));
       });
       await waitFor(() => {
-        expect(getSidebarDiv()).toHaveClass('w-20');
+        expect(getSidebarDiv()).toHaveClass('w-0');
       });
 
       await act(async () => {
-        fireEvent.click(toggle);
+        fireEvent.click(screen.getByTestId('sidebar-expand-toggle'));
       });
       await waitFor(() => {
         expect(getSidebarDiv()).toHaveClass('w-72');
         expect(screen.getByRole('main')).toHaveClass('pl-72');
-        expect(toggle).toHaveAttribute('aria-expanded', 'true');
+        expect(getSidebarDiv()).not.toHaveAttribute('aria-hidden', 'true');
+        expect(screen.queryByTestId('sidebar-expand-toggle')).not.toBeInTheDocument();
       });
     });
 
@@ -1053,7 +1039,7 @@ describe('Layout', () => {
       });
 
       await waitFor(() => {
-        expect(getSidebarDiv()).toHaveClass('w-20');
+        expect(getSidebarDiv()).toHaveClass('w-0');
       });
 
       expect(window.localStorage.setItem).toHaveBeenCalledWith('sidebarCollapsed', 'true');
@@ -1204,8 +1190,9 @@ describe('Layout', () => {
         </AppProvider>,
       );
 
-      const conversationsToggle = await screen.findByRole('button', { name: '對話' });
-      expect(conversationsToggle).toHaveAttribute('aria-expanded', 'true');
+      // 對話清單為常駐區塊(無摺疊),直接顯示近期 6 個對話。
+      expect(await screen.findByRole('region', { name: '對話清單' })).toBeInTheDocument();
+      expect(screen.getByText('對話')).toBeInTheDocument();
       expect(screen.getAllByRole('button', { name: /開啟聊天 側欄對話/ })).toHaveLength(6);
 
       fireEvent.click(screen.getByRole('button', { name: '顯示全部 8 個對話' }));

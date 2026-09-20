@@ -414,11 +414,8 @@ afterEach(() => {
 });
 
 const expandWorkspaceTools = async (): Promise<void> => {
-  const workspaceToggle = await screen.findByRole('button', { name: '工作區' });
-  if (workspaceToggle.getAttribute('aria-expanded') !== 'true') {
-    fireEvent.click(workspaceToggle);
-  }
-  await waitFor(() => expect(workspaceToggle).toHaveAttribute('aria-expanded', 'true'));
+  // 工作區工具常駐顯示，無摺疊步驟；等待區塊出現即可。
+  await screen.findByRole('region', { name: '工作區工具' });
 };
 
 describe('AppShell', () => {

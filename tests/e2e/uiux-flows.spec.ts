@@ -486,34 +486,39 @@ test.describe('UIUX production flows @flows', () => {
     await expect(results).toContainText(TARGET_MESSAGE);
     await results.getByRole('button').click();
     await expect(page.getByRole('log', { name: '訊息列表' })).toContainText(TARGET_MESSAGE);
+    // 搜尋開啟不會改變 lastOpenedAt 排序;先展開全部對話讓目標列可見。
+    await page.getByRole('button', { name: '顯示全部 100 個對話' }).click();
+
+    const openRowMenu = async (title: string) => {
+      const row = page.locator('.session-row').filter({ hasText: title }).first();
+      await expect(row).toBeVisible();
+      await row.getByRole('button', { name: `對話選項 ${title}` }).click();
+      return row;
+    };
 
     const oldTitle = 'Lesson 073';
-    const targetRow = page.locator('div[role="button"]').filter({ hasText: oldTitle }).first();
-    await expect(targetRow).toBeVisible();
+    const targetRow = await openRowMenu(oldTitle);
     await targetRow.getByRole('button', { name: `重新命名聊天 ${oldTitle}` }).click();
     // While editing, the title lives in the input value, not row textContent.
     const renameInput = page.getByRole('textbox', { name: `重新命名聊天 ${oldTitle}` });
     await renameInput.fill(PINNED_TITLE);
     await renameInput.press('Enter');
-    const renamedRow = page.locator('div[role="button"]').filter({ hasText: PINNED_TITLE }).first();
+    const renamedRow = page.locator('.session-row').filter({ hasText: PINNED_TITLE }).first();
     await expect(renamedRow).toContainText(PINNED_TITLE);
 
-    const pinButton = renamedRow.getByRole('button', { name: `置頂 ${PINNED_TITLE}` });
-    await pinButton.click();
+    const pinMenuRow = await openRowMenu(PINNED_TITLE);
+    await pinMenuRow.getByRole('button', { name: `置頂 ${PINNED_TITLE}` }).click();
+    // 置頂後選單關閉;重新開啟應顯示「取消置頂」。
+    const unpinnedMenuRow = await openRowMenu(PINNED_TITLE);
     await expect(
-      renamedRow.getByRole('button', { name: `取消置頂 ${PINNED_TITLE}` }),
-    ).toHaveAttribute('aria-pressed', 'true');
+      unpinnedMenuRow.getByRole('button', { name: `取消置頂 ${PINNED_TITLE}` }),
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
 
     await page.reload({ waitUntil: 'domcontentloaded' });
-    const persistedRow = page
-      .locator('div[role="button"]')
-      .filter({ hasText: PINNED_TITLE })
-      .first();
+    const persistedRow = page.locator('.session-row').filter({ hasText: PINNED_TITLE }).first();
     await expect(persistedRow).toBeVisible();
-    await expect(
-      persistedRow.getByRole('button', { name: `取消置頂 ${PINNED_TITLE}` }),
-    ).toHaveAttribute('aria-pressed', 'true');
-    await persistedRow.getByText(PINNED_TITLE, { exact: true }).click();
+    await persistedRow.getByRole('button', { name: `開啟聊天 ${PINNED_TITLE}` }).click();
     await expect(page.getByRole('log', { name: '訊息列表' })).toContainText(TARGET_MESSAGE);
   });
 

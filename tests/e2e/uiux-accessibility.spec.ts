@@ -121,10 +121,16 @@ const assertEditorActions = async (page: Page, editor: Locator): Promise<void> =
 };
 
 const openAssistantEditor = async (page: Page): Promise<Locator> => {
-  const editButton = page.getByRole('button', { name: '編輯助理', exact: true });
-  if (!(await editButton.isVisible().catch(() => false))) {
-    await page.getByRole('button', { name: '開啟選單' }).click();
+  const menuButton = page.getByRole('button', { name: '開啟選單' });
+  if (await menuButton.isVisible().catch(() => false)) {
+    await menuButton.click();
   }
+  const navigation = page.getByRole('navigation', { name: '主要導覽' });
+  // 編輯助理位於「管理助理」下拉選單內（689c522 選單重構後）。
+  const manageButton = navigation.getByRole('button', { name: '管理助理' });
+  await expect(manageButton).toBeVisible();
+  await manageButton.click();
+  const editButton = navigation.getByRole('button', { name: '編輯助理', exact: true });
   await expect(editButton).toBeVisible();
   await editButton.click();
   const editor = page.getByTestId('assistant-editor');

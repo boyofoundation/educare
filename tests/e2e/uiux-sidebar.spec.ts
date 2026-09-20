@@ -151,7 +151,7 @@ const expectNoHorizontalOverflow = async (page: Page): Promise<void> => {
 };
 
 test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
-  test('keeps primary actions visible while progressively disclosing secondary tools', async ({
+  test('keeps primary actions visible with a flat menu and fully-hidden collapse', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 960 });
@@ -159,11 +159,12 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
     await seedSidebarWorkspace(page);
 
     const navigation = page.getByRole('navigation', { name: '主要導覽' });
-    const workspaceToggle = navigation.getByRole('button', { name: '工作區' });
     const conversationButtons = navigation.getByRole('button', { name: /^開啟聊天 / });
 
-    await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(navigation.getByRole('button', { name: 'HTML Projects' })).toHaveCount(0);
+    // AppData 完成後會自動續開最近對話;先等 boot 收斂(專案選擇器出現)再驗證結構,
+    // 避免對載入中的暫態斷言。
+    const projectButton = navigation.getByRole('button', { name: 'HTML Projects' });
+    await expect(projectButton).toBeVisible();
     await expect(conversationButtons).toHaveCount(6);
     await expect(navigation.getByText(sessionTitles[6], { exact: true })).toHaveCount(0);
     await expect(navigation.locator('button button')).toHaveCount(0);
@@ -172,17 +173,13 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
     await expect(conversationButtons).toHaveCount(8);
     await expect(navigation.getByText(sessionTitles[7], { exact: true })).toBeVisible();
 
-    await workspaceToggle.click();
-    await expect(workspaceToggle).toHaveAttribute('aria-expanded', 'true');
-    const projectButton = navigation.getByRole('button', { name: 'HTML Projects' });
-    await expect(projectButton).toBeVisible();
     await expect(navigation.getByRole('button', { name: '備課與練習' })).toBeVisible();
     await expect(navigation.getByRole('button', { name: '資料管理' })).toBeVisible();
     await expect(navigation.getByRole('button', { name: '匯入協作包' })).toBeVisible();
-    expect(await contrastOf(projectButton)).toBeGreaterThanOrEqual(4.5);
+    expect(
+      await contrastOf(navigation.getByRole('button', { name: '匯入協作包' })),
+    ).toBeGreaterThanOrEqual(4.5);
 
-    await workspaceToggle.click();
-    await expect(navigation.getByRole('button', { name: '編輯助理' })).toHaveCount(0);
     await navigation.getByRole('button', { name: '管理助理' }).click();
     const managementMenu = navigation.locator('[aria-label="助理管理選單"]');
     await expect(managementMenu.getByRole('button', { name: '編輯助理' })).toBeVisible();
@@ -196,7 +193,7 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
       navigation.locator('.custom-select__trigger'),
       navigation.getByRole('button', { name: '搜尋助理、聊天與素材' }),
       navigation.getByRole('button', { name: `開啟聊天 ${sessionTitles[0]}` }),
-      workspaceToggle,
+      navigation.locator('.sidebar-section-label').filter({ hasText: '工作區' }),
       navigation.getByRole('button', { name: '設定', exact: true }),
       managementMenu.getByRole('button', { name: '編輯助理' }),
     ]) {
@@ -205,15 +202,25 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
     const searchToggle = navigation.getByRole('button', { name: '搜尋助理、聊天與素材' });
     expect(await contrastOf(searchToggle, 'borderTopColor')).toBeGreaterThanOrEqual(3);
 
+    // 完全收起：側欄隱藏、只留浮動展開鈕，且展開鈕在淺色下對比足夠。
     await page.keyboard.press('Escape');
     const collapseToggle = navigation.getByRole('button', { name: '收折側邊欄' });
     await expectTouchTarget(collapseToggle);
     await collapseToggle.click();
-    await expect(collapseToggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(navigation.getByRole('button', { name: /^開啟聊天 / })).toHaveCount(5);
+
+    const expandToggle = page.getByTestId('sidebar-expand-toggle');
+    await expect(expandToggle).toBeVisible();
+    await expect(expandToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(await contrastOf(expandToggle)).toBeGreaterThanOrEqual(3);
+    await expect(page.locator('.app-sidebar')).toHaveClass(/w-0/);
+    await expect(navigation.getByRole('button', { name: /^開啟聊天 / })).toHaveCount(0);
     await expect(navigation.getByRole('button', { name: '管理助理' })).toHaveCount(0);
-    await expect(navigation.getByRole('button', { name: '工作區' })).toHaveCount(0);
-    await expect(navigation.getByRole('button', { name: '設定', exact: true })).toBeVisible();
+    await expect(navigation.getByRole('button', { name: '設定', exact: true })).toHaveCount(0);
+
+    await expectTouchTarget(expandToggle);
+    await expandToggle.click();
+    await expect(navigation.getByRole('button', { name: /^開啟聊天 / })).toHaveCount(8);
+    await expect(page.locator('.app-sidebar')).toHaveClass(/w-72/);
   });
 
   test('keeps the mobile drawer readable, operable, and within the viewport', async ({ page }) => {
@@ -236,19 +243,14 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
       '管理助理',
       '搜尋助理、聊天與素材',
       '新增聊天',
-      '對話',
-      '工作區',
+      '檢視 token 用量',
+      '備課與練習',
+      '資料管理',
+      '匯入協作包',
       '設定',
     ]) {
       await expectTouchTarget(navigation.getByRole('button', { name, exact: true }));
     }
-
-    expect(await contrastOf(navigation.locator('.sidebar-brand__title'))).toBeGreaterThanOrEqual(
-      4.5,
-    );
-    expect(
-      await contrastOf(navigation.getByRole('button', { name: '搜尋助理、聊天與素材' })),
-    ).toBeGreaterThanOrEqual(4.5);
     await expectNoHorizontalOverflow(page);
   });
 });
