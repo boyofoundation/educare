@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetGitServiceForTesting,
   __setFsInstanceForTesting,
@@ -14,6 +14,7 @@ import { HtmlProjectPathValidationError } from './htmlProjectStore';
  */
 describe('htmlProjectStore file ops (LightningFS-backed, US-002)', () => {
   let counter = 0;
+  let fsInstance: Awaited<ReturnType<typeof createIsolatedFs>>;
   const uniqueId = () => `store-files-${Date.now()}-${counter++}`;
 
   // 不清除 idb:projects/todos store 共用一個 fake-indexeddb DB,
@@ -21,7 +22,8 @@ describe('htmlProjectStore file ops (LightningFS-backed, US-002)', () => {
   // (deleteDatabase 會因既有開啟連線阻塞而 hang,故不使用。)
   beforeEach(async () => {
     __resetGitServiceForTesting();
-    __setFsInstanceForTesting(await createIsolatedFs(uniqueId()));
+    fsInstance = await createIsolatedFs(uniqueId());
+    __setFsInstanceForTesting(fsInstance);
   });
 
   afterEach(() => {
@@ -35,6 +37,35 @@ describe('htmlProjectStore file ops (LightningFS-backed, US-002)', () => {
       name: 'Test Project',
       entryFile: '/index.html',
     });
+
+  it('awaits the LightningFS superblock flush after a file batch completes', async () => {
+    const project = await createProject();
+    let releaseFlush!: () => void;
+    let markFlushStarted!: () => void;
+    const flushStarted = new Promise<void>(resolve => {
+      markFlushStarted = resolve;
+    });
+    const flushGate = new Promise<void>(resolve => {
+      releaseFlush = resolve;
+    });
+    vi.spyOn(fsInstance.promises, 'flush').mockImplementation(async () => {
+      markFlushStarted();
+      await flushGate;
+    });
+
+    let resolved = false;
+    const write = htmlProjectStore
+      .writeFiles(project.id, [{ path: '/index.html', kind: 'html', content: '<html></html>' }])
+      .then(() => {
+        resolved = true;
+      });
+
+    await flushStarted;
+    expect(resolved).toBe(false);
+    releaseFlush();
+    await write;
+    expect(resolved).toBe(true);
+  });
 
   it('writeFiles → readFile: 內容 roundtrip + size 為位元組數', async () => {
     const project = await createProject();

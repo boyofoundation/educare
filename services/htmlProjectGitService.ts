@@ -29,6 +29,7 @@ type FsInstance = {
     ): Promise<void>;
     readFile(filepath: string): Promise<Uint8Array>;
     readFile(filepath: string, options: 'utf8' | { encoding: 'utf8' }): Promise<string>;
+    flush(): Promise<void>;
     unlink(filepath: string): Promise<void>;
     rename(oldFilepath: string, newFilepath: string): Promise<void>;
     stat(
@@ -108,6 +109,17 @@ async function getFs(): Promise<FsInstance> {
 /** 測試專用:注入隔離的 FS 實例 (獨立 name/避免 IndexedDB 跨測試污染)。 */
 export function __setFsInstanceForTesting(fs: FsInstance | null): void {
   FS_CACHE.fs = fs ? Promise.resolve(fs) : null;
+}
+
+/**
+ * Flush the LightningFS superblock after a logical write batch. Mutating
+ * operations schedule a debounced superblock write, so callers that finish a
+ * user-visible save/migration boundary must await this explicitly before a
+ * reload can observe the complete tree.
+ */
+export async function flush(): Promise<void> {
+  const fs = await getFs();
+  await fs.promises.flush();
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -398,6 +410,7 @@ export async function commitAll(
   const hasChanges = toAdd.length > 0 || toDelete.length > 0;
 
   if (!hasChanges && !allowEmpty) {
+    await promises.flush();
     return null;
   }
 
@@ -411,7 +424,7 @@ export async function commitAll(
   if (!hasChanges && allowEmpty && headOid) {
     // 以 HEAD tree 建立空 commit (run-start 快照邊界)
     const headCommit = await git.readCommit({ fs: fs as AnyFs, dir, gitdir, oid: headOid });
-    return git.commit({
+    const oid = await git.commit({
       fs: fs as AnyFs,
       dir,
       gitdir,
@@ -420,9 +433,19 @@ export async function commitAll(
       tree: headCommit.commit.tree,
       parent: [headOid],
     });
+    await promises.flush();
+    return oid;
   }
 
-  return git.commit({ fs: fs as AnyFs, dir, gitdir, message: builtMessage, ...identity });
+  const oid = await git.commit({
+    fs: fs as AnyFs,
+    dir,
+    gitdir,
+    message: builtMessage,
+    ...identity,
+  });
+  await promises.flush();
+  return oid;
 }
 
 /** 收集 commit tree 的 path → blob oid (供 content-based 變更比對;排除 .git/.educare)。 */
@@ -929,9 +952,13 @@ export async function deleteProjectDir(projectId: string): Promise<void> {
   const promises = fs.promises;
   const dir = dirFor(projectId);
   if (!(await pathExists(promises, dir))) {
+    // A previous deletion may have removed the cached tree before its flush
+    // failed. Flush again on retry so the absent directory is durable too.
+    await promises.flush();
     return;
   }
   await removeAllRecursive(promises, dir);
+  await promises.flush();
 }
 
 async function removeAllRecursive(promises: FsInstance['promises'], target: string): Promise<void> {

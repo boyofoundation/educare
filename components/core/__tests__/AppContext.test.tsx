@@ -888,6 +888,30 @@ describe('AppContext', () => {
       });
     });
 
+    it('keeps the assistant available when project cleanup fails', async () => {
+      testEnvironment.confirmSpy.mockReturnValue(true);
+      vi.mocked(htmlProjectStore.deleteProjectsByAssistant).mockRejectedValueOnce(
+        new Error('Project flush failed'),
+      );
+      let deleteAssistant!: (assistantId: string) => Promise<void>;
+      function DeleteHarness() {
+        deleteAssistant = useAppContext().actions.deleteAssistant;
+        return <TestConsumer />;
+      }
+      render(
+        <AppProvider>
+          <DeleteHarness />
+        </AppProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('is-loading')).toHaveTextContent('false'));
+
+      await act(async () => {
+        await expect(deleteAssistant('test-assistant-1')).rejects.toThrow('Project flush failed');
+      });
+
+      expect(mockDb.deleteAssistant).not.toHaveBeenCalled();
+    });
+
     it('should cancel assistant deletion when not confirmed', async () => {
       testEnvironment.confirmSpy.mockReturnValue(false);
 
@@ -1342,6 +1366,7 @@ describe('AppContext', () => {
         ...TEST_ASSISTANTS.withRag,
         id: 'test-assistant-2',
         name: 'Target Assistant',
+        createdAt: TEST_ASSISTANTS.basic.createdAt - 1,
       };
       const targetSession = {
         ...TEST_SESSIONS.withMessages,
@@ -1416,6 +1441,7 @@ describe('AppContext', () => {
         ...TEST_ASSISTANTS.withRag,
         id: 'test-assistant-2',
         name: 'Material Assistant',
+        createdAt: TEST_ASSISTANTS.basic.createdAt - 1,
       };
       mockDb.getAllAssistants.mockResolvedValue([TEST_ASSISTANTS.basic, targetAssistant]);
       mockDb.getAssistant.mockImplementation(async assistantId =>
@@ -1451,6 +1477,7 @@ describe('AppContext', () => {
       const targetAssistant = {
         ...TEST_ASSISTANTS.withRag,
         id: 'test-assistant-2',
+        createdAt: TEST_ASSISTANTS.basic.createdAt - 1,
       };
       mockDb.getAllAssistants.mockResolvedValue([TEST_ASSISTANTS.basic, targetAssistant]);
       mockDb.getAssistant.mockImplementation(async assistantId =>

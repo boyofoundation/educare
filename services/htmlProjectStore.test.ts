@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetGitServiceForTesting,
   __setFsInstanceForTesting,
   createIsolatedFs,
 } from './htmlProjectGitService';
 import { htmlProjectStore, HtmlProjectPathValidationError } from './htmlProjectStore';
+import * as gitService from './htmlProjectGitService';
 
 /**
  * htmlProjectStore 核心測試 (US-002/003):專案 CRUD、normalizePath 驗證、
@@ -199,6 +200,21 @@ describe('htmlProjectStore (project CRUD + path validation + todos)', () => {
     it('deleteProject 拒絕非擁有者', async () => {
       const project = await htmlProjectStore.createProject({ assistantId: 'a1', name: 'p' });
       await expect(htmlProjectStore.deleteProject(project.id, 'a2')).rejects.toThrow(/not found/i);
+    });
+
+    it('deleteProject: storage cleanup failure rejects and preserves project metadata', async () => {
+      const project = await htmlProjectStore.createProject({ assistantId: 'a1', name: 'p' });
+      const cleanupSpy = vi
+        .spyOn(gitService, 'deleteProjectDir')
+        .mockRejectedValue(new Error('flush failed'));
+      try {
+        await expect(htmlProjectStore.deleteProject(project.id, 'a1')).rejects.toThrow(
+          'flush failed',
+        );
+        expect(await htmlProjectStore.getProject(project.id)).toEqual(project);
+      } finally {
+        cleanupSpy.mockRestore();
+      }
     });
 
     it('deleteProjectsByAssistant:刪除該助理所有專案', async () => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetGitServiceForTesting,
   __setFsInstanceForTesting,
@@ -43,6 +43,46 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
   afterEach(() => {
     __resetGitServiceForTesting();
     __setFsInstanceForTesting(null);
+  });
+
+  it('awaits the LightningFS superblock flush before commitAll resolves', async () => {
+    const projectId = 'proj-flush';
+    await ensureRepo(projectId);
+    let releaseFlush!: () => void;
+    let markFlushStarted!: () => void;
+    const flushStarted = new Promise<void>(resolve => {
+      markFlushStarted = resolve;
+    });
+    const flushGate = new Promise<void>(resolve => {
+      releaseFlush = resolve;
+    });
+    vi.spyOn(fsInstance.promises, 'flush').mockImplementation(async () => {
+      markFlushStarted();
+      await flushGate;
+    });
+
+    await writeProjectFile(projectId, 'index.html', '<html></html>');
+    let resolved = false;
+    const commit = commitAll(projectId, 'Initial', { previewVersion: 1 }).then(() => {
+      resolved = true;
+    });
+
+    await flushStarted;
+    expect(resolved).toBe(false);
+    releaseFlush();
+    await commit;
+    expect(resolved).toBe(true);
+  });
+
+  it('propagates a LightningFS superblock flush failure', async () => {
+    const projectId = 'proj-flush-error';
+    await ensureRepo(projectId);
+    vi.spyOn(fsInstance.promises, 'flush').mockRejectedValue(new Error('flush failed'));
+
+    await writeProjectFile(projectId, 'index.html', '<html></html>');
+    await expect(commitAll(projectId, 'Initial', { previewVersion: 1 })).rejects.toThrow(
+      'flush failed',
+    );
   });
 
   it('init → write → commitAll → log → restoreCommitTree 全鏈路 (unborn HEAD)', async () => {
@@ -307,6 +347,52 @@ describe('htmlProjectGitService (Phase 1 spike)', () => {
     expect(oid).toBeTruthy();
     const commits = await log(projectId);
     expect(commits).toHaveLength(1); // 舊歷史已清除,只剩新 commit
+  });
+
+  it('awaits the LightningFS flush before deleteProjectDir resolves', async () => {
+    const projectId = 'proj-delete-flush';
+    await ensureRepo(projectId);
+    await writeProjectFile(projectId, 'index.html', '<html></html>');
+    await commitAll(projectId, 'Initial', { previewVersion: 1 });
+
+    let releaseFlush!: () => void;
+    let markFlushStarted!: () => void;
+    const flushStarted = new Promise<void>(resolve => {
+      markFlushStarted = resolve;
+    });
+    const flushGate = new Promise<void>(resolve => {
+      releaseFlush = resolve;
+    });
+    vi.spyOn(fsInstance.promises, 'flush').mockImplementation(async () => {
+      markFlushStarted();
+      await flushGate;
+    });
+
+    let resolved = false;
+    const deletion = deleteProjectDir(projectId).then(() => {
+      resolved = true;
+    });
+
+    await flushStarted;
+    expect(resolved).toBe(false);
+    releaseFlush();
+    await deletion;
+    expect(resolved).toBe(true);
+  });
+
+  it('propagates flush failure, then durably succeeds on deleteProjectDir retry', async () => {
+    const projectId = 'proj-delete-flush-error';
+    await ensureRepo(projectId);
+    await writeProjectFile(projectId, 'index.html', '<html></html>');
+    await commitAll(projectId, 'Initial', { previewVersion: 1 });
+    const flushSpy = vi
+      .spyOn(fsInstance.promises, 'flush')
+      .mockRejectedValueOnce(new Error('flush failed'))
+      .mockResolvedValue(undefined);
+
+    await expect(deleteProjectDir(projectId)).rejects.toThrow('flush failed');
+    await expect(deleteProjectDir(projectId)).resolves.toBeUndefined();
+    expect(flushSpy).toHaveBeenCalledTimes(2);
   });
 
   it('commit timestamp: 呼叫端傳毫秒,log() 回傳正確毫秒 (Bug 1 regression)', async () => {

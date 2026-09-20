@@ -626,6 +626,7 @@ class HtmlProjectStore {
     }
 
     await gitService.writeMeta(projectId, meta);
+    await gitService.flush();
 
     const nextProject: HtmlProject = {
       ...project,
@@ -680,6 +681,7 @@ class HtmlProjectStore {
       updatedAt: timestamp,
     };
     await gitService.writeMeta(projectId, meta);
+    await gitService.flush();
 
     const assetPaths = new Set(project.assetPaths);
     if (sourceMeta.kind === 'asset') {
@@ -733,6 +735,7 @@ class HtmlProjectStore {
     meta[normalizedDestinationPath] = { ...sourceMeta, updatedAt: timestamp };
     delete meta[normalizedSourcePath];
     await gitService.writeMeta(projectId, meta);
+    await gitService.flush();
 
     const assetPaths = new Set(project.assetPaths);
     if (sourceMeta.kind === 'asset') {
@@ -877,6 +880,7 @@ class HtmlProjectStore {
     await gitService.deleteProjectFile(projectId, normalizedPath);
     delete meta[normalizedPath];
     await gitService.writeMeta(projectId, meta);
+    await gitService.flush();
 
     const nextProject: HtmlProject = {
       ...project,
@@ -1338,6 +1342,12 @@ class HtmlProjectStore {
 
   private async deleteProjectRecords(projectId: string): Promise<void> {
     const db = await getDb();
+
+    // Delete the durable file tree first. If LightningFS cleanup or its
+    // superblock flush fails, retain all IndexedDB records so a later retry
+    // can finish cleanup instead of leaving an unreachable project record.
+    await gitService.deleteProjectDir(projectId);
+
     const files = await db.getAllFromIndex(PROJECT_FILES_STORE, 'by-project', projectId);
     for (const file of files) {
       await db.delete(PROJECT_FILES_STORE, [projectId, file.path]);
@@ -1354,12 +1364,6 @@ class HtmlProjectStore {
     }
 
     await db.delete(PROJECTS_STORE, projectId);
-
-    // D9: 遞迴刪除 LightningFS 專案目錄 (含 .git 歷史與 base64 assets)。
-    // 與 deleteProject / deleteProjectsByAssistant 共用此路徑,確保刪助理時不留殘留。
-    await gitService.deleteProjectDir(projectId).catch(error => {
-      console.warn(`[htmlProjectStore] deleteProjectDir failed for ${projectId}:`, error);
-    });
   }
 
   async deleteProject(projectId: string, assistantId: string): Promise<HtmlProject> {

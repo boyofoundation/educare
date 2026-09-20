@@ -466,11 +466,12 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
     async (assistantId: string) => {
       if (window.confirm('確定要刪除此助理和所有聊天記錄嗎？')) {
         const deletedSessions = await db.getSessionsForAssistant(assistantId);
+        // Retain the assistant as a retry entry point if durable project cleanup fails.
+        await htmlProjectStore.deleteProjectsByAssistant(assistantId);
         await db.deleteAssistant(assistantId);
         await Promise.all(
           deletedSessions.map(session => deleteRunCheckpointsForSession(session.id)),
         );
-        await htmlProjectStore.deleteProjectsByAssistant(assistantId);
         dispatch({ type: 'DELETE_ASSISTANT', payload: assistantId });
 
         if (state.currentAssistant?.id === assistantId) {
