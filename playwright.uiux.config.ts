@@ -20,6 +20,7 @@ export default defineConfig({
   },
   reporter: [['list'], ['json', { outputFile: 'test-reports/uiux-results.json' }]],
   use: {
+    headless: true,
     baseURL: 'http://127.0.0.1:4178/educare/',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

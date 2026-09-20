@@ -160,7 +160,8 @@ export default [
       '.vite/**',
       'public/js/pdf.worker.js',
       'playwright-report/**',
-      '.codex/**'
+      '.codex/**',
+      '.omx/**'
     ],
   },
 ]
