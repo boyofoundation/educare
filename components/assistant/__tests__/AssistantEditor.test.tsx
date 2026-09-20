@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
 import { AssistantEditor } from '../AssistantEditor';
 import { TEST_ASSISTANTS, TEST_RAG_CHUNKS, setupAssistantTestEnvironment } from './test-utils';
 import type { Assistant, RagChunk } from '../../../types';
@@ -359,6 +360,92 @@ describe('AssistantEditor', () => {
       ),
     );
     expect(screen.getByLabelText('助理名稱')).toHaveValue('保留草稿');
+  });
+
+  it('keeps the saved status when the parent replaces the saved assistant object', async () => {
+    const parentReplacement = vi.fn();
+    let resolveSave: (() => void) | undefined;
+    const ParentHarness = () => {
+      const [currentAssistant, setCurrentAssistant] = useState<Assistant>({
+        ...TEST_ASSISTANTS.basic,
+        isPinned: true,
+        category: '教學',
+      });
+
+      return (
+        <AssistantEditor
+          {...props}
+          assistant={currentAssistant}
+          onSave={savedAssistant =>
+            new Promise<void>(resolve => {
+              resolveSave = () => {
+                resolve();
+                window.setTimeout(() => {
+                  setCurrentAssistant({ ...savedAssistant });
+                  parentReplacement();
+                }, 0);
+              };
+            })
+          }
+        />
+      );
+    };
+
+    render(<ParentHarness />);
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), {
+      target: { value: '更新後的助理' },
+    });
+    fireEvent.click(screen.getByTestId('save-button'));
+
+    expect(await screen.findByTestId('assistant-save-status')).toHaveTextContent('正在保存助理…');
+    resolveSave?.();
+    await waitFor(() => expect(parentReplacement).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-save-status')).toHaveTextContent('已保存於這台裝置。');
+    });
+    expect(screen.getByLabelText('助理名稱')).toHaveValue('更新後的助理');
+  });
+
+  it('resets the saved status when an external update changes the same assistant', async () => {
+    const { rerender } = render(<AssistantEditor {...props} assistant={TEST_ASSISTANTS.basic} />);
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: '已保存名稱' } });
+    fireEvent.click(screen.getByTestId('save-button'));
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-save-status')).toHaveTextContent('已保存於這台裝置。');
+    });
+
+    rerender(
+      <AssistantEditor {...props} assistant={{ ...TEST_ASSISTANTS.basic, name: '外部更新名稱' }} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText('已保存於這台裝置。')).not.toBeInTheDocument();
+    });
+    expect(screen.getByLabelText('助理名稱')).toHaveValue('外部更新名稱');
+  });
+
+  it('resets the saved status when switching to a different assistant', async () => {
+    const { rerender } = render(<AssistantEditor {...props} assistant={TEST_ASSISTANTS.basic} />);
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: '已保存名稱' } });
+    fireEvent.click(screen.getByTestId('save-button'));
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-save-status')).toHaveTextContent('已保存於這台裝置。');
+    });
+
+    rerender(
+      <AssistantEditor
+        {...props}
+        assistant={{ ...TEST_ASSISTANTS.basic, id: 'different-assistant', name: '另一個助理' }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText('已保存於這台裝置。')).not.toBeInTheDocument();
+    });
+    expect(screen.getByLabelText('助理名稱')).toHaveValue('另一個助理');
   });
 
   it('requires confirmation before a template replaces an edited draft', () => {

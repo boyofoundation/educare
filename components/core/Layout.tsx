@@ -600,7 +600,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             <button
               ref={drawerCloseButtonRef}
               onClick={() => actions.setSidebarOpen(false)}
-              className='p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 flex-shrink-0'
+              className='flex min-h-11 min-w-11 items-center justify-center p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 flex-shrink-0'
               aria-label='關閉選單'
               title='關閉選單'
             >
@@ -1196,7 +1196,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
               <button
                 ref={drawerTriggerRef}
                 onClick={() => actions.setSidebarOpen(true)}
-                className='mr-3 flex-shrink-0 rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-700/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                className='mr-3 flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-700/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
                 aria-label='開啟選單'
                 aria-expanded={state.isSidebarOpen}
                 aria-haspopup='true'

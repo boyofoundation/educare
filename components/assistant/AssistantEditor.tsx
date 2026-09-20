@@ -31,6 +31,11 @@ const MAX_STARTER_PROMPTS = 4;
 const MAX_STARTER_PROMPT_LENGTH = 100;
 const DEFAULT_SYSTEM_PROMPT = '您是一個有用且專業的 AI 助理。';
 
+type SaveSnapshot = {
+  assistantId: string;
+  signature: string;
+};
+
 const signatureForAssistant = (value: Assistant): string =>
   JSON.stringify({
     id: value.id,
@@ -83,6 +88,8 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   const hydratedAssistantIdRef = useRef<string | null | undefined>(undefined);
   const isHydratedRef = useRef(false);
   const initialSignatureRef = useRef<string | null>(null);
+  const pendingSaveRef = useRef<SaveSnapshot | null>(null);
+  const lastSavedAssistantRef = useRef<SaveSnapshot | null>(null);
 
   if (hydratedAssistantIdRef.current !== (assistant?.id ?? null)) {
     hydratedAssistantIdRef.current = assistant?.id ?? null;
@@ -156,7 +163,24 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
           webSpeechToolsEnabled: false,
           routableAssistantIds: [],
         };
-    initialSignatureRef.current = signatureForAssistant(baseline);
+    const baselineSignature = signatureForAssistant(baseline);
+    const incomingAssistantId = assistant?.id ?? null;
+    const expectedSave = pendingSaveRef.current ?? lastSavedAssistantRef.current;
+    const isExpectedSaveUpdate =
+      expectedSave?.assistantId === incomingAssistantId &&
+      expectedSave.signature === baselineSignature;
+    const isPendingSaveUpdate =
+      pendingSaveRef.current?.assistantId === incomingAssistantId &&
+      pendingSaveRef.current?.signature === baselineSignature;
+
+    if (!isExpectedSaveUpdate) {
+      pendingSaveRef.current = null;
+      lastSavedAssistantRef.current = null;
+    }
+
+    if (!isPendingSaveUpdate) {
+      initialSignatureRef.current = baselineSignature;
+    }
 
     if (assistant) {
       setName(assistant.name);
@@ -183,10 +207,14 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
     }
     setAdvancedOpen(Boolean(assistant));
     setPendingTemplate(null);
-    setSaveStatus('idle');
-    setSaveError(null);
-    setPersistenceState(assistant?.ragChunks?.length ? 'saved' : 'idle');
-    onSaveStatusChange?.('idle');
+    if (!isExpectedSaveUpdate) {
+      setSaveStatus('idle');
+      setSaveError(null);
+      onSaveStatusChange?.('idle');
+    }
+    if (!isPendingSaveUpdate) {
+      setPersistenceState(assistant?.ragChunks?.length ? 'saved' : 'idle');
+    }
     isHydratedRef.current = true;
   }, [assistant, onSaveStatusChange]);
 
@@ -328,6 +356,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
     setSaveError(null);
     updateSaveStatus('saving');
     setPersistenceState('saving');
+    let saveSnapshot: SaveSnapshot | null = null;
     try {
       const assistantId = assistant?.id || `asst_${Date.now()}`;
       const newAssistant: Assistant = {
@@ -344,12 +373,34 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         webSpeechToolsEnabled,
         routableAssistantIds,
       };
+      saveSnapshot = {
+        assistantId,
+        signature: signatureForAssistant(newAssistant),
+      };
+      pendingSaveRef.current = saveSnapshot;
+      lastSavedAssistantRef.current = null;
 
       await onSave(newAssistant);
-      initialSignatureRef.current = signatureForAssistant(newAssistant);
+      const currentAssistantId = hydratedAssistantIdRef.current ?? null;
+      const originalAssistantId = assistant?.id ?? null;
+      const saveIsStillCurrent =
+        pendingSaveRef.current === saveSnapshot &&
+        (currentAssistantId === originalAssistantId ||
+          currentAssistantId === saveSnapshot.assistantId);
+      if (!saveIsStillCurrent) {
+        return;
+      }
+
+      pendingSaveRef.current = null;
+      lastSavedAssistantRef.current = saveSnapshot;
+      initialSignatureRef.current = saveSnapshot.signature;
       setPersistenceState('saved');
       updateSaveStatus('saved');
     } catch (error) {
+      if (saveSnapshot && pendingSaveRef.current === saveSnapshot) {
+        pendingSaveRef.current = null;
+        lastSavedAssistantRef.current = null;
+      }
       const message = error instanceof Error ? error.message : '未知錯誤';
       setSaveError(`保存失敗：${message}。內容仍保留在表單中，請重試。`);
       setPersistenceState('error');
