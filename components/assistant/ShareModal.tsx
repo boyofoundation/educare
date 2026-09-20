@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Assistant } from '../../types';
+import { downloadAssistantPackage } from '../../services/assistantPackageService';
 import { saveAssistantToTurso } from '../../services/tursoService';
 import { generateShortUrl, buildShortUrl } from '../../services/shortUrlService';
+import Modal from '../ui/Modal';
 
 interface ShareModalProps {
   isOpen: boolean;
@@ -9,18 +11,66 @@ interface ShareModalProps {
   assistant: Assistant;
 }
 
+type ShareStatus = {
+  type: 'success' | 'error' | 'info';
+  message: string;
+};
+
+/**
+ * 分享助理設定。檔案匯出是本機優先的主要路徑；雲端連結仍保留為
+ * 選用功能，但不會在開啟對話框時自動寫入 Turso 或阻擋檔案匯出。
+ */
 export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assistant }) => {
   const [shareUrl, setShareUrl] = useState('');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const [useShortUrl, setUseShortUrl] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [shareStatus, setShareStatus] = useState<{
-    type: 'success' | 'error' | 'info';
-    message: string;
-  } | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportedFileName, setExportedFileName] = useState('');
+  const [shareStatus, setShareStatus] = useState<ShareStatus | null>(null);
   const isGeneratingRef = useRef(false);
 
-  const generateShareLink = useCallback(async () => {
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    setShareUrl('');
+    setQrCodeDataUrl('');
+    setUseShortUrl(false);
+    setIsGenerating(false);
+    setIsExporting(false);
+    setExportedFileName('');
+    setShareStatus(null);
+    isGeneratingRef.current = false;
+  }, [assistant.id, isOpen]);
+
+  const handleExportFile = useCallback(() => {
+    if (isExporting) {
+      return;
+    }
+
+    setIsExporting(true);
+    setShareStatus(null);
+    try {
+      const result = downloadAssistantPackage(assistant);
+      setExportedFileName(result.fileName);
+      setShareStatus({
+        type: 'success',
+        message: `已匯出 ${result.fileName}。檔案包含助理設定與已解析教材，不包含聊天紀錄、服務商設定或 API 金鑰。`,
+      });
+    } catch (error) {
+      console.error('匯出助理檔案失敗:', error);
+      setShareStatus({
+        type: 'error',
+        message: `匯出失敗，請保留此對話框並重試：${error instanceof Error ? error.message : '未知錯誤'}`,
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  }, [assistant, isExporting]);
+
+  const generateCloudShareLink = useCallback(async () => {
     if (isGeneratingRef.current) {
       return;
     }
@@ -47,23 +97,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
       let url = `${window.location.origin}${baseUrl}?share=${assistant.id}`;
 
       if (useShortUrl) {
-        try {
-          const shortCode = await generateShortUrl(assistant.id);
-          url = buildShortUrl(shortCode);
-          setShareStatus({
-            type: 'success',
-            message: '短網址生成成功！',
-          });
-        } catch (error) {
-          console.error('Failed to generate short URL:', error);
-          setShareStatus({
-            type: 'error',
-            message: `短網址生成失敗：${error instanceof Error ? error.message : String(error)}`,
-          });
-        }
+        const shortCode = await generateShortUrl(assistant.id);
+        url = buildShortUrl(shortCode);
       }
-
-      setShareUrl(url);
 
       const { default: QRCode } = await import('qrcode');
       const qrDataUrl = await QRCode.toDataURL(url, {
@@ -74,17 +110,18 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
           light: '#ffffff',
         },
       });
-      setQrCodeDataUrl(qrDataUrl);
 
+      setShareUrl(url);
+      setQrCodeDataUrl(qrDataUrl);
       setShareStatus({
         type: 'success',
-        message: '分享連結生成成功！',
+        message: '選用的雲端分享連結已生成。連結需要 Turso；助理檔案仍可離線傳遞。',
       });
     } catch (error) {
-      console.error('生成分享連結失敗:', error);
+      console.error('生成雲端分享連結失敗:', error);
       setShareStatus({
         type: 'error',
-        message: `生成分享連結失敗，請檢查 Turso 配置並稍後再試。錯誤: ${error instanceof Error ? error.message : String(error)}`,
+        message: `雲端分享連結生成失敗；助理檔案仍可直接匯出。${error instanceof Error ? ` ${error.message}` : ''}`,
       });
     } finally {
       isGeneratingRef.current = false;
@@ -105,13 +142,16 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
   ]);
 
   const handleCopyLink = async () => {
+    if (!shareUrl) {
+      return;
+    }
+
     try {
       await navigator.clipboard.writeText(shareUrl);
       setShareStatus({
         type: 'success',
-        message: '連結已複製到剪貼簿！',
+        message: '雲端分享連結已複製到剪貼簿。',
       });
-      setTimeout(() => setShareStatus(null), 3000);
     } catch {
       setShareStatus({
         type: 'error',
@@ -120,129 +160,155 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
     }
   };
 
-  const handleDownloadQR = () => {
+  const handleDownloadQr = () => {
+    if (!qrCodeDataUrl) {
+      return;
+    }
+
     const link = document.createElement('a');
     link.download = `${assistant.name}-share-qr.png`;
     link.href = qrCodeDataUrl;
     link.click();
   };
 
-  useEffect(() => {
-    if (isOpen && assistant) {
-      generateShareLink();
-    }
-
-    return () => {
-      isGeneratingRef.current = false;
-    };
-  }, [assistant, generateShareLink, isOpen]);
-
-  if (!isOpen) {
-    return null;
-  }
-
   return (
-    <div
-      data-testid='share-modal'
-      className='fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm'
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title='分享助理'
+      closeButtonLabel='關閉'
+      size='wide'
+      className='border border-gray-700/50 bg-gradient-to-br from-gray-800 to-gray-900'
     >
-      <div className='max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-gray-700/50 bg-gradient-to-br from-gray-800 to-gray-900 p-8 shadow-2xl'>
-        <div className='mb-6 flex items-center justify-between'>
-          <div>
-            <h2 className='mb-1 text-2xl font-bold text-white'>分享助理</h2>
-            <p className='text-gray-300'>
-              分享 <span className='font-medium text-cyan-400'>{assistant.name}</span> 給其他人使用
-            </p>
-          </div>
-          <button
-            data-testid='close-share-modal'
-            onClick={onClose}
-            className='rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-700/50 hover:text-white'
-            aria-label='關閉'
-          >
-            <svg className='w-6 h-6' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-              <path
-                strokeLinecap='round'
-                strokeLinejoin='round'
-                strokeWidth={2}
-                d='M6 18L18 6M6 6l12 12'
-              />
-            </svg>
-          </button>
-        </div>
+      <div data-testid='share-modal' className='space-y-6 text-white'>
+        <p className='text-gray-300'>
+          分享 <span className='font-medium text-cyan-400'>{assistant.name}</span> 的可攜設定，先從
+          本機檔案開始，不需要先連線或設定 Turso。
+        </p>
 
-        {qrCodeDataUrl && (
-          <div className='mb-8 text-center'>
-            <div className='inline-block rounded-2xl bg-white p-4 shadow-lg'>
-              <img src={qrCodeDataUrl} alt='分享 QR Code' className='mx-auto h-64 w-64' />
+        <section
+          aria-labelledby='local-share-heading'
+          className='rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-5'
+        >
+          <div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
+            <div>
+              <h3 id='local-share-heading' className='text-lg font-semibold text-white'>
+                先匯出助理檔案
+              </h3>
+              <p className='mt-2 max-w-2xl text-sm leading-6 text-cyan-50/90'>
+                檔案包含助理設定與已解析教材，可用附件傳給其他人再匯入。聊天紀錄、服務商設定與 API
+                金鑰不會放進檔案。
+              </p>
             </div>
-            <p className='mt-3 text-sm text-gray-400'>掃描 QR Code 或複製下方連結</p>
-          </div>
-        )}
-
-        {assistant.routableAssistantIds?.length ? (
-          <p className='mb-4 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100'>
-            此助理設定了轉接目標。訪客端僅會看到同樣已分享的目標助理。
-          </p>
-        ) : null}
-
-        <div className='mb-6'>
-          <label className='mb-2 block text-sm font-medium text-gray-300'>分享連結</label>
-          <div className='flex gap-2'>
-            <input
-              type='text'
-              value={shareUrl}
-              readOnly
-              className='flex-1 rounded-xl border border-gray-600/50 bg-gray-700/50 px-4 py-3 font-mono text-sm text-white'
-            />
             <button
-              onClick={handleCopyLink}
-              className='flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-4 py-3 font-medium text-white transition-all duration-200 hover:from-cyan-500 hover:to-blue-500'
+              type='button'
+              onClick={handleExportFile}
+              disabled={isExporting}
+              className='inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-cyan-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-60'
             >
-              <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                <path
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  strokeWidth={2}
-                  d='M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z'
-                />
-              </svg>
-              複製
+              {isExporting ? '匯出中…' : '匯出助理檔案'}
             </button>
           </div>
-        </div>
+          {exportedFileName && (
+            <p
+              role='status'
+              className='mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100'
+            >
+              已準備下載：{exportedFileName}
+            </p>
+          )}
+        </section>
 
-        <div className='mb-6 rounded-xl bg-gray-700/30 p-6'>
-          <div className='mb-4 flex items-center space-x-3'>
+        <section
+          aria-labelledby='cloud-share-heading'
+          className='rounded-2xl border border-gray-700/60 bg-gray-900/45 p-5'
+        >
+          <div className='mb-4'>
+            <h3 id='cloud-share-heading' className='text-lg font-semibold text-white'>
+              選用：雲端分享連結
+            </h3>
+            <p className='mt-2 text-sm leading-6 text-gray-400'>
+              只有按下按鈕才會寫入 Turso。雲端連結只保存助理內容，不包含聊天紀錄、服務商設定或 API
+              金鑰；沒有 Turso 時請使用上方檔案匯出。
+            </p>
+          </div>
+
+          <label className='mb-4 flex items-start gap-3 rounded-xl border border-gray-700/70 bg-gray-800/60 p-4'>
             <input
               type='checkbox'
               id='useShortUrl'
               checked={useShortUrl}
               onChange={event => setUseShortUrl(event.target.checked)}
-              className='h-4 w-4 rounded text-purple-600 focus:ring-purple-500'
+              className='mt-1 h-4 w-4 rounded text-purple-600 focus:ring-purple-500'
             />
-            <label htmlFor='useShortUrl' className='font-medium text-white'>
-              🔗 使用短網址（更簡潔易分享）
-            </label>
-          </div>
-          <div className='rounded-lg border border-blue-500/20 bg-blue-500/10 p-3'>
-            <p className='text-xs text-blue-100'>
-              助理分享只包含助理內容與連結，不再附帶 API 金鑰或服務商設定。若要分享 provider
-              設定，請到「AI 服務商」頁面使用新的安全分享功能。
-            </p>
-          </div>
+            <span>
+              <span className='block font-medium text-white'>使用短網址（需要雲端服務）</span>
+              <span className='mt-1 block text-xs text-gray-400'>
+                短網址會額外呼叫雲端服務；關閉時使用一般分享連結。
+              </span>
+            </span>
+          </label>
+
           <button
-            onClick={generateShareLink}
+            type='button'
+            onClick={() => void generateCloudShareLink()}
             disabled={isGenerating}
-            className='mt-4 w-full rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 py-2 font-medium text-white transition-all duration-200 hover:from-purple-500 hover:to-pink-500 disabled:opacity-50'
+            className='w-full rounded-xl border border-purple-400/40 bg-purple-500/15 px-4 py-3 font-medium text-purple-100 transition hover:border-purple-300 hover:bg-purple-500/25 disabled:cursor-not-allowed disabled:opacity-60'
           >
-            {isGenerating ? '生成中...' : '重新生成分享連結'}
+            {isGenerating ? '生成中…' : shareUrl ? '重新生成雲端分享連結' : '建立雲端分享連結'}
           </button>
-        </div>
+
+          {qrCodeDataUrl && (
+            <div className='mt-6 space-y-5'>
+              <div className='text-center'>
+                <div className='inline-block rounded-2xl bg-white p-4 shadow-lg'>
+                  <img src={qrCodeDataUrl} alt='分享 QR Code' className='h-64 w-64' />
+                </div>
+                <p className='mt-3 text-sm text-gray-400'>掃描 QR Code 或複製下方雲端連結</p>
+              </div>
+
+              <div>
+                <label
+                  htmlFor='share-link'
+                  className='mb-2 block text-sm font-medium text-gray-300'
+                >
+                  分享連結
+                </label>
+                <div className='flex flex-col gap-2 sm:flex-row'>
+                  <input
+                    id='share-link'
+                    type='text'
+                    value={shareUrl}
+                    readOnly
+                    aria-label='分享連結'
+                    className='min-w-0 flex-1 rounded-xl border border-gray-600/50 bg-gray-700/50 px-4 py-3 font-mono text-sm text-white'
+                  />
+                  <button
+                    type='button'
+                    onClick={handleCopyLink}
+                    className='rounded-xl bg-cyan-600 px-4 py-3 font-medium text-white transition hover:bg-cyan-500'
+                  >
+                    複製連結
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type='button'
+                onClick={handleDownloadQr}
+                className='w-full rounded-xl bg-emerald-600 py-3 font-medium text-white transition hover:bg-emerald-500'
+              >
+                下載 QR Code
+              </button>
+            </div>
+          )}
+        </section>
 
         {shareStatus && (
           <div
-            className={`mb-6 rounded-xl border p-4 ${
+            role={shareStatus.type === 'error' ? 'alert' : 'status'}
+            aria-live='polite'
+            className={`rounded-xl border p-4 ${
               shareStatus.type === 'success'
                 ? 'border-green-600/30 bg-green-900/30 text-green-200'
                 : shareStatus.type === 'error'
@@ -250,41 +316,20 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, assista
                   : 'border-blue-600/30 bg-blue-900/30 text-blue-200'
             }`}
           >
-            <p className='flex items-center gap-2 text-sm'>
-              <span>
-                {shareStatus.type === 'success' && '✅'}
-                {shareStatus.type === 'error' && '❌'}
-                {shareStatus.type === 'info' && 'ℹ️'}
-              </span>
-              {shareStatus.message}
-            </p>
+            {shareStatus.message}
           </div>
         )}
 
-        <div className='flex gap-3'>
+        <div className='flex justify-end'>
           <button
-            onClick={handleDownloadQR}
-            disabled={!qrCodeDataUrl}
-            className='flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-green-600 to-emerald-600 py-3 font-medium text-white transition-all duration-200 hover:from-green-500 hover:to-emerald-500 disabled:opacity-50'
-          >
-            <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-              <path
-                strokeLinecap='round'
-                strokeLinejoin='round'
-                strokeWidth={2}
-                d='M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'
-              />
-            </svg>
-            下載 QR Code
-          </button>
-          <button
+            type='button'
             onClick={onClose}
-            className='flex-1 rounded-xl bg-gray-600 py-3 font-medium text-white transition-all duration-200 hover:bg-gray-500'
+            className='rounded-xl bg-gray-600 px-6 py-3 font-medium text-white transition hover:bg-gray-500'
           >
             關閉
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 };
