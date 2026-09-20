@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import {
   ChatMessage,
+  ClarifyRecord,
   ChatSession,
   GeometryBoardRecord,
   MessageAttachment,
@@ -117,4 +118,5 @@ export interface StreamingResponseProps {
   toolCallLog?: ToolCallRecord[];
   geometryBoards?: GeometryBoardRecord[];
   speechUtterances?: SpeechUtteranceRecord[];
+  clarifyRecords?: ClarifyRecord[];
 }
