@@ -8,7 +8,7 @@ import {
   loadAppearancePreferences,
   READING_FONT_SIZES,
   ReadingFontSize,
-  saveAppearancePreferences,
+  saveAppearancePreferencesAsync,
 } from '../../services/appearancePreferences';
 
 export interface AppearanceSettingsProps {
@@ -59,7 +59,7 @@ const AppearanceSettings: React.FC<AppearanceSettingsProps> = ({
     applyAppearancePreferences({ theme, fontSize, reducedMotion });
   }, [fontSize, reducedMotion, theme]);
 
-  const updatePreferences = (updates: Partial<AppearancePreferences>) => {
+  const updatePreferences = async (updates: Partial<AppearancePreferences>) => {
     const nextPreferences: AppearancePreferences = {
       ...preferences,
       ...updates,
@@ -70,24 +70,29 @@ const AppearanceSettings: React.FC<AppearanceSettingsProps> = ({
     }
 
     applyAppearancePreferences(nextPreferences);
-    const persisted = saveAppearancePreferences(
-      nextPreferences,
-      storage === undefined ? undefined : storage,
-    );
     onChange?.(nextPreferences);
-    setStatusMessage(persisted ? '外觀設定已儲存。' : '外觀設定已套用，但瀏覽器未允許保存偏好。');
+
+    try {
+      const persisted = await saveAppearancePreferencesAsync(
+        nextPreferences,
+        storage === undefined ? undefined : storage,
+      );
+      setStatusMessage(persisted ? '外觀設定已儲存。' : '外觀設定已套用，但瀏覽器未允許保存偏好。');
+    } catch {
+      setStatusMessage('外觀設定已套用，但瀏覽器未允許保存偏好。');
+    }
   };
 
   const handleThemeChange = (theme: AppearancePreferences['theme']) => {
-    updatePreferences({ theme });
+    void updatePreferences({ theme });
   };
 
   const handleFontSizeChange = (fontSize: ReadingFontSize) => {
-    updatePreferences({ fontSize });
+    void updatePreferences({ fontSize });
   };
 
   const handleReset = () => {
-    updatePreferences({ ...DEFAULT_APPEARANCE_PREFERENCES });
+    void updatePreferences({ ...DEFAULT_APPEARANCE_PREFERENCES });
   };
 
   return (
@@ -174,7 +179,7 @@ const AppearanceSettings: React.FC<AppearanceSettingsProps> = ({
             id='appearance-reduced-motion'
             type='checkbox'
             checked={preferences.reducedMotion}
-            onChange={event => updatePreferences({ reducedMotion: event.target.checked })}
+            onChange={event => void updatePreferences({ reducedMotion: event.target.checked })}
             data-testid='appearance-reduced-motion'
           />
           <span className='appearance-settings__option-copy'>

@@ -367,7 +367,11 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             ? '設定'
             : state.viewMode === 'provider_settings'
               ? 'AI 服務商'
-              : '專業助理';
+              : state.viewMode === 'data_management'
+                ? '資料管理'
+                : state.viewMode === 'practice'
+                  ? '備課與練習'
+                  : '專業助理';
 
   const currentSessionUsage = state.currentSession?.tokenUsage;
   const currentSessionTotals = currentSessionUsage?.totals;
@@ -1084,6 +1088,29 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
 
         {/* Settings */}
         <div className='mt-auto pt-3'>
+          {(
+            [
+              ['practice', '備課與練習', '習'],
+              ['data_management', '資料管理', '存'],
+            ] as const
+          ).map(([viewMode, label, abbreviation]) => (
+            <button
+              key={viewMode}
+              type='button'
+              onClick={() => requestNavigation({ viewMode })}
+              className={`ui-control mb-1 flex min-h-11 items-center gap-2 rounded-lg px-2 py-2 text-sm ${
+                collapsed ? 'mx-auto w-11 justify-center' : 'w-full'
+              }`}
+              title={label}
+              aria-label={label}
+              aria-current={state.viewMode === viewMode ? 'page' : undefined}
+            >
+              <span aria-hidden='true' className='text-xs'>
+                {abbreviation}
+              </span>
+              {!collapsed && <span>{label}</span>}
+            </button>
+          ))}
           <div
             className={`border-t border-gray-700/50 pt-2.5 ${collapsed ? 'flex justify-center' : ''}`}
           >
@@ -1246,7 +1273,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
         )}
 
         {/* Content Area */}
-        <div className='flex min-h-0 flex-1 overflow-hidden'>{children}</div>
+        <div className='relative flex min-h-0 min-w-0 flex-1 overflow-hidden'>{children}</div>
       </main>
     </div>
   );

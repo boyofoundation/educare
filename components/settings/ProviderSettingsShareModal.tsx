@@ -4,9 +4,10 @@ import type { ProviderSettings, ProviderType } from '../../services/llmAdapter';
 import { CryptoService } from '../../services/cryptoService';
 import {
   buildProviderSettingsPayload,
-  buildProviderSettingsShareUrl,
+  buildProviderSettingsShareEntryUrl,
   encryptProviderSettingsPayload,
   getProviderDisplayName,
+  serializeProviderSettingsShareFile,
 } from '../../services/providerSettingsShareService';
 
 interface ProviderSettingsShareModalProps {
@@ -27,15 +28,19 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
   const [selectedProvider, setSelectedProvider] = useState<ProviderType>(initialProvider);
   const [password, setPassword] = useState('');
   const [shareUrl, setShareUrl] = useState('');
+  const [shareFileContents, setShareFileContents] = useState('');
+  const [shareFileName, setShareFileName] = useState('');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const hasGeneratedShare = Boolean(shareUrl && qrCodeDataUrl);
+  const hasGeneratedShare = Boolean(shareUrl && shareFileContents && qrCodeDataUrl);
 
   const resetGeneratedShare = () => {
     setShareUrl('');
+    setShareFileContents('');
+    setShareFileName('');
     setQrCodeDataUrl('');
     setError(null);
     setSuccess(null);
@@ -46,6 +51,8 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
       setSelectedProvider(initialProvider);
       setPassword(CryptoService.generateRandomPassword());
       setShareUrl('');
+      setShareFileContents('');
+      setShareFileName('');
       setQrCodeDataUrl('');
       setError(null);
       setSuccess(null);
@@ -118,7 +125,8 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
     try {
       const payload = buildProviderSettingsPayload(settings, selectedProvider);
       const encryptedPayload = await encryptProviderSettingsPayload(payload, password);
-      const url = buildProviderSettingsShareUrl(encryptedPayload);
+      const url = buildProviderSettingsShareEntryUrl();
+      const fileContents = serializeProviderSettingsShareFile(encryptedPayload);
       const { default: QRCode } = await import('qrcode');
       const qr = await QRCode.toDataURL(url, {
         width: 512,
@@ -130,8 +138,10 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
       });
 
       setShareUrl(url);
+      setShareFileContents(fileContents);
+      setShareFileName(`${selectedProvider}-provider-settings.educare-share.json`);
       setQrCodeDataUrl(qr);
-      setSuccess('分享連結與 QR Code 已生成');
+      setSuccess('入口連結、QR Code 與加密檔案已準備完成');
     } catch (generateError) {
       console.error('Generate provider settings share failed:', generateError);
       setError(generateError instanceof Error ? generateError.message : '分享連結生成失敗');
@@ -151,6 +161,26 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
     link.click();
   };
 
+  const handleDownloadShareFile = () => {
+    if (!shareFileContents || !shareFileName) {
+      return;
+    }
+
+    const blob = new globalThis.Blob([shareFileContents], { type: 'application/json' });
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const link = document.createElement('a');
+      link.download = shareFileName;
+      link.href = objectUrl;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  };
+
   return (
     <Modal
       isOpen={isOpen}
@@ -168,7 +198,7 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
                   安全分享流程
                 </p>
                 <p className='mt-2 text-sm leading-6 text-cyan-50/95'>
-                  將目前的服務商設定加密成分享連結與 QR Code。接收者輸入密碼後即可預覽並套用。
+                  將目前的服務商設定加密成檔案。QR Code 只提供入口連結，不會把加密內容放進網址。
                 </p>
               </div>
               <div className='flex flex-wrap gap-2 text-xs text-cyan-50/85'>
@@ -363,8 +393,8 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
                 </h3>
                 <p className='mt-2 text-sm text-gray-400'>
                   {hasGeneratedShare
-                    ? '掃描 QR Code 或直接複製分享連結，將設定安全傳送給對方。'
-                    : '生成分享連結後，這裡會顯示 QR Code、連結與下載操作。'}
+                    ? '將入口連結（或 QR Code）與加密檔案分開傳送；接收者上傳檔案並輸入密碼後再預覽。'
+                    : '生成後會顯示不含 payload 的入口連結、QR Code 與加密檔案下載。'}
                 </p>
               </div>
               {hasGeneratedShare && (
@@ -409,6 +439,20 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
                   </div>
                 </div>
 
+                <div className='rounded-2xl border border-fuchsia-500/25 bg-fuchsia-500/10 p-4'>
+                  <p className='text-sm font-medium text-fuchsia-100'>加密設定檔（必要）</p>
+                  <p className='mt-1 text-xs leading-5 text-fuchsia-50/80'>
+                    入口連結不含設定內容。請下載並另外傳送此檔案，再用其他通道傳送解密密碼；不要把檔案內容貼到網址或第三方短網址。
+                  </p>
+                  <button
+                    type='button'
+                    onClick={handleDownloadShareFile}
+                    className='mt-3 rounded-2xl bg-fuchsia-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-fuchsia-500'
+                  >
+                    下載加密設定檔
+                  </button>
+                </div>
+
                 <div className='grid gap-3 sm:grid-cols-2'>
                   <button
                     type='button'
@@ -427,7 +471,7 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
                 </div>
 
                 <div className='rounded-2xl border border-cyan-500/20 bg-cyan-500/8 px-4 py-3 text-xs leading-6 text-cyan-50/85'>
-                  建議先傳送分享連結，再用其他通道傳送解密密碼；接收者解密後可先預覽，再決定是否套用設定。
+                  接收者解密後會先預覽；套用時預設只保存在目前分頁，不會默默寫入全域服務商設定。
                 </div>
               </div>
             ) : (
@@ -437,8 +481,8 @@ const ProviderSettingsShareModal: React.FC<ProviderSettingsShareModalProps> = ({
                 </div>
                 <p className='text-base font-medium text-white'>尚未生成分享內容</p>
                 <p className='mt-2 max-w-sm text-sm leading-6 text-gray-500'>
-                  選好要分享的服務商並設定密碼後，按下「生成分享連結」，右側就會立即顯示 QR Code
-                  與可複製的分享連結。
+                  選好要分享的服務商並設定密碼後，按下「生成分享連結」，右側會顯示不含設定內容的入口、QR
+                  Code 與加密檔案。
                 </p>
               </div>
             )}

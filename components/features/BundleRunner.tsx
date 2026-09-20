@@ -53,9 +53,16 @@ const toAssistant = (
     .map(route => route.toAgentId),
 });
 
+const stripEncryptedProviderSettings = (bundle: AgentBundle): AgentBundle => {
+  const publicBundle = { ...bundle };
+  delete publicBundle.encryptedProviderSettings;
+  return publicBundle;
+};
+
 const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBundle }) => {
   const { state, dispatch, actions } = useAppContext();
   const loadedBundleIdRef = useRef<string | null>(null);
+  const lifecycleTokenRef = useRef(0);
   const processedAutoHandoffsRef = useRef(new Set<string>());
   const [loadedBundle, setLoadedBundle] = useState<AgentBundle | null>(previewBundle ?? null);
   const [credentialAccess, setCredentialAccess] = useState<'pending' | 'bundle' | 'own'>('pending');
@@ -67,6 +74,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
   const [isEditing, setIsEditing] = useState(false);
   const [isProviderSetupOpen, setIsProviderSetupOpen] = useState(false);
   const bundleOverrideSourceRef = useRef<BundleProviderOverrideSource | null>(null);
+  const bundleOverrideOwnerTokenRef = useRef<number | null>(null);
 
   const clearCredentialState = useCallback(() => {
     setUnlockPassword('');
@@ -77,24 +85,31 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
 
   const clearBundleOverride = useCallback(async () => {
     const source = bundleOverrideSourceRef.current;
-    if (!source) {
+    const ownerToken = bundleOverrideOwnerTokenRef.current;
+    if (!source || ownerToken === null) {
       return;
     }
 
-    bundleOverrideSourceRef.current = null;
+    if (
+      bundleOverrideSourceRef.current === source &&
+      bundleOverrideOwnerTokenRef.current === ownerToken
+    ) {
+      bundleOverrideSourceRef.current = null;
+      bundleOverrideOwnerTokenRef.current = null;
+    }
     await providerManager.clearBundleProviderConfig(source);
   }, []);
 
   useEffect(() => {
+    lifecycleTokenRef.current += 1;
     loadedBundleIdRef.current = null;
     setCredentialAccess('pending');
     setIsEditing(false);
     setIsProviderSetupOpen(false);
     clearCredentialState();
-  }, [bundleId, clearCredentialState]);
 
-  useEffect(() => {
     return () => {
+      lifecycleTokenRef.current += 1;
       clearCredentialState();
       void clearBundleOverride();
     };
@@ -108,6 +123,8 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       return;
     }
 
+    const lifecycleToken = lifecycleTokenRef.current;
+    const isCurrentLifecycle = () => lifecycleToken === lifecycleTokenRef.current;
     loadedBundleIdRef.current = bundleId;
     processedAutoHandoffsRef.current.clear();
     dispatch({ type: 'SET_LOADING', payload: true });
@@ -118,6 +135,9 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       const record = previewBundle
         ? { id: bundleId, bundle: previewBundle, importedAt: Date.now(), sizeBytes: 0 }
         : await db.getBundle(bundleId);
+      if (!isCurrentLifecycle()) {
+        return;
+      }
       if (!record) {
         dispatch({ type: 'SET_ERROR', payload: '找不到協作包，請重新匯入後再開啟。' });
         return;
@@ -147,6 +167,9 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
               record.bundle.agents.map(agent => db.getSessionsForAssistant(agent.id)),
             )
           ).flat();
+      if (!isCurrentLifecycle()) {
+        return;
+      }
       const sessions = [
         ...new Map(storedSessions.map(session => [session.id, session])).values(),
       ].sort(
@@ -172,6 +195,9 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       if (!previewBundle) {
         await db.saveBundle({ ...record, lastOpenedAt: Date.now() });
       }
+      if (!isCurrentLifecycle()) {
+        return;
+      }
 
       dispatch({ type: 'SET_CURRENT_ASSISTANT', payload: assistant });
       dispatch({
@@ -183,7 +209,13 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       if (credentialAccess !== 'bundle') {
         try {
           await initializeProviders();
+          if (!isCurrentLifecycle()) {
+            return;
+          }
         } catch (error) {
+          if (!isCurrentLifecycle()) {
+            return;
+          }
           console.warn('Provider loading failed; opening bundle provider recovery:', error);
           setIsProviderSetupOpen(true);
           return;
@@ -191,10 +223,15 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       }
       dispatch({ type: 'SET_VIEW_MODE', payload: isLLMAvailable() ? 'chat' : 'provider_settings' });
     } catch (error) {
+      if (!isCurrentLifecycle()) {
+        return;
+      }
       console.error('Failed to load agent bundle:', error);
       dispatch({ type: 'SET_ERROR', payload: '無法載入協作包，請稍後再試。' });
     } finally {
-      dispatch({ type: 'SET_LOADING', payload: false });
+      if (isCurrentLifecycle()) {
+        dispatch({ type: 'SET_LOADING', payload: false });
+      }
     }
   }, [bundleId, credentialAccess, dispatch, isProviderSetupOpen, previewBundle]);
 
@@ -208,6 +245,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       return;
     }
 
+    const lifecycleToken = lifecycleTokenRef.current;
     setCredentialError(null);
     try {
       const credentials = await decryptBundleProviderCredentials(
@@ -215,10 +253,16 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
         unlockPassword,
         previewBundle ? undefined : bundleId,
       );
+      if (lifecycleToken !== lifecycleTokenRef.current) {
+        return;
+      }
       setUnlockPassword('');
       setDecryptedCredentials(credentials);
       setUnlockStage('preview');
     } catch {
+      if (lifecycleToken !== lifecycleTokenRef.current) {
+        return;
+      }
       setUnlockPassword('');
       setDecryptedCredentials(null);
       setCredentialError(BUNDLE_PROVIDER_CREDENTIALS_ERROR);
@@ -230,32 +274,51 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       return;
     }
 
+    const lifecycleToken = lifecycleTokenRef.current;
+    const credentials = decryptedCredentials;
     setCredentialError(null);
     try {
       await initializeProviders();
+      if (lifecycleToken !== lifecycleTokenRef.current) {
+        return;
+      }
       const source: BundleProviderOverrideSource = {
         kind: 'bundle',
         bundleId,
-        credentialFingerprint: decryptedCredentials.credentialFingerprint,
+        credentialFingerprint: credentials.credentialFingerprint,
       };
       await providerManager.setBundleProviderConfig(
         source,
-        decryptedCredentials.provider,
-        decryptedCredentials.config,
+        credentials.provider,
+        credentials.config,
       );
+      if (lifecycleToken !== lifecycleTokenRef.current) {
+        if (providerManager.matchesBundleProviderOverride?.(source)) {
+          await providerManager.clearBundleProviderConfig(source);
+        }
+        return;
+      }
       bundleOverrideSourceRef.current = source;
+      bundleOverrideOwnerTokenRef.current = lifecycleToken;
       clearCredentialState();
       loadedBundleIdRef.current = null;
       setCredentialAccess('bundle');
     } catch {
+      if (lifecycleToken !== lifecycleTokenRef.current) {
+        return;
+      }
       clearCredentialState();
       setCredentialError('無法啟用隨附服務商設定。請改用自己的 AI 服務商。');
     }
   }, [bundleId, clearCredentialState, decryptedCredentials]);
 
   const handleOpenProviderSetup = useCallback(async () => {
+    const lifecycleToken = ++lifecycleTokenRef.current;
     clearCredentialState();
     await clearBundleOverride();
+    if (lifecycleToken !== lifecycleTokenRef.current) {
+      return;
+    }
     loadedBundleIdRef.current = null;
     // ProviderSettings owns loading/error/retry; opening it must work even when a chunk fails.
     setCredentialAccess('own');
@@ -757,7 +820,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       {bundle && (
         <button
           type='button'
-          onClick={() => downloadBundleJson(bundle)}
+          onClick={() => downloadBundleJson(stripEncryptedProviderSettings(bundle))}
           className='rounded-lg border border-cyan-500/50 px-3 py-2 text-sm text-cyan-100 transition hover:bg-cyan-500/10'
         >
           {bundleStrings.sandbox.reExport}

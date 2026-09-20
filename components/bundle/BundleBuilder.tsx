@@ -200,7 +200,7 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({ assistants, onClose, onPr
       };
       const encryptedProviderSettings = await encryptBundleProviderCredentials(
         protectedBundle,
-        providerManager.getSettings(),
+        providerManager.getEffectiveProviderSettings?.() ?? providerManager.getSettings(),
         selectedProvider,
         password,
       );

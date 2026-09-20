@@ -7,6 +7,13 @@ import { createMockChatSession, TEST_ASSISTANTS } from './test-utils';
 import { AppContext, useAppContext } from '../../core/useAppContext';
 import type { AgentRunCheckpoint, AgentRunState, ChatMessage } from '../../../types';
 import type { AgentRunController, AgentRunResult } from '../../../services/agentRunController';
+import { withWorkspaceOperation } from '../../../services/workspaceOperationService';
+import {
+  buildChatDraftOwnerId,
+  readWorkspaceDraft,
+  resetWorkspaceDraftMemory,
+  writeWorkspaceDraft,
+} from '../../../services/workspaceDraftService';
 
 const {
   mockCreateNewSession,
@@ -23,8 +30,11 @@ const {
   mockClearProjectWorkspace,
   mockSetAgentRunState,
   mockGetInterruptedForSession,
+  mockGetCheckpoint,
   mockClaimCheckpoint,
   mockDeleteCheckpoint,
+  mockAcquireWorkspaceRunLock,
+  mockGetAgentRunReplayPolicy,
   mockGetProject,
   mockVirtuosoMount,
   mockVirtuosoUnmount,
@@ -44,8 +54,22 @@ const {
   mockClearProjectWorkspace: vi.fn(),
   mockSetAgentRunState: vi.fn(),
   mockGetInterruptedForSession: vi.fn().mockResolvedValue(null),
+  mockGetCheckpoint: vi.fn().mockResolvedValue(null),
   mockClaimCheckpoint: vi.fn().mockResolvedValue(null),
   mockDeleteCheckpoint: vi.fn().mockResolvedValue(undefined),
+  mockAcquireWorkspaceRunLock: vi.fn(),
+  mockGetAgentRunReplayPolicy: vi.fn((checkpoint: AgentRunCheckpoint) => ({
+    replaySafe:
+      checkpoint.resumeBudgetAcknowledgementRequired !== true &&
+      checkpoint.budgetUsage?.toolCallsKnown !== false &&
+      !(checkpoint.inFlightToolCallIds?.length ?? 0),
+    requiresBudgetAcknowledgement:
+      checkpoint.resumeBudgetAcknowledgementRequired === true ||
+      checkpoint.budgetUsage?.toolCallsKnown === false ||
+      checkpoint.toolTrace.length >= 32,
+    requiresInFlightToolAcknowledgement: (checkpoint.inFlightToolCallIds?.length ?? 0) > 0,
+    inFlightToolCallIds: checkpoint.inFlightToolCallIds ?? [],
+  })),
   mockGetProject: vi.fn().mockResolvedValue(undefined),
   mockVirtuosoMount: vi.fn(),
   mockVirtuosoUnmount: vi.fn(),
@@ -82,12 +106,22 @@ vi.mock('../../../services/agentRunController', () => ({
     };
     return instance;
   }),
+  getAgentRunReplayPolicy: mockGetAgentRunReplayPolicy,
 }));
 
 vi.mock('../../../services/agentRunCheckpointService', () => ({
   getInterruptedForSession: mockGetInterruptedForSession,
+  getCheckpoint: mockGetCheckpoint,
   claimCheckpoint: mockClaimCheckpoint,
   deleteCheckpoint: mockDeleteCheckpoint,
+}));
+
+vi.mock('../../../services/workspaceOfflineGuard', () => ({
+  LOCAL_WORKSPACE_RUN_ID: 'educare-local-workspace',
+}));
+
+vi.mock('../../../services/workspaceRunLock', () => ({
+  acquireWorkspaceRunLock: mockAcquireWorkspaceRunLock,
 }));
 
 vi.mock('../../../services/htmlProjectStore', () => ({
@@ -259,6 +293,19 @@ describe('ChatContainer', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockControllerRun.mockReset();
+    mockAgentRunControllerCtor.mockReset();
+    resetWorkspaceDraftMemory();
+    const storageValues = new Map<string, string>();
+    vi.mocked(window.localStorage.getItem).mockImplementation(
+      key => storageValues.get(key) ?? null,
+    );
+    vi.mocked(window.localStorage.setItem).mockImplementation((key, value) => {
+      storageValues.set(key, value);
+    });
+    vi.mocked(window.localStorage.removeItem).mockImplementation(key => {
+      storageValues.delete(key);
+    });
     Object.defineProperty(globalThis, 'ResizeObserver', {
       configurable: true,
       writable: true,
@@ -274,9 +321,17 @@ describe('ChatContainer', () => {
       value: vi.fn(),
     });
     mockGetInterruptedForSession.mockResolvedValue(null);
+    mockGetCheckpoint.mockResolvedValue(null);
     mockClaimCheckpoint.mockResolvedValue(null);
     mockDeleteCheckpoint.mockResolvedValue(undefined);
     mockGetProject.mockResolvedValue(undefined);
+    mockAcquireWorkspaceRunLock.mockResolvedValue({
+      acquired: true,
+      workspaceId: 'educare-local-workspace',
+      lockName: 'agent-run-educare-local-workspace',
+      mechanism: 'web-locks',
+      release: vi.fn(),
+    });
     Object.defineProperty(navigator, 'locks', {
       configurable: true,
       writable: true,
@@ -340,6 +395,15 @@ describe('ChatContainer', () => {
       .type(screen.getByRole('textbox', { name: '輸入訊息' }), 'Keep this draft');
     first.unmount();
 
+    await waitFor(() => {
+      expect(
+        readWorkspaceDraft(
+          'chat',
+          buildChatDraftOwnerId(draftProps.assistantId, draftProps.session.id),
+        ).value,
+      ).toBe('Keep this draft');
+    });
+
     render(<ChatContainer {...draftProps} />);
 
     expect(screen.getByRole('textbox', { name: '輸入訊息' })).toHaveValue('Keep this draft');
@@ -348,6 +412,25 @@ describe('ChatContainer', () => {
     vi.mocked(storage.getItem).mockImplementation(() => null);
     vi.mocked(storage.setItem).mockImplementation(() => undefined);
     vi.mocked(storage.removeItem).mockImplementation(() => undefined);
+  });
+
+  it('flushes the mounted draft before the 500ms debounce during a workspace export', async () => {
+    const draftProps = {
+      ...defaultProps,
+      session: createMockChatSession({ id: 'predebounce-export-session' }),
+    };
+    render(<ChatContainer {...draftProps} />);
+    const textbox = screen.getByRole('textbox', { name: '輸入訊息' });
+    fireEvent.change(textbox, { target: { value: 'captured before debounce' } });
+
+    await withWorkspaceOperation('export', async () => {
+      expect(
+        readWorkspaceDraft(
+          'chat',
+          buildChatDraftOwnerId(draftProps.assistantId, draftProps.session.id),
+        ).value,
+      ).toBe('captured before debounce');
+    });
   });
 
   it('prefers a newer failed-write draft over an older durable draft after remount', async () => {
@@ -369,6 +452,15 @@ describe('ChatContainer', () => {
     await userEvent.setup().clear(textbox);
     await userEvent.setup().type(textbox, 'Newer session draft');
     first.unmount();
+
+    await waitFor(() => {
+      expect(
+        readWorkspaceDraft(
+          'chat',
+          buildChatDraftOwnerId(draftProps.assistantId, draftProps.session.id),
+        ).value,
+      ).toBe('Newer session draft');
+    });
 
     const second = render(<ChatContainer {...draftProps} />);
     expect(screen.getByRole('textbox', { name: '輸入訊息' })).toHaveValue('Newer session draft');
@@ -399,6 +491,15 @@ describe('ChatContainer', () => {
     expect(textbox).toHaveValue('Draft to clear');
     fireEvent.change(textbox, { target: { value: '' } });
     first.unmount();
+
+    await waitFor(() => {
+      expect(
+        readWorkspaceDraft(
+          'chat',
+          buildChatDraftOwnerId(draftProps.assistantId, draftProps.session.id),
+        ).value,
+      ).toBeUndefined();
+    });
 
     const second = render(<ChatContainer {...draftProps} />);
     expect(screen.getByRole('textbox', { name: '輸入訊息' })).toHaveValue('');
@@ -1141,7 +1242,7 @@ describe('ChatContainer', () => {
       expect(defaultProps.onNewMessage).toHaveBeenCalled();
     });
     expect(screen.getByText('代理活動')).toBeInTheDocument();
-    expect(screen.getByText('2 個步驟')).toBeInTheDocument();
+    expect(await screen.findByText('2 個步驟')).toBeInTheDocument();
 
     // The committed timeline is collapsed by default; expand it to see the step rows.
     fireEvent.click(screen.getByRole('button', { name: /代理活動/ }));
@@ -1543,9 +1644,10 @@ describe('ChatContainer', () => {
     expect(screen.queryByTestId('resume-run-banner')).not.toBeInTheDocument();
   });
 
-  it('auto-deletes interrupted checkpoints whose last committed message already matches the session tail', async () => {
+  it('auto-deletes completed checkpoints whose last committed message already matches the session tail', async () => {
     mockGetInterruptedForSession.mockResolvedValueOnce(
       buildInterruptedCheckpoint({
+        status: 'complete',
         committedHistoryDelta: [{ role: 'model', content: 'Already persisted turn' }],
       }),
     );
@@ -1658,19 +1760,32 @@ describe('ChatContainer', () => {
     });
   });
 
+  it('clears only the captured session draft after a successful checkpoint resume', async () => {
+    const resumeOwner = buildChatDraftOwnerId('test-assistant-1', 'test-session-1');
+    const otherOwner = buildChatDraftOwnerId('test-assistant-1', 'other-session');
+    writeWorkspaceDraft('chat', resumeOwner, 'resume draft');
+    writeWorkspaceDraft('chat', otherOwner, 'other session draft');
+    mockGetInterruptedForSession.mockResolvedValueOnce(interruptedCheckpoint);
+
+    render(<ChatContainer {...defaultProps} />);
+    await screen.findByTestId('resume-run-banner');
+    await clickResume();
+
+    await waitFor(() => {
+      expect(mockDeleteCheckpoint).toHaveBeenCalledWith('run-interrupted');
+      expect(readWorkspaceDraft('chat', resumeOwner).value).toBeUndefined();
+      expect(readWorkspaceDraft('chat', otherOwner).value).toBe('other session draft');
+    });
+  });
+
   it('shows an active-run error when a resume Web Lock is unavailable in another tab', async () => {
     mockGetInterruptedForSession.mockResolvedValueOnce(interruptedCheckpoint);
-    const request = vi.fn(
-      async (
-        _name: string,
-        _options: unknown,
-        callback: (lock: object | null) => Promise<unknown>,
-      ) => callback(null),
-    );
-    Object.defineProperty(navigator, 'locks', {
-      configurable: true,
-      writable: true,
-      value: { request },
+    mockAcquireWorkspaceRunLock.mockResolvedValueOnce({
+      acquired: false,
+      workspaceId: 'educare-local-workspace',
+      lockName: 'agent-run-educare-local-workspace',
+      mechanism: 'web-locks',
+      release: vi.fn(),
     });
 
     render(<ChatContainer {...defaultProps} />);
@@ -1679,21 +1794,25 @@ describe('ChatContainer', () => {
     await clickResume();
 
     await waitFor(() => {
-      expect(request).toHaveBeenCalledWith(
-        'agent-run-test-session-1',
-        { mode: 'exclusive', ifAvailable: true },
-        expect.any(Function),
-      );
+      expect(mockAcquireWorkspaceRunLock).toHaveBeenCalledWith('educare-local-workspace', {
+        ifAvailable: true,
+      });
       expect(mockControllerRun).not.toHaveBeenCalled();
     });
-    expect(screen.getByText('工作仍在其他分頁進行中。')).toBeInTheDocument();
+    expect(screen.getByText(/工作仍在其他分頁進行中/)).toBeInTheDocument();
     expect(mockSetAgentRunState).toHaveBeenCalledWith(null);
     expect(mockClaimCheckpoint).not.toHaveBeenCalled();
   });
 
-  it('falls back to claimCheckpoint when Web Locks are unavailable and shows an error if claim fails', async () => {
+  it('fails closed when Web Locks are unavailable instead of claiming a checkpoint fallback', async () => {
     mockGetInterruptedForSession.mockResolvedValueOnce(interruptedCheckpoint);
-    mockClaimCheckpoint.mockResolvedValueOnce(null);
+    mockAcquireWorkspaceRunLock.mockResolvedValueOnce({
+      acquired: false,
+      workspaceId: 'educare-local-workspace',
+      lockName: 'agent-run-educare-local-workspace',
+      mechanism: 'unavailable',
+      release: vi.fn(),
+    });
     Object.defineProperty(navigator, 'locks', {
       configurable: true,
       writable: true,
@@ -1706,10 +1825,13 @@ describe('ChatContainer', () => {
     await clickResume();
 
     await waitFor(() => {
-      expect(mockClaimCheckpoint).toHaveBeenCalledWith('run-interrupted');
+      expect(mockAcquireWorkspaceRunLock).toHaveBeenCalledWith('educare-local-workspace', {
+        ifAvailable: true,
+      });
       expect(mockControllerRun).not.toHaveBeenCalled();
     });
-    expect(screen.getByText('無法取得續跑權限，可能已有其他分頁接手此工作。')).toBeInTheDocument();
+    expect(screen.getByText(/瀏覽器不支援安全的工作鎖/)).toBeInTheDocument();
+    expect(mockClaimCheckpoint).not.toHaveBeenCalled();
   });
 
   it('disables resume and clears workspace when the checkpoint project is missing', async () => {
@@ -1765,7 +1887,7 @@ describe('ChatContainer', () => {
     await screen.findByTestId('resume-run-banner');
 
     expect(
-      screen.getByText('這次工作已達最大回合數，只能捨棄並封存中斷前的紀錄。'),
+      screen.getByText('這次工作已達目前的軟預算；請提高相應上限後再續跑。'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '繼續' })).toBeDisabled();
   });
@@ -1957,6 +2079,68 @@ describe('ChatContainer', () => {
 
       // The displayed session B view must not render the old run's result.
       expect(screen.queryByText(/Late reply/)).toBeNull();
+    });
+
+    it('does not restore source input or clear the destination draft after a late success', async () => {
+      const sourceOwner = buildChatDraftOwnerId('test-assistant-1', 'session-a');
+      const destinationOwner = buildChatDraftOwnerId('test-assistant-1', 'session-b');
+      writeWorkspaceDraft('chat', sourceOwner, 'source draft');
+      writeWorkspaceDraft('chat', destinationOwner, 'destination draft');
+
+      const { rerender, deferred } = await startRunInSessionA();
+      rerender(
+        <ChatContainer {...defaultProps} session={createMockChatSession({ id: 'session-b' })} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: '輸入訊息' })).toHaveValue('destination draft');
+      });
+
+      await act(async () => {
+        deferred.resolve(buildRunResult('Late success from A'));
+      });
+
+      await waitFor(() => {
+        expect(readWorkspaceDraft('chat', destinationOwner).value).toBe('destination draft');
+        expect(screen.getByRole('textbox', { name: '輸入訊息' })).toHaveValue('destination draft');
+      });
+      expect(readWorkspaceDraft('chat', sourceOwner).value).toBeUndefined();
+    });
+
+    it('does not restore source input or clear the destination draft after a late failure', async () => {
+      let rejectRun: (error: Error) => void = () => undefined;
+      mockControllerRun.mockImplementationOnce(
+        async () =>
+          new Promise<AgentRunResult>((_resolve, reject) => {
+            rejectRun = reject;
+          }),
+      );
+      const destinationOwner = buildChatDraftOwnerId('test-assistant-1', 'session-b');
+      writeWorkspaceDraft('chat', destinationOwner, 'destination draft after failure');
+
+      const { rerender } = await startRunInSessionA();
+      rerender(
+        <ChatContainer {...defaultProps} session={createMockChatSession({ id: 'session-b' })} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: '輸入訊息' })).toHaveValue(
+          'destination draft after failure',
+        );
+      });
+
+      await act(async () => {
+        rejectRun(new Error('late failure from A'));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: '輸入訊息' })).toHaveValue(
+          'destination draft after failure',
+        );
+        expect(readWorkspaceDraft('chat', destinationOwner).value).toBe(
+          'destination draft after failure',
+        );
+      });
     });
 
     it('ignores onChunk from the old run after switching sessions', async () => {

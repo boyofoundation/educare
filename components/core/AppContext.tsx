@@ -26,6 +26,7 @@ import { importAssistantPackageFile } from '../../services/assistantPackageServi
 import { AssistantPackageImportDialog } from '../assistant/AssistantPackageImportDialog';
 import { getTemplateFiles } from '../../services/htmlProjectTemplates';
 import type { LocalSearchResult } from '../../services/localSearchService';
+import { withWorkspaceWrite } from '../../services/workspaceOperationService';
 import { AppContext } from './useAppContext';
 import type {
   ViewMode,
@@ -65,6 +66,28 @@ const loadSidebarCollapsed = (): boolean => {
     return false;
   }
 };
+
+const persistSidebarCollapsed = (value: boolean): Promise<boolean> =>
+  withWorkspaceWrite(async () => {
+    try {
+      localStorage.setItem('sidebarCollapsed', String(value));
+      return true;
+    } catch (error) {
+      console.warn('Failed to persist sidebarCollapsed to localStorage:', error);
+      return false;
+    }
+  });
+
+const persistEmbeddingConfig = (config: EmbeddingConfig): Promise<boolean> =>
+  withWorkspaceWrite(async () => {
+    try {
+      localStorage.setItem('embeddingConfig', JSON.stringify(config));
+      return true;
+    } catch (error) {
+      console.warn('Failed to persist embedding config to localStorage:', error);
+      return false;
+    }
+  });
 
 const initialState: AppState = {
   assistants: [],
@@ -1049,11 +1072,9 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   const toggleSidebarCollapse = useCallback(() => {
     const next = !state.isSidebarCollapsed;
     dispatch({ type: 'SET_SIDEBAR_COLLAPSED', payload: next });
-    try {
-      localStorage.setItem('sidebarCollapsed', String(next));
-    } catch (error) {
+    void persistSidebarCollapsed(next).catch(error => {
       console.warn('Failed to persist sidebarCollapsed to localStorage:', error);
-    }
+    });
   }, [state.isSidebarCollapsed]);
 
   // Open share modal
@@ -1194,8 +1215,9 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   // Set embedding configuration
   const setEmbeddingConfig = useCallback((config: EmbeddingConfig) => {
     dispatch({ type: 'SET_EMBEDDING_CONFIG', payload: config });
-    // Save to localStorage for persistence
-    localStorage.setItem('embeddingConfig', JSON.stringify(config));
+    void persistEmbeddingConfig(config).catch(error => {
+      console.warn('Failed to persist embedding config to localStorage:', error);
+    });
   }, []);
 
   const setActiveProject = useCallback((projectId: string | null) => {

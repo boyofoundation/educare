@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Modal from '../ui/Modal';
 import { CryptoService } from '../../services/cryptoService';
 import {
@@ -7,6 +7,9 @@ import {
   decryptProviderSettingsPayload,
   extractProviderSettingsShareFromUrl,
   getProviderDisplayName,
+  isProviderSettingsShareEntry,
+  parseProviderSettingsShareFile,
+  PROVIDER_SETTINGS_SHARE_FILE_MAX_BYTES,
   PROVIDER_SETTINGS_SHARE_PARAM,
 } from '../../services/providerSettingsShareService';
 import type { SharedProviderSettingsPayload } from '../../services/providerSettingsShareService';
@@ -15,7 +18,8 @@ interface ProviderSettingsImportModalProps {
   onApplied?: () => void;
 }
 
-type ImportStage = 'password' | 'preview' | 'success' | 'legacy';
+type ImportStage = 'file' | 'password' | 'preview' | 'success' | 'legacy';
+type EncryptedPayloadSource = 'none' | 'file' | 'legacy-url';
 
 const LEGACY_SHARE_PARAM = 'keys';
 
@@ -27,6 +31,10 @@ const ProviderSettingsImportModal: React.FC<ProviderSettingsImportModalProps> = 
   const [isBusy, setIsBusy] = useState(false);
   const [payload, setPayload] = useState<SharedProviderSettingsPayload | null>(null);
   const [encryptedPayload, setEncryptedPayload] = useState<string | null>(null);
+  const [encryptedPayloadSource, setEncryptedPayloadSource] =
+    useState<EncryptedPayloadSource>('none');
+  const [rememberInBrowser, setRememberInBrowser] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const syncFromUrl = () => {
@@ -34,17 +42,21 @@ const ProviderSettingsImportModal: React.FC<ProviderSettingsImportModalProps> = 
       const legacyShare = CryptoService.extractKeysFromUrl();
 
       if (providerShare) {
-        setEncryptedPayload(providerShare);
+        const isFileEntry = isProviderSettingsShareEntry(providerShare);
+        setEncryptedPayload(isFileEntry ? null : providerShare);
+        setEncryptedPayloadSource(isFileEntry ? 'none' : 'legacy-url');
         setPayload(null);
         setPassword('');
+        setRememberInBrowser(false);
         setError(null);
-        setStage('password');
+        setStage(isFileEntry ? 'file' : 'password');
         setIsOpen(true);
         return;
       }
 
       if (legacyShare) {
         setEncryptedPayload(null);
+        setEncryptedPayloadSource('none');
         setPayload(null);
         setPassword('');
         setError(null);
@@ -56,7 +68,9 @@ const ProviderSettingsImportModal: React.FC<ProviderSettingsImportModalProps> = 
       setIsOpen(false);
       setPayload(null);
       setEncryptedPayload(null);
+      setEncryptedPayloadSource('none');
       setPassword('');
+      setRememberInBrowser(false);
       setError(null);
     };
 
@@ -84,9 +98,31 @@ const ProviderSettingsImportModal: React.FC<ProviderSettingsImportModalProps> = 
     }
     setIsOpen(false);
     setPassword('');
+    setRememberInBrowser(false);
     setError(null);
     setPayload(null);
     setEncryptedPayload(null);
+    setEncryptedPayloadSource('none');
+  };
+
+  const handleShareFile = async (file: File) => {
+    if (file.size > PROVIDER_SETTINGS_SHARE_FILE_MAX_BYTES) {
+      setError('分享檔案過大，請確認你選取的是有效的設定檔。');
+      return;
+    }
+
+    setIsBusy(true);
+    setError(null);
+    try {
+      setEncryptedPayload(parseProviderSettingsShareFile(await file.text()));
+      setEncryptedPayloadSource('file');
+      setPassword('');
+      setStage('password');
+    } catch (fileError) {
+      setError(fileError instanceof Error ? fileError.message : '分享檔案格式錯誤或內容已損毀');
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const handleDecrypt = async () => {
@@ -123,7 +159,9 @@ const ProviderSettingsImportModal: React.FC<ProviderSettingsImportModalProps> = 
     setError(null);
 
     try {
-      await applyProviderSettingsPayload(payload);
+      await applyProviderSettingsPayload(payload, {
+        persistence: rememberInBrowser ? 'persistent' : 'session',
+      });
       clearProviderSettingsShareFromUrl();
       setStage('success');
       onApplied?.();
@@ -167,11 +205,44 @@ const ProviderSettingsImportModal: React.FC<ProviderSettingsImportModalProps> = 
           </div>
         )}
 
+        {stage === 'file' && (
+          <>
+            <div className='rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4'>
+              <p className='text-sm text-cyan-100'>
+                這個入口連結不含服務商設定。請選擇分享者另外傳送的加密設定檔，再輸入密碼預覽。
+              </p>
+            </div>
+            <input
+              ref={fileInputRef}
+              type='file'
+              accept='application/json,.json'
+              className='hidden'
+              onChange={event => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  void handleShareFile(file);
+                }
+                event.target.value = '';
+              }}
+            />
+            <button
+              type='button'
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isBusy}
+              className='w-full rounded-xl border border-cyan-500/50 bg-cyan-500/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60'
+            >
+              {isBusy ? '讀取中...' : '選擇加密設定檔'}
+            </button>
+          </>
+        )}
+
         {stage === 'password' && (
           <>
             <div className='rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4'>
               <p className='text-sm text-cyan-100'>
-                此連結包含加密的服務商設定。輸入密碼後，你可以先預覽內容，再決定是否套用。
+                {encryptedPayloadSource === 'file'
+                  ? '已讀取加密設定檔。輸入密碼後，你可以先預覽內容，再決定是否套用。'
+                  : '這是舊版分享連結，其中包含加密的服務商設定。輸入密碼後，你可以先預覽內容，再決定是否套用。'}
               </p>
             </div>
             <div>
@@ -222,6 +293,15 @@ const ProviderSettingsImportModal: React.FC<ProviderSettingsImportModalProps> = 
                   </dd>
                 </div>
               </dl>
+              <label className='mt-5 flex cursor-pointer items-start gap-2 border-t border-gray-700/60 pt-4 text-sm text-gray-200'>
+                <input
+                  type='checkbox'
+                  checked={rememberInBrowser}
+                  onChange={event => setRememberInBrowser(event.target.checked)}
+                  className='mt-0.5'
+                />
+                <span>記住在此瀏覽器（明確選擇後才寫入既有設定儲存區；預設只保存在目前分頁）</span>
+              </label>
             </div>
           </>
         )}
@@ -251,6 +331,15 @@ const ProviderSettingsImportModal: React.FC<ProviderSettingsImportModalProps> = 
 
         {stage !== 'legacy' && (
           <div className='flex flex-wrap justify-end gap-3'>
+            {stage === 'file' && (
+              <button
+                type='button'
+                onClick={() => closeAndClear(PROVIDER_SETTINGS_SHARE_PARAM)}
+                className='rounded-xl bg-gray-700 px-4 py-3 text-sm font-medium text-white transition hover:bg-gray-600'
+              >
+                稍後再說
+              </button>
+            )}
             {stage === 'password' && (
               <>
                 <button

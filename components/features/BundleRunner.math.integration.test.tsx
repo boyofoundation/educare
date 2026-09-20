@@ -57,6 +57,12 @@ vi.mock('../../services/agentRunCheckpointService', () => ({
   ...checkpoint,
   getInterruptedForSession,
 }));
+// Geometry persistence is the integration boundary here; cross-tab lease
+// contention is covered by the real-browser F6 acceptance tests.
+vi.mock('../../services/workspaceRunLock', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../services/workspaceRunLock')>()),
+  acquireWorkspaceRunLock: vi.fn(async () => ({ acquired: true, release: vi.fn() })),
+}));
 vi.mock('../../services/modelCapabilities', () => ({
   activeModelSupportsImageInput: () => false,
   resolveActiveModelImageSupport: () => Promise.resolve(false),
@@ -206,7 +212,7 @@ describe('BundleRunner math-enabled persistence', () => {
     db.saveBundle.mockResolvedValue(undefined);
     db.saveSession.mockResolvedValue(undefined);
     checkpoint.saveCheckpoint.mockResolvedValue(undefined);
-    checkpoint.updateCheckpoint.mockResolvedValue(null);
+    checkpoint.updateCheckpoint.mockImplementation(async (runId, update) => ({ runId, ...update }));
     checkpoint.deleteCheckpoint.mockResolvedValue(undefined);
     getInterruptedForSession.mockResolvedValue(null);
     renderGeometryDoc.mockResolvedValue({ destroy: vi.fn(), errors: [], warnings: [] });

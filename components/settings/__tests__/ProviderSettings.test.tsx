@@ -20,6 +20,9 @@ const { providerManagerMock, providerMock, initializeProvidersMock } = vi.hoiste
     enableProvider: vi.fn(),
     updateProviderConfig: vi.fn(),
     setActiveProvider: vi.fn(),
+    setSessionProviderConfig: vi.fn(),
+    clearSessionProviderConfig: vi.fn(),
+    getEffectiveProviderSettings: vi.fn(),
   },
   initializeProvidersMock: vi.fn(),
   providerMock: {
@@ -56,7 +59,8 @@ const cloneSettings = (): ProviderSettingsState => ({
   ) as ProviderSettingsState['providers'],
 });
 
-const renderSettings = (onClose?: () => void) => render(<ProviderSettings onClose={onClose} />);
+const renderSettings = (onClose?: () => void, temporaryOnly = false) =>
+  render(<ProviderSettings onClose={onClose} temporaryOnly={temporaryOnly} />);
 
 const expandGemini = async () => {
   const user = userEvent.setup();
@@ -71,6 +75,8 @@ describe('ProviderSettings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     initializeProvidersMock.mockResolvedValue(undefined);
+    providerManagerMock.setSessionProviderConfig.mockResolvedValue(undefined);
+    providerManagerMock.clearSessionProviderConfig.mockResolvedValue(undefined);
     settings = cloneSettings();
     providerManagerMock.getSettings.mockImplementation(() => ({
       activeProvider: settings.activeProvider,
@@ -194,5 +200,27 @@ describe('ProviderSettings', () => {
     await waitFor(() => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
+  });
+
+  it('keeps temporary-only settings out of all global provider writes', async () => {
+    const user = userEvent.setup();
+    renderSettings(undefined, true);
+
+    await user.click(screen.getByRole('heading', { name: 'Google Gemini' }));
+    expect(screen.queryByText('記住在此瀏覽器')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: '啟用 Google Gemini' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '設為目前使用' })).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText('Gemini API Key'));
+    await user.type(screen.getByLabelText('Gemini API Key'), 'temporary-key');
+
+    expect(providerManagerMock.setSessionProviderConfig).toHaveBeenCalled();
+    expect(providerManagerMock.setSessionProviderConfig).toHaveBeenLastCalledWith(
+      'gemini',
+      expect.objectContaining({ apiKey: 'temporary-key' }),
+    );
+    expect(providerManagerMock.updateProviderConfig).not.toHaveBeenCalled();
+    expect(providerManagerMock.enableProvider).not.toHaveBeenCalled();
+    expect(providerManagerMock.setActiveProvider).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,7 @@ import {
   parseBundleFile,
   parseBundleText,
 } from '../../services/agentBundleService';
+import { getTransferClassification } from '../../services/fileTransferPolicy';
 import * as db from '../../services/db';
 import { recordBundleImportSuccess } from '../../services/bundleMetricsService';
 import type { AgentBundle, BundleIssue, BundleRecord, BundleValidationResult } from '../../types';
@@ -141,6 +142,22 @@ const BundleImportPage: React.FC<BundleImportPageProps> = ({ onClose, onOpenBund
 
   const bundleSize = useMemo(() => (preview ? estimateBundleSize(preview.bundle) : 0), [preview]);
   const knowledge = useMemo(() => (preview ? knowledgeStats(preview.bundle) : null), [preview]);
+  const materialNames = useMemo(
+    () =>
+      preview
+        ? preview.bundle.agents.flatMap(agent => agent.ragChunks.map(chunk => chunk.fileName))
+        : [],
+    [preview],
+  );
+  const transferClassification = useMemo(
+    () =>
+      preview
+        ? getTransferClassification('agent-bundle', {
+            credentialsIncluded: Boolean(preview.bundle.encryptedProviderSettings),
+          })
+        : null,
+    [preview],
+  );
   const largeBundle = bundleSize >= AGENT_BUNDLE_LARGE_FILE_BYTES;
 
   return (
@@ -264,6 +281,9 @@ const BundleImportPage: React.FC<BundleImportPageProps> = ({ onClose, onOpenBund
               <span className='rounded-full bg-gray-700/60 px-2 py-0.5 text-xs text-gray-300'>
                 v{preview.bundle.manifest.version}
               </span>
+              <span className='rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-xs text-yellow-100'>
+                來源不可信 · 匯入前預覽
+              </span>
             </div>
             {preview.bundle.manifest.description && (
               <p className='mb-3 text-sm text-gray-400'>{preview.bundle.manifest.description}</p>
@@ -320,6 +340,30 @@ const BundleImportPage: React.FC<BundleImportPageProps> = ({ onClose, onOpenBund
                   <p className='mt-1 text-xs text-gray-400'>{agent.description}</p>
                 </div>
               ))}
+            </div>
+            <div className='mb-4 rounded-lg border border-gray-700/50 bg-gray-900/40 p-3'>
+              <div className='mb-2 flex items-center justify-between gap-3'>
+                <h4 className='text-xs font-semibold uppercase tracking-wide text-gray-400'>
+                  包含教材
+                </h4>
+                <span className='text-xs text-gray-500'>{materialNames.length} 個檔案</span>
+              </div>
+              {materialNames.length > 0 ? (
+                <ul className='space-y-1 text-xs text-gray-300'>
+                  {materialNames.map((fileName, index) => (
+                    <li key={`${fileName}-${index}`} className='break-all'>
+                      {fileName}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className='text-xs text-gray-500'>沒有隨附教材檔案。</p>
+              )}
+              <p className='mt-3 border-t border-gray-700/50 pt-2 text-xs text-gray-500'>
+                憑證：
+                {transferClassification?.credentialsIncluded ? '受密碼保護，需另行確認' : '不包含'}
+                ； 個人資料：{transferClassification?.personalDataIncluded ? '包含' : '不包含'}。
+              </p>
             </div>
             <button
               type='button'

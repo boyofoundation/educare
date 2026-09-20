@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AppearanceSettings from '../AppearanceSettings';
 import {
@@ -39,7 +39,7 @@ describe('AppearanceSettings', () => {
     expect(screen.getByRole('checkbox', { name: /減少動態效果/ })).not.toBeChecked();
   });
 
-  it('applies and persists changes from the uncontrolled settings surface', () => {
+  it('applies and persists changes from the uncontrolled settings surface', async () => {
     const storage = createStorage();
     render(<AppearanceSettings initialPreferences={initialPreferences} storage={storage} />);
 
@@ -50,8 +50,8 @@ describe('AppearanceSettings', () => {
     expect(document.documentElement.dataset.theme).toBe('light');
     expect(document.documentElement.dataset.readingSize).toBe('large');
     expect(document.documentElement.dataset.reducedMotion).toBe('true');
-    expect(storage.setItem).toHaveBeenCalledTimes(3);
-    expect(screen.getByRole('status')).toHaveTextContent('外觀設定已儲存');
+    await waitFor(() => expect(storage.setItem).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('外觀設定已儲存'));
   });
 
   it('supports controlled values and reports the complete next preference object', () => {

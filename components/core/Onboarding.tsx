@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  completeOnboarding,
+  completeOnboardingAsync,
   getOnboardingPreferences,
   OnboardingCompletionReason,
   OnboardingPersistenceResult,
@@ -21,14 +21,20 @@ export interface OnboardingProps {
   className?: string;
 }
 
-const closeGuide = (
+const closeGuide = async (
   reason: OnboardingCompletionReason,
   onOpenChange: OnboardingProps['onOpenChange'],
   onComplete: OnboardingProps['onComplete'],
   onSkip: OnboardingProps['onSkip'],
   templateId?: string,
-): OnboardingPersistenceResult => {
-  const result = completeOnboarding(reason, templateId);
+): Promise<OnboardingPersistenceResult> => {
+  let result: OnboardingPersistenceResult;
+  try {
+    result = await completeOnboardingAsync(reason, templateId);
+  } catch {
+    const preferences = getOnboardingPreferences();
+    result = { ...preferences, preferences: { ...preferences }, persisted: false };
+  }
   onComplete?.(reason);
   if (reason === 'skip') {
     onSkip?.();
@@ -64,8 +70,8 @@ export const Onboarding: React.FC<OnboardingProps> = ({
     [selectedTemplateId],
   );
 
-  const finish = (reason: OnboardingCompletionReason, templateId?: string) => {
-    const result = closeGuide(reason, onOpenChange, onComplete, onSkip, templateId);
+  const finish = async (reason: OnboardingCompletionReason, templateId?: string) => {
+    const result = await closeGuide(reason, onOpenChange, onComplete, onSkip, templateId);
     setPersistenceWarning(!result.persisted);
     if (isOpen === undefined) {
       setInternalOpen(false);
@@ -87,7 +93,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({
   return (
     <Modal
       isOpen={open}
-      onClose={() => finish('skip')}
+      onClose={() => void finish('skip')}
       title='先選用途，再開始備課'
       size='wide'
       className={`max-h-[calc(100dvh-2rem)] border-cyan-800/60 ${className ?? ''}`}
@@ -163,7 +169,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({
                 return;
               }
               onApplyTemplate?.(selectedTemplate);
-              finish('template', selectedTemplate.id);
+              void finish('template', selectedTemplate.id);
             }}
             type='button'
           >
@@ -176,7 +182,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             className='ui-panel rounded-lg border border-slate-600 px-4 py-3 text-left text-sm font-semibold transition hover:border-cyan-400 hover:bg-slate-800'
             onClick={() => {
               onImportAssistant?.();
-              finish('import');
+              void finish('import');
             }}
             type='button'
           >
@@ -189,7 +195,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             className='ui-panel rounded-lg border border-slate-600 px-4 py-3 text-left text-sm font-semibold transition hover:border-cyan-400 hover:bg-slate-800'
             onClick={() => {
               onBrowse?.();
-              finish('browse');
+              void finish('browse');
             }}
             type='button'
           >
@@ -205,7 +211,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({
           <button
             className='ui-muted min-h-11 rounded-lg px-3 py-2 text-sm font-medium transition hover:bg-slate-800 hover:text-white'
             onClick={() => {
-              finish('skip');
+              void finish('skip');
             }}
             type='button'
           >

@@ -6,7 +6,7 @@ import { AppContext } from '../core/useAppContext';
 import type { AppAction, AppContextValue, AppState } from '../core/AppContext.types';
 import type { AgentBundle, ChatSession } from '../../types';
 
-const { actions, db, providers, credentials, chat } = vi.hoisted(() => ({
+const { actions, db, providers, credentials, chat, bundleService } = vi.hoisted(() => ({
   actions: { updateSession: vi.fn(), deleteSession: vi.fn() },
   db: {
     getBundle: vi.fn(),
@@ -24,9 +24,14 @@ const { actions, db, providers, credentials, chat } = vi.hoisted(() => ({
   },
   credentials: { decryptBundleProviderCredentials: vi.fn() },
   chat: vi.fn(),
+  bundleService: {
+    estimateBundleSize: vi.fn(() => 100),
+    downloadBundleJson: vi.fn(),
+  },
 }));
 vi.mock('../../services/db', () => db);
 vi.mock('../../services/providerRegistry', () => providers);
+vi.mock('../../services/agentBundleService', () => bundleService);
 vi.mock('../../services/bundleProviderCredentialsService', () => ({
   BUNDLE_PROVIDER_CREDENTIALS_ERROR: '無法解密或驗證隨附服務商設定',
   decryptBundleProviderCredentials: credentials.decryptBundleProviderCredentials,
@@ -241,7 +246,7 @@ const reducer = (current: AppState, action: AppAction): AppState => {
   }
 };
 
-function Harness({ preview }: { preview?: AgentBundle }) {
+function Harness({ preview, bundleId = 'bundle-1' }: { preview?: AgentBundle; bundleId?: string }) {
   const [current, dispatch] = useReducer(reducer, state);
   return (
     <AppContext.Provider
@@ -254,7 +259,7 @@ function Harness({ preview }: { preview?: AgentBundle }) {
       }
     >
       <div data-testid='view-mode'>{current.viewMode}</div>
-      <BundleRunner bundleId='bundle-1' bundle={preview} />
+      <BundleRunner bundleId={bundleId} bundle={preview} />
     </AppContext.Provider>
   );
 }
@@ -418,6 +423,22 @@ describe('BundleRunner', () => {
     expect(db.saveBundle).not.toHaveBeenCalled();
   });
 
+  it('strips encrypted credentials from the default loaded-bundle re-export', async () => {
+    const loadedBundle = {
+      ...bundle(),
+      encryptedProviderSettings: protectedBundle().encryptedProviderSettings,
+    };
+
+    render(<Harness preview={loadedBundle} />);
+    await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+
+    fireEvent.click(screen.getByRole('button', { name: '重新匯出' }));
+
+    expect(bundleService.downloadBundleJson).toHaveBeenCalledWith(
+      expect.not.objectContaining({ encryptedProviderSettings: expect.anything() }),
+    );
+  });
+
   it('opens provider settings when no configured provider is available', async () => {
     db.getBundle.mockResolvedValue({
       id: 'bundle-1',
@@ -448,6 +469,31 @@ describe('BundleRunner', () => {
     await waitFor(() => expect(screen.getByLabelText('受保護協作包解鎖')).toBeInTheDocument());
     expect(providers.initializeProviders).not.toHaveBeenCalled();
     expect(screen.queryByTestId('bundle-chat')).not.toBeInTheDocument();
+  });
+
+  it('does not apply credentials when an unlock resolves after the bundle unmounts', async () => {
+    let resolveDecrypt: ((value: unknown) => void) | undefined;
+    credentials.decryptBundleProviderCredentials.mockReturnValueOnce(
+      new Promise(resolve => {
+        resolveDecrypt = resolve;
+      }),
+    );
+    const { unmount } = render(<Harness preview={protectedBundle()} />);
+
+    await waitFor(() => expect(screen.getByLabelText('受保護協作包解鎖')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('協作包密碼'), { target: { value: 'shared-password' } });
+    fireEvent.click(screen.getByRole('button', { name: '解鎖並預覽' }));
+    unmount();
+
+    await act(async () => {
+      resolveDecrypt?.({
+        provider: 'gemini',
+        config: { apiKey: 'late-key', model: 'gemini-2.0-flash' },
+        credentialFingerprint: 'late-fingerprint',
+      });
+    });
+
+    expect(providers.providerManager.setBundleProviderConfig).not.toHaveBeenCalled();
   });
 
   it('opens with the recipient provider only after explicitly declining protected credentials', async () => {

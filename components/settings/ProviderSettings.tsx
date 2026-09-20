@@ -7,8 +7,10 @@ import {
 } from '../../services/llmAdapter';
 import ProviderSettingsShareModal from './ProviderSettingsShareModal';
 
-interface ProviderSettingsProps {
+export interface ProviderSettingsProps {
   onClose?: () => void;
+  /** Keep all edits temporary and prevent writes to global provider settings. */
+  temporaryOnly?: boolean;
 }
 
 interface ProviderInfo {
@@ -30,6 +32,7 @@ type ProviderNotice = {
 
 type ProviderField = 'apiKey' | 'baseUrl' | 'model';
 type ProviderFieldErrors = Partial<Record<ProviderField, string>>;
+type CredentialPersistence = 'session' | 'persistent';
 
 /**
  * 目前要在設定介面上顯示的服務商。
@@ -38,7 +41,7 @@ type ProviderFieldErrors = Partial<Record<ProviderField, string>>;
  */
 const VISIBLE_PROVIDERS: ProviderType[] = ['gemini', 'openrouter', 'lmstudio'];
 
-const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
+const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose, temporaryOnly = false }) => {
   const [settings, setSettings] = useState<IProviderSettings>(providerManager.getSettings());
   const [expandedProvider, setExpandedProvider] = useState<ProviderType | null>(null);
   const [testingProvider, setTestingProvider] = useState<ProviderType | null>(null);
@@ -58,16 +61,22 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
     Partial<Record<ProviderType, ProviderFieldErrors>>
   >({});
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [credentialPersistence, setCredentialPersistence] =
+    useState<CredentialPersistence>('session');
   const [initializationAttempt, setInitializationAttempt] = useState(0);
   const [isInitializing, setIsInitializing] = useState(true);
   const [initializationError, setInitializationError] = useState<string | null>(null);
+
+  const getDisplayedSettings = (): IProviderSettings => {
+    return providerManager.getEffectiveProviderSettings?.() ?? providerManager.getSettings();
+  };
 
   useEffect(() => {
     let isMounted = true;
 
     const syncSettings = () => {
       if (isMounted) {
-        setSettings(providerManager.getSettings());
+        setSettings(getDisplayedSettings());
       }
     };
 
@@ -173,9 +182,12 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
   };
 
   const handleProviderToggle = (providerType: ProviderType) => {
+    if (temporaryOnly) {
+      return;
+    }
     const wasEnabled = settings.providers[providerType].enabled;
     providerManager.enableProvider(providerType, !wasEnabled);
-    setSettings(providerManager.getSettings());
+    setSettings(getDisplayedSettings());
 
     // If we're disabling a provider that was expanded, collapse it
     if (wasEnabled && expandedProvider === providerType) {
@@ -184,8 +196,11 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
   };
 
   const handleActiveProviderChange = (providerType: ProviderType) => {
+    if (temporaryOnly) {
+      return;
+    }
     providerManager.setActiveProvider(providerType);
-    setSettings(providerManager.getSettings());
+    setSettings(getDisplayedSettings());
   };
 
   const handleConfigUpdate = (providerType: ProviderType, key: string, value: string | number) => {
@@ -194,15 +209,107 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
       const sanitizedValue = Number.isFinite(numericValue)
         ? Math.min(200, Math.max(1, Math.round(numericValue)))
         : 50;
-      providerManager.updateProviderConfig(providerType, { [key]: sanitizedValue });
-      setSettings(providerManager.getSettings());
+      const nextConfig = {
+        ...settings.providers[providerType].config,
+        [key]: sanitizedValue,
+      };
+      setSettings(previous => ({
+        ...previous,
+        providers: {
+          ...previous.providers,
+          [providerType]: {
+            ...previous.providers[providerType],
+            config: nextConfig,
+          },
+        },
+      }));
+      if (temporaryOnly || credentialPersistence === 'session') {
+        if (!providerManager.setSessionProviderConfig) {
+          setProviderNotice(providerType, {
+            type: 'error',
+            message: '目前環境不支援僅此分頁保存。',
+          });
+          return;
+        }
+        void providerManager.setSessionProviderConfig(providerType, nextConfig).catch(error => {
+          setProviderNotice(providerType, {
+            type: 'error',
+            message: error instanceof Error ? error.message : '無法保存分頁設定。',
+          });
+        });
+      } else {
+        providerManager.updateProviderConfig(providerType, { [key]: sanitizedValue });
+      }
       clearFieldError(providerType, key);
       return;
     }
 
-    providerManager.updateProviderConfig(providerType, { [key]: value });
-    setSettings(providerManager.getSettings());
+    const nextConfig = {
+      ...settings.providers[providerType].config,
+      [key]: value,
+    };
+    setSettings(previous => ({
+      ...previous,
+      providers: {
+        ...previous.providers,
+        [providerType]: {
+          ...previous.providers[providerType],
+          config: nextConfig,
+        },
+      },
+    }));
+    if (temporaryOnly || credentialPersistence === 'session') {
+      if (!providerManager.setSessionProviderConfig) {
+        setProviderNotice(providerType, {
+          type: 'error',
+          message: '目前環境不支援僅此分頁保存。',
+        });
+        return;
+      }
+      void providerManager.setSessionProviderConfig(providerType, nextConfig).catch(error => {
+        setProviderNotice(providerType, {
+          type: 'error',
+          message: error instanceof Error ? error.message : '無法保存分頁設定。',
+        });
+      });
+    } else {
+      providerManager.updateProviderConfig(providerType, { [key]: value });
+    }
     clearFieldError(providerType, key);
+  };
+
+  const handleCredentialPersistenceChange = (nextPersistence: CredentialPersistence) => {
+    if (temporaryOnly) {
+      return;
+    }
+    setCredentialPersistence(nextPersistence);
+    const sessionOverride = providerManager.getSessionProviderConfig?.();
+
+    if (nextPersistence === 'persistent' && sessionOverride) {
+      providerManager.enableProvider(sessionOverride.type, true);
+      providerManager.updateProviderConfig(sessionOverride.type, sessionOverride.config);
+      providerManager.setActiveProvider(sessionOverride.type);
+      providerManager.clearSessionProviderConfig?.(sessionOverride.type);
+      setSettings(getDisplayedSettings());
+      setProviderNotice(sessionOverride.type, {
+        type: 'info',
+        message: '已明確選擇記住在此瀏覽器。',
+      });
+      return;
+    }
+
+    if (nextPersistence === 'session' && !sessionOverride) {
+      const activeProvider = settings.activeProvider;
+      const config = settings.providers[activeProvider].config;
+      if (providerManager.setSessionProviderConfig) {
+        void providerManager.setSessionProviderConfig(activeProvider, config).catch(error => {
+          setProviderNotice(activeProvider, {
+            type: 'error',
+            message: error instanceof Error ? error.message : '無法切換至分頁保存。',
+          });
+        });
+      }
+    }
   };
 
   const setProviderNotice = (providerType: ProviderType, notice?: ProviderNotice) => {
@@ -267,6 +374,16 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
 
       if (!validateProviderConfiguration(providerType)) {
         return;
+      }
+
+      if (
+        (temporaryOnly || credentialPersistence === 'session') &&
+        providerManager.setSessionProviderConfig
+      ) {
+        await providerManager.setSessionProviderConfig(
+          providerType,
+          settings.providers[providerType].config,
+        );
       }
 
       // Test with a simple message
@@ -398,6 +515,38 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
         )}
       </div>
 
+      {!temporaryOnly && (
+        <fieldset className='mb-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-5'>
+          <legend className='px-1 text-sm font-semibold text-amber-100'>服務商憑證保存範圍</legend>
+          <p className='mt-1 text-xs leading-5 text-amber-50/75'>
+            新輸入的 API
+            金鑰預設只保存在目前分頁；只有明確選擇瀏覽器保存才會寫入既有設定儲存區。舊有已保存的金鑰仍可讀取。
+          </p>
+          <div className='mt-4 flex flex-col gap-3 sm:flex-row sm:gap-6'>
+            <label className='flex cursor-pointer items-center gap-2 text-sm text-gray-200'>
+              <input
+                type='radio'
+                name='provider-credential-persistence'
+                value='session'
+                checked={credentialPersistence === 'session'}
+                onChange={() => handleCredentialPersistenceChange('session')}
+              />
+              僅此分頁（預設）
+            </label>
+            <label className='flex cursor-pointer items-center gap-2 text-sm text-gray-200'>
+              <input
+                type='radio'
+                name='provider-credential-persistence'
+                value='persistent'
+                checked={credentialPersistence === 'persistent'}
+                onChange={() => handleCredentialPersistenceChange('persistent')}
+              />
+              記住在此瀏覽器
+            </label>
+          </div>
+        </fieldset>
+      )}
+
       {isInitializing && (
         <div
           className='mb-6 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100'
@@ -442,14 +591,16 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
               啟用
             </span>
           </div>
-          <button
-            type='button'
-            onClick={() => setIsShareModalOpen(true)}
-            className='inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-500/15 px-4 py-2.5 text-sm font-medium text-cyan-100 transition hover:border-cyan-300 hover:bg-cyan-500/25 hover:text-white'
-          >
-            <span>🔐</span>
-            分享此服務商設定
-          </button>
+          {!temporaryOnly && (
+            <button
+              type='button'
+              onClick={() => setIsShareModalOpen(true)}
+              className='inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-500/15 px-4 py-2.5 text-sm font-medium text-cyan-100 transition hover:border-cyan-300 hover:bg-cyan-500/25 hover:text-white'
+            >
+              <span>🔐</span>
+              分享此服務商設定
+            </button>
+          )}
         </div>
       </div>
 
@@ -520,33 +671,34 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                       {status.text}
                     </span>
 
-                    {/* Enable toggle */}
-                    <label
-                      className='flex items-center cursor-pointer'
-                      onClick={e => e.stopPropagation()}
-                    >
-                      <input
-                        type='checkbox'
-                        checked={isEnabled}
-                        aria-label={`啟用 ${info.name}`}
-                        onChange={e => {
-                          e.stopPropagation();
-                          handleProviderToggle(providerType);
-                        }}
-                        className='sr-only'
-                      />
-                      <div
-                        className={`relative w-11 h-6 rounded-full transition-colors ${
-                          isEnabled ? 'bg-cyan-500' : 'bg-gray-600'
-                        }`}
+                    {!temporaryOnly && (
+                      <label
+                        className='flex items-center cursor-pointer'
+                        onClick={e => e.stopPropagation()}
                       >
-                        <div
-                          className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                            isEnabled ? 'translate-x-5' : 'translate-x-0'
-                          }`}
+                        <input
+                          type='checkbox'
+                          checked={isEnabled}
+                          aria-label={`啟用 ${info.name}`}
+                          onChange={e => {
+                            e.stopPropagation();
+                            handleProviderToggle(providerType);
+                          }}
+                          className='sr-only'
                         />
-                      </div>
-                    </label>
+                        <div
+                          className={`relative w-11 h-6 rounded-full transition-colors ${
+                            isEnabled ? 'bg-cyan-500' : 'bg-gray-600'
+                          }`}
+                        >
+                          <div
+                            className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                              isEnabled ? 'translate-x-5' : 'translate-x-0'
+                            }`}
+                          />
+                        </div>
+                      </label>
+                    )}
 
                     <svg
                       className={`w-5 h-5 text-gray-400 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`}
@@ -943,13 +1095,15 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
                           '🔌 測試連接'
                         )}
                       </button>
-                      <button
-                        onClick={() => handleActiveProviderChange(providerType)}
-                        disabled={isActive || status.status !== 'ready'}
-                        className='flex-1 px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-all'
-                      >
-                        {isActive ? '✓ 目前使用中' : '設為目前使用'}
-                      </button>
+                      {!temporaryOnly && (
+                        <button
+                          onClick={() => handleActiveProviderChange(providerType)}
+                          disabled={isActive || status.status !== 'ready'}
+                          className='flex-1 px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-all'
+                        >
+                          {isActive ? '✓ 目前使用中' : '設為目前使用'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

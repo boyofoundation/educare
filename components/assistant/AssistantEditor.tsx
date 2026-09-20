@@ -4,6 +4,17 @@ import { RAGFileUpload } from './RAGFileUpload';
 import { useTursoAssistantStatus } from '../../hooks/useTursoAssistantStatus';
 import { ASSISTANT_TEMPLATES, TemplateSelector, AssistantTemplate } from './TemplateSelector';
 import { AppContext } from '../core/useAppContext';
+import { registerWorkspaceOperationFlusher } from '../../services/workspaceOperationService';
+import {
+  buildAssistantDraftOwnerId,
+  clearWorkspaceDraftAsync,
+  isAssistantWorkspaceDraft,
+  readWorkspaceDraft,
+  type DraftPersistenceMode,
+  WORKSPACE_DRAFT_SAVE_DELAY_MS,
+  writeWorkspaceDraftWithOperationToken,
+  writeWorkspaceDraftAsync,
+} from '../../services/workspaceDraftService';
 
 export type AssistantSaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 export type LeaveGuardResult = boolean | void | Promise<boolean | void>;
@@ -85,7 +96,24 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   const [advancedOpen, setAdvancedOpen] = useState(Boolean(assistant));
   const [pendingTemplate, setPendingTemplate] = useState<AssistantTemplate | null>(null);
   const [highlightFields, setHighlightFields] = useState(false);
+  const draftPersistenceEnabled = showFooterActions && !assistant?.isShared;
+  const draftOwnerId = buildAssistantDraftOwnerId(assistant?.id);
+  const restoredDraftResult = useMemo(
+    () =>
+      draftPersistenceEnabled
+        ? readWorkspaceDraft<Assistant>('assistant', draftOwnerId)
+        : { value: undefined, mode: 'persistent' as DraftPersistenceMode },
+    [draftOwnerId, draftPersistenceEnabled],
+  );
+  const restoredDraft = isAssistantWorkspaceDraft(restoredDraftResult.value)
+    ? restoredDraftResult.value
+    : null;
+  const [draftPersistenceMode, setDraftPersistenceMode] = useState<DraftPersistenceMode>(
+    restoredDraftResult.mode,
+  );
   const hydratedAssistantIdRef = useRef<string | null | undefined>(undefined);
+  const draftOwnerIdRef = useRef(draftOwnerId);
+  const restoredDraftOwnerRef = useRef<string | null>(null);
   const isHydratedRef = useRef(false);
   const initialSignatureRef = useRef<string | null>(null);
   const pendingSaveRef = useRef<SaveSnapshot | null>(null);
@@ -95,6 +123,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
     hydratedAssistantIdRef.current = assistant?.id ?? null;
     isHydratedRef.current = false;
   }
+  draftOwnerIdRef.current = draftOwnerId;
 
   // Check if assistant exists in Turso for sharing
   const { canShare } = useTursoAssistantStatus(assistant?.id || null);
@@ -164,6 +193,38 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
           routableAssistantIds: [],
         };
     const baselineSignature = signatureForAssistant(baseline);
+    const shouldConsiderDraft =
+      draftPersistenceEnabled && restoredDraftOwnerRef.current !== draftOwnerId;
+    const canRestoreDraft = Boolean(
+      shouldConsiderDraft &&
+        restoredDraft &&
+        (!assistant || !restoredDraft.id || restoredDraft.id === assistant.id),
+    );
+    if (draftPersistenceEnabled) {
+      // A draft is restored at most once per owner. Parent updates after a
+      // successful save must hydrate from the saved assistant, not the stale
+      // memoized pre-save draft value.
+      restoredDraftOwnerRef.current = draftOwnerId;
+    } else {
+      restoredDraftOwnerRef.current = null;
+    }
+    const hydratedValues = canRestoreDraft
+      ? {
+          ...baseline,
+          name: restoredDraft?.name ?? baseline.name,
+          description: restoredDraft?.description ?? baseline.description,
+          systemPrompt: restoredDraft?.systemPrompt ?? baseline.systemPrompt,
+          ragChunks: restoredDraft?.ragChunks ?? baseline.ragChunks,
+          starterPrompts: restoredDraft?.starterPrompts ?? baseline.starterPrompts,
+          subagentDelegationEnabled:
+            restoredDraft?.subagentDelegationEnabled ?? baseline.subagentDelegationEnabled,
+          mathToolsEnabled: restoredDraft?.mathToolsEnabled ?? baseline.mathToolsEnabled,
+          webSpeechToolsEnabled:
+            restoredDraft?.webSpeechToolsEnabled ?? baseline.webSpeechToolsEnabled,
+          routableAssistantIds:
+            restoredDraft?.routableAssistantIds ?? baseline.routableAssistantIds,
+        }
+      : baseline;
     const incomingAssistantId = assistant?.id ?? null;
     const expectedSave = pendingSaveRef.current ?? lastSavedAssistantRef.current;
     const isExpectedSaveUpdate =
@@ -182,17 +243,17 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       initialSignatureRef.current = baselineSignature;
     }
 
-    if (assistant) {
-      setName(assistant.name);
-      setDescription(assistant.description || '');
-      setSystemPrompt(assistant.systemPrompt || DEFAULT_SYSTEM_PROMPT);
-      setRagChunks(assistant.ragChunks || []);
-      setStarterPrompts(assistant.starterPrompts || []);
+    if (assistant || canRestoreDraft) {
+      setName(hydratedValues.name);
+      setDescription(hydratedValues.description || '');
+      setSystemPrompt(hydratedValues.systemPrompt || DEFAULT_SYSTEM_PROMPT);
+      setRagChunks(hydratedValues.ragChunks || []);
+      setStarterPrompts(hydratedValues.starterPrompts || []);
       setNewStarterPrompt('');
-      setSubagentDelegationEnabled(assistant.subagentDelegationEnabled ?? false);
-      setMathToolsEnabled(assistant.mathToolsEnabled ?? false);
-      setWebSpeechToolsEnabled(assistant.webSpeechToolsEnabled ?? false);
-      setRoutableAssistantIds(assistant.routableAssistantIds ?? []);
+      setSubagentDelegationEnabled(hydratedValues.subagentDelegationEnabled ?? false);
+      setMathToolsEnabled(hydratedValues.mathToolsEnabled ?? false);
+      setWebSpeechToolsEnabled(hydratedValues.webSpeechToolsEnabled ?? false);
+      setRoutableAssistantIds(hydratedValues.routableAssistantIds ?? []);
     } else {
       setName('');
       setDescription('');
@@ -213,15 +274,81 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       onSaveStatusChange?.('idle');
     }
     if (!isPendingSaveUpdate) {
-      setPersistenceState(assistant?.ragChunks?.length ? 'saved' : 'idle');
+      setPersistenceState(
+        canRestoreDraft ? 'idle' : assistant?.ragChunks?.length ? 'saved' : 'idle',
+      );
     }
+    setDraftPersistenceMode(restoredDraftResult.mode);
     isHydratedRef.current = true;
-  }, [assistant, onSaveStatusChange]);
+  }, [
+    assistant,
+    draftOwnerId,
+    draftPersistenceEnabled,
+    onSaveStatusChange,
+    restoredDraft,
+    restoredDraftResult.mode,
+  ]);
 
   const isDirty =
     isHydratedRef.current &&
     initialSignatureRef.current !== null &&
     signatureForAssistant(draftAssistant) !== initialSignatureRef.current;
+
+  const latestDraftRef = useRef(draftAssistant);
+  const latestDirtyRef = useRef(isDirty);
+  latestDraftRef.current = draftAssistant;
+  latestDirtyRef.current = isDirty;
+
+  useEffect(() => {
+    latestDraftRef.current = draftAssistant;
+    latestDirtyRef.current = isDirty;
+  }, [draftAssistant, isDirty]);
+
+  useEffect(() => {
+    if (!draftPersistenceEnabled || !isHydratedRef.current || !isDirty) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      const draft = latestDraftRef.current;
+      void writeWorkspaceDraftAsync('assistant', draftOwnerId, draft).then(mode => {
+        if (isHydratedRef.current && draftOwnerIdRef.current === draftOwnerId) {
+          setDraftPersistenceMode(mode);
+        }
+      });
+    }, WORKSPACE_DRAFT_SAVE_DELAY_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [draftAssistant, draftOwnerId, draftPersistenceEnabled, isDirty]);
+
+  useEffect(() => {
+    if (!draftPersistenceEnabled) {
+      return;
+    }
+
+    // Capture the mounted form even when the 500ms debounce has not fired.
+    // This callback runs inside the active archive barrier, so it must use the
+    // opaque raw token path rather than enqueueing another gated write.
+    return registerWorkspaceOperationFlusher(operationToken => {
+      if (!isHydratedRef.current || !latestDirtyRef.current) {
+        return;
+      }
+      writeWorkspaceDraftWithOperationToken(
+        operationToken,
+        'assistant',
+        draftOwnerIdRef.current,
+        latestDraftRef.current,
+      );
+    });
+  }, [draftPersistenceEnabled]);
+
+  useEffect(() => {
+    return () => {
+      if (draftPersistenceEnabled && latestDirtyRef.current) {
+        void writeWorkspaceDraftAsync('assistant', draftOwnerId, latestDraftRef.current);
+      }
+    };
+  }, [draftOwnerId, draftPersistenceEnabled]);
 
   useEffect(() => {
     onDirtyChange?.(isDirty);
@@ -381,6 +508,11 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       lastSavedAssistantRef.current = null;
 
       await onSave(newAssistant);
+      if (draftPersistenceEnabled) {
+        setDraftPersistenceMode(await clearWorkspaceDraftAsync('assistant', draftOwnerId));
+      }
+      latestDraftRef.current = newAssistant;
+      latestDirtyRef.current = false;
       const currentAssistantId = hydratedAssistantIdRef.current ?? null;
       const originalAssistantId = assistant?.id ?? null;
       const saveIsStillCurrent =
@@ -729,6 +861,15 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             {saveStatus === 'error' && saveError && (
               <p className='text-rose-300' data-testid='assistant-save-status' role='alert'>
                 {saveError}
+              </p>
+            )}
+            {draftPersistenceEnabled && draftPersistenceMode === 'session' && (
+              <p
+                className='text-amber-200'
+                data-testid='assistant-draft-persistence-warning'
+                role='status'
+              >
+                瀏覽器儲存空間目前無法使用；草稿只會保留在本分頁，關閉分頁後可能遺失。
               </p>
             )}
           </div>

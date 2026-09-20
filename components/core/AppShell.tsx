@@ -15,6 +15,7 @@ import { providerManager } from '../../services/providerRegistry';
 import { ChatCompactorService } from '../../services/chatCompactorService';
 import { countConversationRounds, groupMessagesByRounds } from '../../services/conversationUtils';
 import { getBundleMetrics } from '../../services/bundleMetricsService';
+import { ensureOriginalHistoryMetadata } from '../../services/workspaceDraftService';
 
 const LazyAssistantEditor = React.lazy(async () => {
   const module = await import('../assistant');
@@ -43,6 +44,8 @@ const LazyBundleBuilder = React.lazy(() => import('../bundle/BundleBuilder'));
 const LazyBundleProviderSetup = React.lazy(() => import('../bundle/BundleProviderSetup'));
 const LazyProviderSettings = React.lazy(() => import('../settings/ProviderSettings'));
 const LazyAppearanceSettings = React.lazy(() => import('../settings/AppearanceSettings'));
+const LazyWorkspaceDataManagement = React.lazy(() => import('../settings/WorkspaceDataManagement'));
+const LazyPracticeWorkspace = React.lazy(() => import('../practice/PracticeWorkspace'));
 
 function AppContent(): React.JSX.Element {
   const { state, actions } = useAppContext();
@@ -181,7 +184,7 @@ function AppContent(): React.JSX.Element {
     _tokenInfo: ChatTokenInfo,
   ) => {
     let updatedSession = {
-      ...session,
+      ...ensureOriginalHistoryMetadata(session),
       title:
         session.title === 'New Chat' && userMessage ? userMessage.substring(0, 40) : session.title,
       updatedAt: Date.now(),
@@ -323,7 +326,10 @@ function AppContent(): React.JSX.Element {
         {(state.viewMode === 'provider_settings' || state.viewMode === 'api_setup') && (
           <div className='absolute inset-0 overflow-y-auto bg-gray-900'>
             <LazyBoundary>
-              <LazyProviderSettings onClose={() => actions.setViewMode('chat')} />
+              <LazyProviderSettings
+                onClose={() => actions.setViewMode('chat')}
+                temporaryOnly={true}
+              />
             </LazyBoundary>
           </div>
         )}
@@ -446,7 +452,7 @@ function AppContent(): React.JSX.Element {
         )}
         {isImporting && (
           <p role='status' className='mb-4 text-gray-300'>
-            正在匯入並儲存到這台裝置…
+            正在驗證匯入內容；確認預覽後才會儲存到這台裝置…
           </p>
         )}
         <div className='flex flex-wrap gap-3'>
@@ -792,6 +798,22 @@ function AppContent(): React.JSX.Element {
         </div>
       )}
 
+      {state.viewMode === 'data_management' && (
+        <div className='absolute inset-0 overflow-y-auto bg-gray-900'>
+          <LazyBoundary>
+            <LazyWorkspaceDataManagement onImported={actions.loadData} />
+          </LazyBoundary>
+        </div>
+      )}
+
+      {state.viewMode === 'practice' && (
+        <div className='absolute inset-0 overflow-y-auto bg-gray-900'>
+          <LazyBoundary>
+            <LazyPracticeWorkspace onClose={() => actions.setViewMode('chat')} />
+          </LazyBoundary>
+        </div>
+      )}
+
       {state.viewMode === 'bundle_import' && (
         <LazyBoundary>
           <LazyBundleImportPage
@@ -860,6 +882,8 @@ function AppContent(): React.JSX.Element {
         !state.isLoading &&
         state.viewMode !== 'new_assistant' &&
         state.viewMode !== 'settings' &&
+        state.viewMode !== 'data_management' &&
+        state.viewMode !== 'practice' &&
         state.viewMode !== 'provider_settings' &&
         state.viewMode !== 'api_setup' &&
         state.viewMode !== 'bundle_import' &&

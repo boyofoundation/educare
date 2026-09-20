@@ -20,9 +20,10 @@ vi.mock('../../../services/onboardingPreferences', async importOriginal => {
       completed: onboardingState.completed,
       dismissed: false,
     })),
-    completeOnboarding: vi.fn(() => {
+    completeOnboardingAsync: vi.fn(async () => {
       onboardingState.completed = true;
-      return { completed: true, dismissed: false };
+      const preferences = { completed: true, dismissed: false };
+      return { ...preferences, preferences, persisted: true };
     }),
   };
 });
@@ -74,6 +75,11 @@ vi.mock('../../../services/db', () => ({
   getSessionsForAssistant: vi.fn().mockResolvedValue([]),
   saveSession: vi.fn().mockResolvedValue(undefined),
   deleteSession: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../../services/agentRunCheckpointService', () => ({
+  sweepStale: vi.fn().mockResolvedValue(undefined),
+  deleteForSession: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../../services/providerRegistry', () => ({
@@ -316,6 +322,18 @@ vi.mock('../../settings/ProviderSettingsImportModal', () => ({
     ]),
 }));
 
+vi.mock('../../settings/WorkspaceDataManagement', () => ({
+  default: ({ onImported }: { onImported?: () => Promise<void> | void }) => (
+    <div data-testid='workspace-data-management'>
+      <button onClick={() => void onImported?.()}>refresh imported workspace</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../practice/PracticeWorkspace', () => ({
+  default: () => <div data-testid='practice-workspace' />,
+}));
+
 let mockURLSearchParams: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -396,6 +414,40 @@ afterEach(() => {
 });
 
 describe('AppShell', () => {
+  describe('Local workspace navigation', () => {
+    it('opens backup management without showing the empty assistant prompt', async () => {
+      render(<AppShell />);
+      await screen.findByTestId('assistant-editor');
+      fireEvent.click(screen.getByRole('button', { name: '資料管理' }));
+      expect(await screen.findByTestId('workspace-data-management')).toBeInTheDocument();
+      expect(screen.queryByText('新增您的第一個助理')).not.toBeInTheDocument();
+      const readsBefore = vi.mocked(dbMock.getAllAssistants).mock.calls.length;
+      fireEvent.click(screen.getByRole('button', { name: 'refresh imported workspace' }));
+      await waitFor(() =>
+        expect(vi.mocked(dbMock.getAllAssistants).mock.calls.length).toBeGreaterThan(readsBefore),
+      );
+    });
+
+    it('opens offline practice from an otherwise empty local workspace', async () => {
+      render(<AppShell />);
+      await screen.findByTestId('assistant-editor');
+      fireEvent.click(screen.getByRole('button', { name: '備課與練習' }));
+      expect(await screen.findByTestId('practice-workspace')).toBeInTheDocument();
+      expect(screen.queryByText('新增您的第一個助理')).not.toBeInTheDocument();
+    });
+
+    it('does not expose private workspace routes on a shared deep link', async () => {
+      mockURLSearchParams.mockImplementation(() => ({
+        has: vi.fn().mockImplementation(key => key === 'share'),
+        get: vi.fn().mockImplementation(key => (key === 'share' ? 'public-assistant' : null)),
+      }));
+      render(<AppShell />);
+      await screen.findByTestId('shared-assistant');
+      expect(screen.queryByRole('button', { name: '資料管理' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '備課與練習' })).not.toBeInTheDocument();
+    });
+  });
+
   describe('First-run guide integration', () => {
     it('opens the guide for an empty device and passes a chosen template to the editor', async () => {
       onboardingState.completed = false;
@@ -417,7 +469,9 @@ describe('AppShell', () => {
       onboardingState.completed = false;
       const first = render(<AppShell />);
       fireEvent.click(await screen.findByRole('button', { name: '先跳過' }));
-      expect(screen.queryByText('先選用途，再開始備課')).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(screen.queryByText('先選用途，再開始備課')).not.toBeInTheDocument(),
+      );
       expect(screen.queryByTestId('assistant-editor')).not.toBeInTheDocument();
       first.unmount();
 

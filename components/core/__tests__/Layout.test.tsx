@@ -815,6 +815,9 @@ describe('Layout', () => {
       await waitFor(() => {
         const main = screen.getByRole('main');
         expect(main).toHaveClass('pl-72'); // Desktop margin when sidebar is open
+        // Absolute-positioned pages must be anchored inside the padded content,
+        // otherwise settings and backup buttons render beneath the sidebar.
+        expect(main.lastElementChild).toHaveClass('relative', 'min-w-0');
       });
     });
 

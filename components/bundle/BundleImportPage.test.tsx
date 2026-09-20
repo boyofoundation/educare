@@ -160,12 +160,16 @@ describe('BundleImportPage', () => {
     const preview = screen.getByLabelText('協作包預覽');
     expect(preview).toHaveTextContent('STEM 小組');
     expect(preview).toHaveTextContent('v1.2.0');
+    expect(preview).toHaveTextContent('來源不可信 · 匯入前預覽');
     expect(preview).toHaveTextContent('Agent 數');
     expect(preview).toHaveTextContent('2');
     expect(preview).toHaveTextContent('接待助理');
     expect(preview).toHaveTextContent('數學助理');
     expect(preview).toHaveTextContent('🚪');
     expect(preview).toHaveTextContent('接待入口');
+    expect(preview).toHaveTextContent('包含教材');
+    expect(preview).toHaveTextContent('intro.md');
+    expect(preview).toHaveTextContent('a.md');
     // Agent descriptions are shown...
     expect(preview).toHaveTextContent('負責分流問題。');
     // ...but system prompts must never leak into the import preview.

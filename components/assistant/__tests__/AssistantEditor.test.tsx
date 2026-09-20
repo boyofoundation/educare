@@ -1,10 +1,20 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useState } from 'react';
 import { AssistantEditor } from '../AssistantEditor';
 import { TEST_ASSISTANTS, TEST_RAG_CHUNKS, setupAssistantTestEnvironment } from './test-utils';
 import type { Assistant, RagChunk } from '../../../types';
 import { useTursoAssistantStatus } from '../../../hooks/useTursoAssistantStatus';
+import {
+  waitForWorkspaceWrites,
+  withWorkspaceOperation,
+} from '../../../services/workspaceOperationService';
+import {
+  buildAssistantDraftOwnerId,
+  readWorkspaceDraft,
+  resetWorkspaceDraftMemory,
+  WORKSPACE_DRAFT_STORAGE_KEY,
+} from '../../../services/workspaceDraftService';
 
 vi.mock('../../../hooks/useTursoAssistantStatus', () => ({
   useTursoAssistantStatus: vi.fn(),
@@ -46,8 +56,13 @@ describe('AssistantEditor', () => {
     onShare: ReturnType<typeof vi.fn>;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await waitForWorkspaceWrites();
     vi.clearAllMocks();
+    resetWorkspaceDraftMemory();
+    vi.mocked(window.localStorage.getItem).mockReturnValue(null);
+    vi.mocked(window.localStorage.setItem).mockImplementation(() => undefined);
+    vi.mocked(window.localStorage.removeItem).mockImplementation(() => undefined);
     testEnvironment = setupAssistantTestEnvironment();
     vi.mocked(useTursoAssistantStatus).mockReturnValue({
       isInTurso: false,
@@ -302,6 +317,133 @@ describe('AssistantEditor', () => {
     expect(props.onSave).toHaveBeenCalledWith(
       expect.objectContaining({ starterPrompts: ['既有提問'] }),
     );
+  });
+
+  it('restores an assistant draft without replacing the saved identity', () => {
+    const ownerId = buildAssistantDraftOwnerId(TEST_ASSISTANTS.basic.id);
+    const draft = {
+      ...TEST_ASSISTANTS.basic,
+      name: '恢復中的助理草稿',
+      id: TEST_ASSISTANTS.basic.id,
+      ragChunks: [],
+      starterPrompts: [],
+    };
+    vi.mocked(window.localStorage.getItem).mockImplementation(key =>
+      key === WORKSPACE_DRAFT_STORAGE_KEY
+        ? JSON.stringify({
+            schemaVersion: 1,
+            entries: [
+              {
+                schemaVersion: 1,
+                kind: 'assistant',
+                ownerId,
+                value: draft,
+                updatedAt: 1,
+              },
+            ],
+          })
+        : null,
+    );
+
+    render(<AssistantEditor {...props} assistant={TEST_ASSISTANTS.basic} />);
+
+    expect(screen.getByLabelText('助理名稱')).toHaveValue('恢復中的助理草稿');
+    fireEvent.click(screen.getByRole('button', { name: '保存助理' }));
+    expect(props.onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ id: TEST_ASSISTANTS.basic.id, name: '恢復中的助理草稿' }),
+    );
+  });
+
+  it('does not rehydrate a stale memoized draft after the parent applies a successful save', async () => {
+    const ownerId = buildAssistantDraftOwnerId(TEST_ASSISTANTS.basic.id);
+    const draft = {
+      ...TEST_ASSISTANTS.basic,
+      name: '先前的草稿',
+      id: TEST_ASSISTANTS.basic.id,
+      ragChunks: [],
+      starterPrompts: [],
+    };
+    vi.mocked(window.localStorage.getItem).mockImplementation(key =>
+      key === WORKSPACE_DRAFT_STORAGE_KEY
+        ? JSON.stringify({
+            schemaVersion: 1,
+            entries: [
+              {
+                schemaVersion: 1,
+                kind: 'assistant',
+                ownerId,
+                value: draft,
+                updatedAt: 1,
+              },
+            ],
+          })
+        : null,
+    );
+
+    const ParentHarness = () => {
+      const [currentAssistant, setCurrentAssistant] = useState(TEST_ASSISTANTS.basic);
+      return (
+        <AssistantEditor
+          {...props}
+          assistant={currentAssistant}
+          onSave={async savedAssistant => {
+            setCurrentAssistant(savedAssistant);
+          }}
+        />
+      );
+    };
+
+    render(<ParentHarness />);
+    expect(screen.getByLabelText('助理名稱')).toHaveValue('先前的草稿');
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: '已保存的新名稱' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存助理' }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('助理名稱')).toHaveValue('已保存的新名稱');
+    });
+    expect(screen.getByLabelText('助理名稱')).not.toHaveValue('先前的草稿');
+  });
+
+  it('debounces assistant draft persistence and flushes the structured entry', async () => {
+    vi.useFakeTimers();
+    try {
+      render(<AssistantEditor {...props} assistant={TEST_ASSISTANTS.basic} />);
+      vi.mocked(window.localStorage.setItem).mockClear();
+
+      fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: '延遲保存草稿' } });
+      await act(async () => vi.advanceTimersByTimeAsync(499));
+      expect(window.localStorage.setItem).not.toHaveBeenCalled();
+
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+      expect(window.localStorage.setItem).toHaveBeenCalledWith(
+        WORKSPACE_DRAFT_STORAGE_KEY,
+        expect.stringContaining('延遲保存草稿'),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flushes the mounted form before the 500ms debounce during a workspace export', async () => {
+    const storage = new Map<string, string>();
+    vi.mocked(window.localStorage.getItem).mockImplementation(key => storage.get(key) ?? null);
+    vi.mocked(window.localStorage.setItem).mockImplementation((key, value) =>
+      storage.set(key, value),
+    );
+    render(<AssistantEditor {...props} assistant={TEST_ASSISTANTS.basic} />);
+    fireEvent.change(screen.getByLabelText('助理名稱'), {
+      target: { value: '捕捉保存前的草稿' },
+    });
+
+    await withWorkspaceOperation('export', async () => {
+      expect(
+        readWorkspaceDraft<Assistant>(
+          'assistant',
+          buildAssistantDraftOwnerId(TEST_ASSISTANTS.basic.id),
+        ).value,
+      ).toEqual(expect.objectContaining({ name: '捕捉保存前的草稿' }));
+    });
   });
 
   it('shows delegation guidance about token cost and shared mode', () => {

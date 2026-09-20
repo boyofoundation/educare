@@ -15,6 +15,8 @@ export type ViewMode =
   | 'new_assistant'
   | 'edit_assistant'
   | 'settings'
+  | 'data_management'
+  | 'practice'
   | 'api_setup'
   | 'provider_settings'
   | 'bundle_import'

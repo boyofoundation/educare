@@ -89,6 +89,8 @@ export interface ChatContainerProps {
   routableTargetsOverride?: RoutableTarget[] | null;
   /** Called when chat needs provider setup; the host can preserve a return-to-chat target. */
   onRequestProviderSetup?: () => void;
+  /** Flushes the active draft before an external workspace snapshot/archive. */
+  onFlushDrafts?: () => Promise<void> | void;
   /** Optional host-owned route proposal decisions, used by the isolated bundle runner. */
   onAcceptRouteProposal?: (proposal: RouteProposal) => Promise<void>;
   onDeclineRouteProposal?: (proposal: RouteProposal) => Promise<void>;

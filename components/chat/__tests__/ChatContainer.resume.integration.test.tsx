@@ -26,6 +26,7 @@ const {
   mockClearProjectWorkspace,
   mockSetAgentRunState,
   mockGetProject,
+  mockGetAgentRunReplayPolicy,
 } = vi.hoisted(() => ({
   mockUpdateSession: vi.fn().mockResolvedValue(undefined),
   mockCreateNewSession: vi.fn().mockResolvedValue(undefined),
@@ -40,6 +41,18 @@ const {
   mockClearProjectWorkspace: vi.fn(),
   mockSetAgentRunState: vi.fn(),
   mockGetProject: vi.fn().mockResolvedValue({ id: 'project-1' }),
+  mockGetAgentRunReplayPolicy: vi.fn((checkpoint: AgentRunCheckpoint) => ({
+    replaySafe:
+      checkpoint.resumeBudgetAcknowledgementRequired !== true &&
+      checkpoint.budgetUsage?.toolCallsKnown !== false &&
+      !(checkpoint.inFlightToolCallIds?.length ?? 0),
+    requiresBudgetAcknowledgement:
+      checkpoint.resumeBudgetAcknowledgementRequired === true ||
+      checkpoint.budgetUsage?.toolCallsKnown === false ||
+      checkpoint.toolTrace.length >= 32,
+    requiresInFlightToolAcknowledgement: (checkpoint.inFlightToolCallIds?.length ?? 0) > 0,
+    inFlightToolCallIds: checkpoint.inFlightToolCallIds ?? [],
+  })),
 }));
 
 vi.mock('../../core/useAppContext', async () => {
@@ -71,6 +84,7 @@ vi.mock('../../../services/agentRunController', () => ({
     flushCheckpoint = vi.fn().mockResolvedValue(undefined);
     getState = mockControllerGetInstance;
   },
+  getAgentRunReplayPolicy: mockGetAgentRunReplayPolicy,
 }));
 
 vi.mock('../../../services/htmlProjectStore', () => ({
@@ -145,21 +159,34 @@ const buildCheckpoint = (overrides: Partial<AgentRunCheckpoint> = {}): AgentRunC
   ],
   partialText: overrides.partialText ?? 'Partial output',
   toolTrace: overrides.toolTrace ?? ['inspect'],
+  inFlightToolCallIds: overrides.inFlightToolCallIds,
   tokenTotals: overrides.tokenTotals ?? {
     promptTokenCount: 10,
     candidatesTokenCount: 15,
   },
   agentHarnessEnabled: overrides.agentHarnessEnabled ?? true,
   sharedMode: overrides.sharedMode ?? false,
+  budget: overrides.budget,
+  budgetUsage: overrides.budgetUsage,
+  resumeBudgetAcknowledgementRequired: overrides.resumeBudgetAcknowledgementRequired,
+  failure: overrides.failure,
+  failureStage: overrides.failureStage,
+  failureCode: overrides.failureCode,
+  failureRetryable: overrides.failureRetryable,
   createdAt: overrides.createdAt ?? 1640995200000,
   updatedAt: overrides.updatedAt ?? 1640995200000,
   heartbeatAt: overrides.heartbeatAt ?? 1640995200000,
 });
 
-const buildRunResult = (fullText: string, runId: string): AgentRunResult => ({
+const buildRunResult = (
+  fullText: string,
+  runId: string,
+  overrides: Partial<AgentRunResult> = {},
+): AgentRunResult => ({
   state: {
     ...completeState,
     runId,
+    ...overrides.state,
   },
   fullText,
   finalHistory: [],
@@ -167,6 +194,7 @@ const buildRunResult = (fullText: string, runId: string): AgentRunResult => ({
   tokenInfo: {
     promptTokenCount: 10,
     candidatesTokenCount: 15,
+    ...overrides.tokenInfo,
   },
   telemetry: {
     sessionId: SESSION_ID,
@@ -365,7 +393,211 @@ describe('ChatContainer interrupted-run integration', () => {
     });
   });
 
-  it('allows only one active continuation when two tabs race without Web Locks', async () => {
+  it('retains a paused empty response and persists the completed usage delta', async () => {
+    const checkpoint = buildCheckpoint({
+      runId: 'run-paused-empty',
+      projectId: null,
+      status: 'paused',
+      tokenTotals: { promptTokenCount: 100, candidatesTokenCount: 0 },
+      budgetUsage: {
+        turns: 1,
+        toolCalls: 0,
+        toolCallsKnown: true,
+        tokens: 100,
+        estimatedTokens: false,
+      },
+    });
+    await saveCheckpoint(checkpoint);
+    const onNewMessage = vi.fn();
+    mockControllerRun.mockResolvedValueOnce(
+      buildRunResult('', checkpoint.runId, {
+        state: {
+          ...completeState,
+          runId: checkpoint.runId,
+          status: 'paused',
+          pauseReason: 'budget',
+          turnIndex: 2,
+        },
+        tokenInfo: {
+          promptTokenCount: 111,
+          candidatesTokenCount: 0,
+          usage: { source: 'api', inputTokens: 11, outputTokens: 0, totalTokens: 11 },
+        },
+      }),
+    );
+
+    const session = createMockChatSession({
+      id: SESSION_ID,
+      tokenUsage: {
+        source: 'api',
+        totals: {
+          inputTokens: 100,
+          outputTokens: 0,
+          totalTokens: 100,
+        },
+      },
+      tokenCount: 100,
+    });
+    const { props } = await renderChat({ session, onNewMessage });
+    await screen.findByTestId('resume-run-banner');
+
+    await userEvent.setup().click(screen.getByRole('button', { name: '繼續' }));
+
+    await waitFor(async () => {
+      expect(onNewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tokenUsage: expect.objectContaining({
+            totals: expect.objectContaining({ totalTokens: 111 }),
+          }),
+        }),
+        'Resume this task',
+        '',
+        expect.objectContaining({ promptTokenCount: 11 }),
+      );
+      await expect(getCheckpoint(checkpoint.runId)).resolves.toEqual(checkpoint);
+    });
+    expect(props.onNewMessage).toBe(onNewMessage);
+    expect(screen.getByText('（本次回覆沒有內容）')).toBeInTheDocument();
+  });
+
+  it('retains a reloaded paused checkpoint even when its committed tail matches the session', async () => {
+    const checkpoint = buildCheckpoint({
+      runId: 'run-paused-matching-tail',
+      projectId: null,
+      status: 'paused',
+      committedHistoryDelta: [{ role: 'model', content: 'Already persisted turn' }],
+    });
+    await saveCheckpoint(checkpoint);
+
+    const { container } = await renderChat({
+      session: createMockChatSession({
+        id: SESSION_ID,
+        messages: [{ role: 'model', content: 'Already persisted turn' }],
+      }),
+    });
+
+    expect(await within(container).findByTestId('resume-run-banner')).toBeInTheDocument();
+    await expect(getCheckpoint(checkpoint.runId)).resolves.toEqual(checkpoint);
+  });
+
+  it('allows a paused checkpoint at the old turn limit to resume after increasing the budget', async () => {
+    const checkpoint = buildCheckpoint({
+      runId: 'run-adjustable-budget',
+      projectId: null,
+      status: 'paused',
+      turnIndex: 5,
+      maxTurns: 5,
+      budget: { maxTurns: 5, maxToolCalls: 30, maxTokens: 50_000 },
+    });
+    await saveCheckpoint(checkpoint);
+    mockControllerRun.mockResolvedValueOnce(buildRunResult('Extended output', checkpoint.runId));
+
+    await renderChat();
+    await screen.findByTestId('resume-run-banner');
+    expect(screen.getByRole('button', { name: '繼續' })).toBeDisabled();
+
+    const user = userEvent.setup();
+    const maxTurns = screen.getByRole('textbox', { name: '最大回合數' });
+    await user.clear(maxTurns);
+    await user.type(maxTurns, '6');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '繼續' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: '繼續' }));
+
+    await waitFor(() => {
+      expect(mockAgentRunControllerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          budget: expect.objectContaining({ maxTurns: 6 }),
+          resumeFrom: checkpoint,
+        }),
+      );
+    });
+  });
+
+  it('fails closed when a checkpoint contains an unconfirmed in-flight tool call', async () => {
+    const checkpoint = buildCheckpoint({
+      runId: 'run-unsafe-replay',
+      projectId: null,
+      status: 'paused',
+      inFlightToolCallIds: ['tool-uncertain'],
+    });
+    await saveCheckpoint(checkpoint);
+
+    await renderChat();
+    await screen.findByTestId('resume-run-banner');
+
+    expect(screen.getByText(/尚未確認的工具操作/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '繼續' })).toBeDisabled();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(mockControllerRun).not.toHaveBeenCalled();
+  });
+
+  it('requires an explicit acknowledgement for legacy unknown tool usage', async () => {
+    const checkpoint = buildCheckpoint({
+      runId: 'run-unknown-usage',
+      projectId: null,
+      status: 'paused',
+      resumeBudgetAcknowledgementRequired: true,
+      budgetUsage: {
+        turns: 1,
+        toolCalls: 32,
+        toolCallsKnown: false,
+        tokens: 100,
+        estimatedTokens: true,
+      },
+    });
+    await saveCheckpoint(checkpoint);
+    mockControllerRun.mockResolvedValueOnce(
+      buildRunResult('Acknowledged output', checkpoint.runId),
+    );
+
+    await renderChat();
+    await screen.findByTestId('resume-run-banner');
+    const resume = screen.getByRole('button', { name: '繼續' });
+    expect(resume).toBeDisabled();
+    const acknowledgement = screen.getByRole('checkbox');
+    await userEvent.setup().click(acknowledgement);
+    await waitFor(() => expect(resume).toBeEnabled());
+    await userEvent.setup().click(resume);
+
+    await waitFor(() => {
+      expect(mockAgentRunControllerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          acknowledgeResumeBudget: true,
+          resumeFrom: checkpoint,
+        }),
+      );
+    });
+  });
+
+  it('shows a readable busy error and does not request a provider when the workspace lock is busy', async () => {
+    const checkpoint = buildCheckpoint({ runId: 'run-workspace-busy', projectId: null });
+    await saveCheckpoint(checkpoint);
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      writable: true,
+      value: {
+        request: vi.fn(
+          async (
+            _name: string,
+            _options: unknown,
+            callback: (lock: object | null) => Promise<unknown>,
+          ) => callback(null),
+        ),
+      },
+    });
+
+    const { container } = await renderChat();
+    await within(container).findByTestId('resume-run-banner');
+    await userEvent.setup().click(within(container).getByRole('button', { name: '繼續' }));
+
+    await waitFor(() => {
+      expect(mockControllerRun).not.toHaveBeenCalled();
+      expect(within(container).getByRole('alert')).toHaveTextContent(/工作仍在其他分頁進行中/);
+    });
+  });
+
+  it('fails closed for checkpoint resumes when Web Locks are unavailable', async () => {
     const checkpoint = buildCheckpoint({ runId: 'run-race', projectId: null });
     await saveCheckpoint(checkpoint);
     Object.defineProperty(navigator, 'locks', {
@@ -374,36 +606,14 @@ describe('ChatContainer interrupted-run integration', () => {
       value: undefined,
     });
 
-    let resolveFirstRun: ((value: AgentRunResult) => void) | undefined;
-    mockControllerRun.mockImplementationOnce(
-      async () =>
-        new Promise<AgentRunResult>(resolve => {
-          resolveFirstRun = resolve;
-        }),
-    );
-
     const firstTab = await renderChat({ onNewMessage: vi.fn() });
-    const secondTab = await renderChat({ onNewMessage: vi.fn() });
-
-    const firstResume = await within(firstTab.container).findByRole('button', { name: '繼續' });
-    await userEvent.setup().click(firstResume);
-    await waitFor(() => {
-      expect(mockControllerRun).toHaveBeenCalledTimes(1);
-    });
-
-    const secondResume = await within(secondTab.container).findByRole('button', { name: '繼續' });
-    await userEvent.setup().click(secondResume);
+    const resume = await within(firstTab.container).findByRole('button', { name: '繼續' });
+    await userEvent.setup().click(resume);
 
     await waitFor(() => {
-      expect(mockControllerRun).toHaveBeenCalledTimes(1);
-      expect(
-        within(secondTab.container).getByText('無法取得續跑權限，可能已有其他分頁接手此工作。'),
-      ).toBeInTheDocument();
+      expect(mockControllerRun).not.toHaveBeenCalled();
+      expect(within(firstTab.container).getByText(/瀏覽器不支援安全的工作鎖/)).toBeInTheDocument();
     });
-
-    resolveFirstRun?.(buildRunResult('First tab output', checkpoint.runId));
-    await waitFor(async () => {
-      await expect(getCheckpoint(checkpoint.runId)).resolves.toBeNull();
-    });
+    await expect(getCheckpoint(checkpoint.runId)).resolves.toEqual(checkpoint);
   });
 });

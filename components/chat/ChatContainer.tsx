@@ -15,10 +15,14 @@ import WelcomeMessage from './WelcomeMessage';
 import ThinkingIndicator from './ThinkingIndicator';
 import StreamingResponse from './StreamingResponse';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
-import { AgentRunController } from '../../services/agentRunController';
+import {
+  AgentRunController,
+  getAgentRunReplayPolicy,
+  type AgentRunBudget,
+  type AgentRunResult,
+} from '../../services/agentRunController';
 import { buildIndexedKnowledgeChunks } from '../../services/knowledgeSearchService';
 import {
-  claimCheckpoint,
   deleteCheckpoint,
   getCheckpoint,
   getInterruptedForSession,
@@ -60,33 +64,33 @@ import {
   getCachedSharedRoutableTargets,
   resolveRoutableTargets,
 } from '../../services/assistantRoutingService';
+import { registerWorkspaceOperationFlusher } from '../../services/workspaceOperationService';
+import {
+  buildChatDraftOwnerId,
+  clearWorkspaceDraftWithOperationToken,
+  clearWorkspaceDraftAsync,
+  readWorkspaceDraft,
+  type DraftPersistenceMode,
+  WORKSPACE_DRAFT_SAVE_DELAY_MS,
+  writeWorkspaceDraftWithOperationToken,
+  writeWorkspaceDraftAsync,
+} from '../../services/workspaceDraftService';
+import { LOCAL_WORKSPACE_RUN_ID } from '../../services/workspaceOfflineGuard';
+import { acquireWorkspaceRunLock } from '../../services/workspaceRunLock';
+import AgentRunControls from './AgentRunControls';
 
 const INTERRUPTION_NOTICE = '⚠️ 上次工作已中斷';
 const EMPTY_RESPONSE_NOTICE = '（本次回覆沒有內容）';
 const STICKY_SCROLL_THRESHOLD_PX = 100;
-const CHAT_DRAFTS_STORAGE_KEY = 'educare.chat-drafts.v1';
-const CHAT_DRAFT_SAVE_DELAY_MS = 500;
-
-type StoredChatDrafts = Record<string, string>;
-type MemoryChatDrafts = Record<string, string | null>;
-
-type DraftPersistenceMode = 'persistent' | 'session';
-
-interface ChatDraftReadResult {
-  value: string;
-  mode: DraftPersistenceMode;
-}
-
-interface ChatDraftStorage {
-  getItem: (key: string) => string | null;
-  setItem: (key: string, value: string) => void;
-  removeItem: (key: string) => void;
-}
-
-// localStorage can be unavailable in private browsing, embedded previews, or after a
-// quota/security failure. Keep only the current tab's unsent drafts in memory as a
-// scoped fallback; callers still gate all draft persistence with draftPersistenceEnabled.
-const memoryChatDrafts: MemoryChatDrafts = {};
+const DEFAULT_AGENT_RUN_BUDGET: AgentRunBudget = {
+  maxTurns: 5,
+  maxToolCalls: 30,
+  maxTokens: 50_000,
+};
+const MISSING_PROJECT_RESUME_REASON = '原本的 HTML 專案已不存在，只能捨棄並封存這次中斷紀錄。';
+const EXHAUSTED_RESUME_REASON = '這次工作已達目前的軟預算；請提高相應上限後再續跑。';
+const UNSAFE_RESUME_REASON =
+  '這次工作有尚未確認的工具操作，為避免重複副作用，只能捨棄並封存中斷紀錄。';
 
 interface ProviderReadiness {
   ready: boolean;
@@ -94,114 +98,28 @@ interface ProviderReadiness {
   supportsLocalMode: boolean;
 }
 
+interface SubmittedDraft {
+  ownerId: string;
+  sessionId: string;
+  text: string;
+}
+
+interface ActiveRunSession {
+  session: ChatSession;
+  token: object;
+}
+
 const buildChatDraftKey = (assistantId: string, sessionId: string): string =>
-  `${assistantId}:${sessionId}`;
+  buildChatDraftOwnerId(assistantId, sessionId);
 
-const getChatDraftStorage = (): ChatDraftStorage | null => {
-  if (typeof window === 'undefined') {
-    return null;
-  }
+const persistChatDraftAsync = (ownerId: string, value: string): Promise<DraftPersistenceMode> =>
+  value.trim()
+    ? writeWorkspaceDraftAsync('chat', ownerId, value)
+    : clearWorkspaceDraftAsync('chat', ownerId);
 
-  try {
-    const storage = window.localStorage;
-    if (
-      storage &&
-      typeof storage.getItem === 'function' &&
-      typeof storage.setItem === 'function' &&
-      typeof storage.removeItem === 'function'
-    ) {
-      return storage;
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-};
-
-const readChatDrafts = (): { drafts: StoredChatDrafts; mode: DraftPersistenceMode } => {
-  const storage = getChatDraftStorage();
-  if (!storage) {
-    return { drafts: {}, mode: 'session' };
-  }
-
-  try {
-    const raw = storage.getItem(CHAT_DRAFTS_STORAGE_KEY);
-    if (!raw) {
-      return { drafts: {}, mode: 'persistent' };
-    }
-
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { drafts: {}, mode: 'session' };
-    }
-
-    return {
-      drafts: Object.fromEntries(
-        Object.entries(parsed).filter(([, value]) => typeof value === 'string'),
-      ) as StoredChatDrafts,
-      mode: 'persistent',
-    };
-  } catch {
-    return { drafts: {}, mode: 'session' };
-  }
-};
-
-const readChatDraft = (draftKey: string): ChatDraftReadResult => {
-  if (Object.prototype.hasOwnProperty.call(memoryChatDrafts, draftKey)) {
-    return {
-      value: memoryChatDrafts[draftKey] ?? '',
-      mode: 'session',
-    };
-  }
-
-  const stored = readChatDrafts();
-  const storedValue = stored.drafts[draftKey];
-  if (storedValue !== undefined) {
-    return { value: storedValue, mode: stored.mode };
-  }
-
-  return { value: '', mode: stored.mode };
-};
-
-const persistChatDraft = (draftKey: string, value: string): DraftPersistenceMode => {
-  const hasDraft = Boolean(value.trim());
-  if (!hasDraft) {
-    // Keep a tombstone until storage confirms the removal, otherwise an old durable
-    // value could reappear after a failed clear.
-    memoryChatDrafts[draftKey] = null;
-  }
-
-  const storage = getChatDraftStorage();
-  if (!storage) {
-    if (hasDraft) {
-      memoryChatDrafts[draftKey] = value;
-    }
-    return 'session';
-  }
-
-  try {
-    const drafts = readChatDrafts().drafts;
-    if (hasDraft) {
-      drafts[draftKey] = value;
-    } else {
-      delete drafts[draftKey];
-    }
-
-    if (Object.keys(drafts).length === 0) {
-      storage.removeItem(CHAT_DRAFTS_STORAGE_KEY);
-    } else {
-      storage.setItem(CHAT_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
-    }
-
-    delete memoryChatDrafts[draftKey];
-    return 'persistent';
-  } catch {
-    if (hasDraft) {
-      memoryChatDrafts[draftKey] = value;
-    }
-    return 'session';
-  }
+const readChatDraft = (ownerId: string): { value: string; mode: DraftPersistenceMode } => {
+  const result = readWorkspaceDraft<string>('chat', ownerId);
+  return { value: result.value ?? '', mode: result.mode };
 };
 
 const readProviderReadiness = (): ProviderReadiness => {
@@ -296,13 +214,14 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   webSpeechToolsEnabled = false,
   routableTargetsOverride,
   onRequestProviderSetup,
+  onFlushDrafts,
   onAcceptRouteProposal,
   onDeclineRouteProposal,
 }) => {
   const appContext = useContext(AppContext);
   const isSandboxMode = sharedMode || sandboxMode;
   const actions = appContext?.actions ?? null;
-  const draftPersistenceEnabled = !sharedMode;
+  const draftPersistenceEnabled = !isSandboxMode;
   const draftKey = useMemo(
     () => buildChatDraftKey(assistantId, session.id),
     [assistantId, session.id],
@@ -338,9 +257,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const [interruptedCheckpoint, setInterruptedCheckpoint] = useState<AgentRunCheckpoint | null>(
     null,
   );
-  const [resumeUnavailableReason, setResumeUnavailableReason] = useState<string | null>(null);
+  const [runBudget, setRunBudget] = useState<AgentRunBudget>(DEFAULT_AGENT_RUN_BUDGET);
+  const [agentRunControlsOpen, setAgentRunControlsOpen] = useState(false);
+  const [resumeProjectMissing, setResumeProjectMissing] = useState(false);
+  const [acknowledgeResumeBudget, setAcknowledgeResumeBudget] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  const [activeRunRevision, setActiveRunRevision] = useState(0);
   const sessionRef = useRef(session);
+  const initialScrollSessionRef = useRef<string | null>(null);
+  const userScrolledRef = useRef(false);
   const pendingNewSessionScrollResetRef = useRef<string | null>(null);
   const controllerRef = useRef<AgentRunController | null>(null);
   const isThinkingRef = useRef(isThinking);
@@ -349,14 +274,72 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const latestErrorMessageRef = useRef<string | null>(null);
   const inputRef = useRef(initialDraft);
   const draftKeyRef = useRef(draftKey);
+  const pendingSubmittedDraftRef = useRef<SubmittedDraft | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const streamingBufferRef = useRef('');
   const streamingFlushFrameRef = useRef<number | null>(null);
   const routeProposalRef = useRef<RouteProposal | undefined>(undefined);
   const handoffKickoffSessionIdRef = useRef<string | null>(null);
-  const activeRunSessionRef = useRef<ChatSession | null>(null);
+  const activeRunSessionsRef = useRef(new Map<string, ActiveRunSession>());
   const runOwnershipSessionIdRef = useRef<string | null>(null);
   const [chatScrollParent, setChatScrollParent] = useState<HTMLDivElement | null>(null);
+
+  const resumeReplayPolicy = useMemo(
+    () => (interruptedCheckpoint ? getAgentRunReplayPolicy(interruptedCheckpoint) : null),
+    [interruptedCheckpoint],
+  );
+  const resumeBudgetAcknowledgementRequired =
+    resumeReplayPolicy?.requiresBudgetAcknowledgement === true;
+  const resumeHasUnconfirmedToolCalls =
+    resumeReplayPolicy?.requiresInFlightToolAcknowledgement === true;
+  const resumeBudgetExhausted = Boolean(
+    interruptedCheckpoint &&
+      ((interruptedCheckpoint.turnIndex >= interruptedCheckpoint.maxTurns &&
+        (runBudget.maxTurns ?? interruptedCheckpoint.maxTurns) <=
+          interruptedCheckpoint.turnIndex) ||
+        (runBudget.maxToolCalls !== undefined &&
+          interruptedCheckpoint.budgetUsage?.toolCallsKnown !== false &&
+          (interruptedCheckpoint.budgetUsage?.toolCalls ??
+            interruptedCheckpoint.toolTrace.length) >= runBudget.maxToolCalls) ||
+        (runBudget.maxTokens !== undefined &&
+          interruptedCheckpoint.budgetUsage?.estimatedTokens !== true &&
+          (interruptedCheckpoint.budgetUsage?.tokens ??
+            interruptedCheckpoint.tokenTotals.promptTokenCount +
+              interruptedCheckpoint.tokenTotals.candidatesTokenCount) >= runBudget.maxTokens)),
+  );
+  const resumeUnavailableReason = resumeProjectMissing
+    ? MISSING_PROJECT_RESUME_REASON
+    : resumeHasUnconfirmedToolCalls
+      ? UNSAFE_RESUME_REASON
+      : resumeBudgetExhausted
+        ? EXHAUSTED_RESUME_REASON
+        : null;
+  const controlsState =
+    interruptedCheckpoint && runState?.runId !== interruptedCheckpoint.runId ? null : runState;
+
+  useEffect(() => {
+    if (!draftPersistenceEnabled) {
+      return;
+    }
+
+    // Archive operations drain gated writes, then invoke flushers while their
+    // opaque token is active. Read the mounted editor refs here so an input
+    // changed less than 500ms ago is included in the snapshot; never enqueue
+    // another gated write from inside the exclusive operation.
+    return registerWorkspaceOperationFlusher(operationToken => {
+      const ownerId = draftKeyRef.current;
+      const value = inputRef.current;
+      if (pendingSubmittedDraftRef.current?.ownerId === ownerId && !value.trim()) {
+        return;
+      }
+      if (value.trim()) {
+        writeWorkspaceDraftWithOperationToken(operationToken, 'chat', ownerId, value);
+      } else {
+        clearWorkspaceDraftWithOperationToken(operationToken, 'chat', ownerId);
+      }
+    });
+  }, [draftPersistenceEnabled]);
+
   const {
     containerRef,
     isAtBottom,
@@ -365,6 +348,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     resetScrollToTop,
     updatePinnedState,
   } = useStickToBottom(STICKY_SCROLL_THRESHOLD_PX);
+
+  const handleChatScroll = useCallback(() => {
+    userScrolledRef.current = true;
+    handleScroll();
+  }, [handleScroll]);
 
   useLayoutEffect(() => {
     if (containerRef.current !== chatScrollParent) {
@@ -395,10 +383,24 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
 
     if (draftPersistenceEnabled) {
-      setDraftPersistenceMode(persistChatDraft(draftKeyRef.current, inputRef.current));
+      if (
+        !(
+          pendingSubmittedDraftRef.current?.ownerId === draftKeyRef.current &&
+          !inputRef.current.trim()
+        )
+      ) {
+        const previousOwnerId = draftKeyRef.current;
+        void persistChatDraftAsync(previousOwnerId, inputRef.current).then(mode => {
+          if (draftKeyRef.current === previousOwnerId) {
+            setDraftPersistenceMode(mode);
+          }
+        });
+      }
     } else {
       setDraftPersistenceMode('persistent');
     }
+
+    void onFlushDrafts?.();
 
     draftKeyRef.current = draftKey;
     const restoredDraftResult = draftPersistenceEnabled
@@ -408,7 +410,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setDraftPersistenceMode(restoredDraftResult.mode);
     inputRef.current = restoredDraft;
     setInputValue(restoredDraft);
-  }, [draftKey, draftPersistenceEnabled, setInputValue]);
+  }, [draftKey, draftPersistenceEnabled, onFlushDrafts, setInputValue]);
 
   useEffect(() => {
     if (!draftPersistenceEnabled) {
@@ -416,8 +418,19 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
 
     const timeoutId = window.setTimeout(() => {
-      setDraftPersistenceMode(persistChatDraft(draftKeyRef.current, inputRef.current));
-    }, CHAT_DRAFT_SAVE_DELAY_MS);
+      if (
+        pendingSubmittedDraftRef.current?.ownerId === draftKeyRef.current &&
+        !inputRef.current.trim()
+      ) {
+        return;
+      }
+      const ownerId = draftKeyRef.current;
+      void persistChatDraftAsync(ownerId, inputRef.current).then(mode => {
+        if (draftKeyRef.current === ownerId) {
+          setDraftPersistenceMode(mode);
+        }
+      });
+    }, WORKSPACE_DRAFT_SAVE_DELAY_MS);
 
     return () => window.clearTimeout(timeoutId);
   }, [draftKey, draftPersistenceEnabled, input]);
@@ -425,10 +438,18 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   useEffect(() => {
     return () => {
       if (draftPersistenceEnabled) {
-        persistChatDraft(draftKeyRef.current, inputRef.current);
+        if (
+          !(
+            pendingSubmittedDraftRef.current?.ownerId === draftKeyRef.current &&
+            !inputRef.current.trim()
+          )
+        ) {
+          void persistChatDraftAsync(draftKeyRef.current, inputRef.current);
+        }
       }
+      void onFlushDrafts?.();
     };
-  }, [draftPersistenceEnabled]);
+  }, [draftPersistenceEnabled, onFlushDrafts]);
 
   useEffect(() => {
     if (!hasRuntimeContext) {
@@ -508,8 +529,14 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
   const handleRequestProviderSetup = () => {
     if (draftPersistenceEnabled) {
-      setDraftPersistenceMode(persistChatDraft(draftKeyRef.current, inputRef.current));
+      const ownerId = draftKeyRef.current;
+      void persistChatDraftAsync(ownerId, inputRef.current).then(mode => {
+        if (draftKeyRef.current === ownerId) {
+          setDraftPersistenceMode(mode);
+        }
+      });
     }
+    void onFlushDrafts?.();
 
     if (onRequestProviderSetup) {
       onRequestProviderSetup();
@@ -623,6 +650,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     sessionRef.current = session;
 
     if (sessionChanged) {
+      userScrolledRef.current = false;
       if (session.messages.length === 0) {
         pendingNewSessionScrollResetRef.current = session.id;
         resetScrollToTop();
@@ -635,9 +663,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       return;
     }
     // Run 進行中切換 session(例如接受轉接):中斷舊 run 並清除它的即時 UI。
-    // 舊 run 會 commit 回自己的 session (activeRunSessionRef),不會寫進新 session;
+    // 舊 run 會 commit 回自己的 session,不會寫進新 session;
     // 未完成的部分由既有 checkpoint 機制保留,回到原 session 時可續跑。
     controllerRef.current.stop('session-switch');
+    controllerRef.current = null;
+    setIsLoading(false);
     streamingBufferRef.current = '';
     setStreamingResponse('');
     setIsThinking(false);
@@ -654,8 +684,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
   useEffect(() => {
     sessionRef.current = currentSession;
-    if (activeRunSessionRef.current?.id === currentSession.id) {
-      activeRunSessionRef.current = currentSession;
+    const activeRun = activeRunSessionsRef.current.get(currentSession.id);
+    if (activeRun) {
+      activeRun.session = currentSession;
     }
   }, [currentSession]);
 
@@ -739,6 +770,40 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     toolCallRecords,
   ]);
 
+  // A remount after reload can race Virtuoso's first measurement. Re-apply the
+  // initial bottom position after two animation frames, but never steal the
+  // viewport from a user who has already scrolled away.
+  useEffect(() => {
+    if (
+      !chatScrollParent ||
+      currentSession.messages.length === 0 ||
+      initialScrollSessionRef.current === currentSession.id
+    ) {
+      return;
+    }
+
+    initialScrollSessionRef.current = currentSession.id;
+    let secondFrame: number | null = null;
+    const firstFrame = window.requestAnimationFrame(() => {
+      if (userScrolledRef.current) {
+        return;
+      }
+      scrollToBottom('auto');
+      secondFrame = window.requestAnimationFrame(() => {
+        if (!userScrolledRef.current) {
+          scrollToBottom('auto');
+        }
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== null) {
+        window.cancelAnimationFrame(secondFrame);
+      }
+    };
+  }, [chatScrollParent, currentSession.id, currentSession.messages.length, scrollToBottom]);
+
   useEffect(() => {
     let active = true;
 
@@ -746,7 +811,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       if (!session.id) {
         if (active) {
           setInterruptedCheckpoint(null);
-          setResumeUnavailableReason(null);
+          setResumeProjectMissing(false);
+          setAcknowledgeResumeBudget(false);
           setResumeError(null);
         }
         return;
@@ -759,17 +825,23 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
       if (!checkpoint) {
         setInterruptedCheckpoint(null);
-        setResumeUnavailableReason(null);
+        setResumeProjectMissing(false);
+        setAcknowledgeResumeBudget(false);
         setResumeError(null);
         return;
       }
 
       const lastCommitted = checkpoint.committedHistoryDelta.at(-1);
-      if (lastCommitted && sameMessage(session.messages.at(-1), lastCommitted)) {
+      if (
+        checkpoint.status === 'complete' &&
+        lastCommitted &&
+        sameMessage(session.messages.at(-1), lastCommitted)
+      ) {
         await deleteCheckpoint(checkpoint.runId);
         if (active) {
           setInterruptedCheckpoint(null);
-          setResumeUnavailableReason(null);
+          setResumeProjectMissing(false);
+          setAcknowledgeResumeBudget(false);
           setResumeError(null);
         }
         return;
@@ -783,18 +855,19 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
         if (!project) {
           setInterruptedCheckpoint(checkpoint);
-          setResumeUnavailableReason('原本的 HTML 專案已不存在，只能捨棄並封存這次中斷紀錄。');
+          setResumeProjectMissing(true);
+          setAcknowledgeResumeBudget(false);
           setResumeError(null);
           return;
         }
       }
 
       setInterruptedCheckpoint(checkpoint);
-      setResumeUnavailableReason(
-        checkpoint.turnIndex >= checkpoint.maxTurns
-          ? '這次工作已達最大回合數，只能捨棄並封存中斷前的紀錄。'
-          : null,
-      );
+      setResumeProjectMissing(false);
+      setAcknowledgeResumeBudget(false);
+      if (checkpoint.budget) {
+        setRunBudget({ ...DEFAULT_AGENT_RUN_BUDGET, ...checkpoint.budget });
+      }
       setResumeError(null);
     };
 
@@ -807,7 +880,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
   useEffect(() => {
     const flushCheckpoint = () => {
-      void controllerRef.current?.flushCheckpoint(true);
+      const flush = controllerRef.current?.flushCheckpoint(true);
+      if (flush) {
+        void flush.catch(error => {
+          console.warn('Failed to flush agent run checkpoint:', error);
+        });
+      }
     };
 
     const handleVisibilityChange = () => {
@@ -870,30 +948,29 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   };
 
   const handleSubagentActivity = (update: { batchId: string; runs: SubagentRunRecord[] }) => {
+    const next = {
+      ...subagentBatchesRef.current,
+      [update.batchId]: update.runs,
+    };
+    subagentBatchesRef.current = next;
     setSubagentBatches(prev => {
-      const next = {
+      return {
         ...prev,
         [update.batchId]: update.runs,
       };
-      subagentBatchesRef.current = next;
-      return next;
     });
   };
 
   const handleToolCallActivity = (record: ToolCallRecord) => {
-    setToolCallRecords(prev => {
-      const existingIndex = prev.findIndex(item => item.id === record.id);
-      if (existingIndex === -1) {
-        const next = [...prev, record].slice(-50);
-        toolCallRecordsRef.current = next;
-        return next;
-      }
-
-      const next = [...prev];
-      next[existingIndex] = record;
-      toolCallRecordsRef.current = next;
-      return next;
-    });
+    const existingIndex = toolCallRecordsRef.current.findIndex(item => item.id === record.id);
+    const next =
+      existingIndex === -1
+        ? [...toolCallRecordsRef.current, record].slice(-50)
+        : toolCallRecordsRef.current.map((item, index) =>
+            index === existingIndex ? record : item,
+          );
+    toolCallRecordsRef.current = next;
+    setToolCallRecords(next);
 
     if (
       record.name === DRAW_GEOMETRY_TOOL_NAME &&
@@ -975,11 +1052,22 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const loadRetainedCheckpoint = async (runId: string) => {
     const checkpoint = await getCheckpoint(runId);
     setInterruptedCheckpoint(checkpoint ?? null);
-    setResumeUnavailableReason(
-      checkpoint && checkpoint.turnIndex >= checkpoint.maxTurns
-        ? '這次工作已達最大回合數，只能捨棄並封存中斷前的紀錄。'
-        : null,
-    );
+    setAcknowledgeResumeBudget(false);
+    if (!checkpoint) {
+      setResumeProjectMissing(false);
+      setResumeError(null);
+      return;
+    }
+
+    if (checkpoint.projectId) {
+      const project = await htmlProjectStore.getProject(checkpoint.projectId);
+      setResumeProjectMissing(!project);
+    } else {
+      setResumeProjectMissing(false);
+    }
+    if (checkpoint.budget) {
+      setRunBudget({ ...DEFAULT_AGENT_RUN_BUDGET, ...checkpoint.budget });
+    }
     setResumeError(null);
   };
 
@@ -1010,7 +1098,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
     await deleteCheckpoint(checkpoint.runId);
     setInterruptedCheckpoint(null);
-    setResumeUnavailableReason(null);
+    setResumeProjectMissing(false);
+    setAcknowledgeResumeBudget(false);
     setResumeError(null);
   };
 
@@ -1020,13 +1109,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     displaySession,
     historyMessages,
     resumeCheckpoint,
+    submittedDraft,
   }: {
     message: string;
     attachments?: MessageAttachment[];
     displaySession: typeof currentSession;
     historyMessages: ChatMessage[];
     resumeCheckpoint?: AgentRunCheckpoint;
-  }) => {
+    submittedDraft?: SubmittedDraft;
+  }): Promise<boolean> => {
     setIsLoading(true);
     setIsThinking(true);
     streamingBufferRef.current = '';
@@ -1047,8 +1138,14 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     setCurrentSession(displaySession);
     // Run 綁定它啟動時的 session:commit 與即時 callback 都以此判斷是否仍顯示中,
     // 避免使用者中途切換 session 時把結果或串流寫進別的 session。
-    activeRunSessionRef.current = displaySession;
+    const runToken = {};
+    activeRunSessionsRef.current.set(displaySession.id, {
+      session: displaySession,
+      token: runToken,
+    });
+    setActiveRunRevision(revision => revision + 1);
     const isRunSessionDisplayed = () => sessionRef.current.id === displaySession.id;
+    let runController: AgentRunController | null = null;
 
     try {
       setStatusText(ragChunks.length > 0 ? '🔎 搜尋知識庫中...' : '🤖 生成回答...');
@@ -1117,7 +1214,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           htmlProjectAccessEnabled &&
           (resumeCheckpoint?.projectBootstrapEnabled ?? (!projectEditingActive && !isSandboxMode)),
         sharedMode: resumeCheckpoint?.sharedMode ?? isSandboxMode,
+        budget: runBudget,
         resumeFrom: resumeCheckpoint,
+        acknowledgeResumeBudget: resumeCheckpoint ? acknowledgeResumeBudget : undefined,
         callbacks: {
           // 即時 callback 只在 run 的 session 仍顯示中時更新 UI;
           // 切換 session 後這些串流/活動屬於背景 run,不得渲染進新 session 的畫面。
@@ -1191,99 +1290,180 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           },
         },
       });
+      runController = controller;
       controllerRef.current = controller;
 
-      const commitRunResult = async () => {
+      const tokenInfoForPersistence = (result: AgentRunResult): AgentRunResult['tokenInfo'] => {
+        const previousPromptTokens = resumeCheckpoint?.tokenTotals.promptTokenCount ?? 0;
+        const previousCandidateTokens = resumeCheckpoint?.tokenTotals.candidatesTokenCount ?? 0;
+        const promptTokenCount =
+          resumeCheckpoint && result.tokenInfo.promptTokenCount >= previousPromptTokens
+            ? result.tokenInfo.promptTokenCount - previousPromptTokens
+            : result.tokenInfo.promptTokenCount;
+        const candidatesTokenCount =
+          resumeCheckpoint && result.tokenInfo.candidatesTokenCount >= previousCandidateTokens
+            ? result.tokenInfo.candidatesTokenCount - previousCandidateTokens
+            : result.tokenInfo.candidatesTokenCount;
+        return {
+          ...result.tokenInfo,
+          promptTokenCount,
+          candidatesTokenCount,
+        };
+      };
+
+      const commitRunResult = async (): Promise<boolean> => {
         runOwnershipSessionIdRef.current = displaySession.id;
         const result = await controller.run();
-        controllerRef.current = null;
-        flushStreamingBuffer();
+        const persistenceTokenInfo = tokenInfoForPersistence(result);
+        const persistedToolCallLog = toolCallRecordsRef.current.slice(-50);
+        const persistedSubagentRuns = Object.values(subagentBatchesRef.current).flatMap(
+          runs => runs,
+        );
+        const persistedActivity = {
+          toolCallLog: persistedToolCallLog,
+          subagentRuns: persistedSubagentRuns,
+        };
+        const checkpointPersistenceFailed =
+          result.state.failureCode === 'checkpoint-persistence-failed' ||
+          result.state.failure?.code === 'checkpoint-persistence-failed';
+        const runDisplayed = isRunSessionDisplayed();
+        const clearNonResumableCheckpoint = () => {
+          if (!runDisplayed) {
+            return;
+          }
+          setInterruptedCheckpoint(null);
+          setResumeProjectMissing(false);
+          setAcknowledgeResumeBudget(false);
+          setResumeError('這次工作無法安全保存續跑紀錄，因此不提供續跑。請重新送出訊息。');
+        };
+        const ownsController = controllerRef.current === controller;
+        if (ownsController) {
+          controllerRef.current = null;
+        }
 
         // Run 期間使用者可能已切到別的 session:結果仍持久化回 run 自己的 session,
         // 但顯示中 session 的 UI state 不得被舊 run 覆寫。
-        const runDisplayed = isRunSessionDisplayed();
-        const baseSession = activeRunSessionRef.current ?? sessionRef.current;
+        const runOwnsUi = ownsController || runDisplayed;
+        if (runOwnsUi) {
+          flushStreamingBuffer();
+        }
+        const baseSession =
+          activeRunSessionsRef.current.get(displaySession.id)?.session ?? displaySession;
 
         if (runDisplayed) {
           setRunState(result.state);
           actions?.setAgentRunState?.(result.state);
         }
-        setIsLoading(false);
-        setIsThinking(false);
-        setStatusText('');
-        setStreamingResponse('');
-        setStreamingGeometryBoards([]);
-        setStreamingSpeechUtterances([]);
-        setStreamingImages([]);
+        if (runOwnsUi) {
+          setIsLoading(false);
+          setIsThinking(false);
+          setStatusText('');
+          setStreamingResponse('');
+          setStreamingGeometryBoards([]);
+          setStreamingSpeechUtterances([]);
+          setStreamingImages([]);
+        }
         const fullModelResponse = result.fullText.trim();
+        const completedRunId = resumeCheckpoint?.runId ?? result.state.runId;
         const latestErrorMessage = latestErrorMessageRef.current;
         const shouldPersistError = Boolean(latestErrorMessage) || result.state.status === 'failed';
 
         if (shouldPersistError) {
           const errorMessage = buildAssistantMessage(
             latestErrorMessage ?? '執行過程發生錯誤，請稍後再試。',
-            { isError: true },
+            { ...persistedActivity, isError: true },
           );
           const finalSession = applyTokenUsageToSession(
             {
               ...baseSession,
               messages: [...baseSession.messages, errorMessage],
             },
-            result.tokenInfo,
+            persistenceTokenInfo,
           );
           if (runDisplayed) {
             sessionRef.current = finalSession;
             setCurrentSession(finalSession);
           }
-          setSubagentBatches({});
-          setToolCallRecords([]);
-          await onNewMessage(finalSession, message, errorMessage.content, result.tokenInfo);
-          if (runDisplayed) {
-            await loadRetainedCheckpoint(result.state.runId);
+          if (runOwnsUi) {
+            setSubagentBatches({});
+            setToolCallRecords([]);
           }
-          return;
+          await onNewMessage(finalSession, message, errorMessage.content, persistenceTokenInfo);
+          if (runDisplayed) {
+            if (checkpointPersistenceFailed) {
+              clearNonResumableCheckpoint();
+            } else {
+              await loadRetainedCheckpoint(result.state.runId);
+            }
+          }
+          return false;
         }
 
         if (fullModelResponse === '') {
           const hasArtifacts =
             (result.geometryBoards?.length ?? 0) > 0 ||
             (result.speechUtterances?.length ?? 0) > 0 ||
-            (result.images?.length ?? 0) > 0;
-          const artifactMessage = hasArtifacts
-            ? buildAssistantMessage('', {
-                citations: result.citations,
-                geometryBoards: result.geometryBoards,
-                speechUtterances: result.speechUtterances,
-                images: result.images,
-                routeProposal: routeProposalRef.current,
-              })
-            : undefined;
+            (result.images?.length ?? 0) > 0 ||
+            persistedToolCallLog.length > 0 ||
+            persistedSubagentRuns.length > 0;
+          const artifactMessage =
+            hasArtifacts || (result.citations?.length ?? 0) > 0
+              ? buildAssistantMessage('', {
+                  ...persistedActivity,
+                  citations: result.citations,
+                  geometryBoards: result.geometryBoards,
+                  speechUtterances: result.speechUtterances,
+                  images: result.images,
+                  routeProposal: routeProposalRef.current,
+                })
+              : undefined;
+          const completedHistory = appendWithoutDuplicateTail(
+            baseSession.messages,
+            result.historyDelta,
+          );
+          const lastCompletedMessage = completedHistory.at(-1);
+          const persistedMessages =
+            artifactMessage && lastCompletedMessage?.role === 'model'
+              ? [...completedHistory.slice(0, -1), { ...lastCompletedMessage, ...artifactMessage }]
+              : artifactMessage
+                ? [...completedHistory, artifactMessage]
+                : completedHistory;
           const finalSession = applyTokenUsageToSession(
             {
               ...baseSession,
-              messages: artifactMessage
-                ? [...baseSession.messages, artifactMessage]
-                : baseSession.messages,
+              messages: persistedMessages,
             },
-            result.tokenInfo,
+            persistenceTokenInfo,
           );
           if (runDisplayed) {
             sessionRef.current = finalSession;
             setCurrentSession(finalSession);
             setPendingEmptyResponseNotice(artifactMessage ? null : EMPTY_RESPONSE_NOTICE);
           }
-          setSubagentBatches({});
-          setToolCallRecords([]);
-          await onNewMessage(finalSession, message, '', result.tokenInfo);
-          await deleteCheckpoint(result.state.runId);
-          if (runDisplayed) {
-            setInterruptedCheckpoint(null);
-            setResumeUnavailableReason(null);
+          if (runOwnsUi) {
+            setSubagentBatches({});
+            setToolCallRecords([]);
           }
-          return;
+          await onNewMessage(finalSession, message, '', persistenceTokenInfo);
+          if (result.state.status === 'complete') {
+            await deleteCheckpoint(completedRunId);
+            if (runDisplayed) {
+              setInterruptedCheckpoint(null);
+              setResumeProjectMissing(false);
+              setAcknowledgeResumeBudget(false);
+            }
+          } else if (runDisplayed) {
+            if (checkpointPersistenceFailed) {
+              clearNonResumableCheckpoint();
+            } else {
+              await loadRetainedCheckpoint(result.state.runId);
+            }
+          }
+          return result.state.status === 'complete';
         }
 
         const newAiMessage = buildAssistantMessage(fullModelResponse, {
+          ...persistedActivity,
           citations: result.citations,
           geometryBoards: result.geometryBoards,
           speechUtterances: result.speechUtterances,
@@ -1295,105 +1475,114 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             ...baseSession,
             messages: [...baseSession.messages, newAiMessage],
           },
-          result.tokenInfo,
+          persistenceTokenInfo,
         );
 
         if (runDisplayed) {
           sessionRef.current = finalSession;
           setCurrentSession(finalSession);
         }
-        setSubagentBatches({});
-        setToolCallRecords([]);
+        if (runOwnsUi) {
+          setSubagentBatches({});
+          setToolCallRecords([]);
+        }
         try {
-          await onNewMessage(finalSession, message, fullModelResponse, result.tokenInfo);
+          await onNewMessage(finalSession, message, fullModelResponse, persistenceTokenInfo);
         } catch (persistError) {
           latestErrorMessageRef.current = (persistError as Error).message;
           throw persistError;
         }
 
         if (result.state.status === 'complete') {
-          await deleteCheckpoint(result.state.runId);
+          await deleteCheckpoint(completedRunId);
           if (runDisplayed) {
             setInterruptedCheckpoint(null);
-            setResumeUnavailableReason(null);
+            setResumeProjectMissing(false);
+            setAcknowledgeResumeBudget(false);
           }
         } else if (runDisplayed) {
           // 未顯示中時不動 resume 橫幅;回到原 session 時由 loadInterruptedCheckpoint 效果載入。
-          await loadRetainedCheckpoint(result.state.runId);
+          if (checkpointPersistenceFailed) {
+            clearNonResumableCheckpoint();
+          } else {
+            await loadRetainedCheckpoint(result.state.runId);
+          }
         }
+        return result.state.status === 'complete';
       };
 
-      const lockKey = `agent-run-${displaySession.id}`;
-      const lockManager =
-        typeof navigator !== 'undefined' && 'locks' in navigator ? navigator.locks : undefined;
-
-      if (lockManager) {
-        const lockResult = await lockManager.request(
-          lockKey,
-          resumeCheckpoint ? { mode: 'exclusive', ifAvailable: true } : { mode: 'exclusive' },
-          async lock => {
-            if (resumeCheckpoint && !lock) {
-              return false;
-            }
-
-            await commitRunResult();
-            return true;
-          },
+      const lockLease = await acquireWorkspaceRunLock(LOCAL_WORKSPACE_RUN_ID, {
+        ifAvailable: true,
+      });
+      if (!lockLease.acquired) {
+        if (controllerRef.current === controller) {
+          controllerRef.current = null;
+        }
+        setIsLoading(false);
+        setIsThinking(false);
+        setStatusText('');
+        setRunState(null);
+        actions?.setAgentRunState?.(null);
+        setResumeError(
+          resumeCheckpoint
+            ? '工作仍在其他分頁進行中，或目前瀏覽器不支援安全的工作鎖；未送出模型請求。'
+            : '目前無法取得工作鎖（可能已有其他分頁執行，或瀏覽器不支援安全鎖）；未送出模型請求。',
         );
-
-        if (resumeCheckpoint && lockResult === false) {
-          setIsLoading(false);
-          setIsThinking(false);
-          setStatusText('');
-          setRunState(null);
-          actions?.setAgentRunState?.(null);
-          setResumeError('工作仍在其他分頁進行中。');
-        }
-        return;
+        return false;
       }
 
-      if (resumeCheckpoint) {
-        const claimed = await claimCheckpoint(resumeCheckpoint.runId);
-        if (!claimed) {
-          setIsLoading(false);
-          setIsThinking(false);
-          setStatusText('');
-          setRunState(null);
-          actions?.setAgentRunState?.(null);
-          setResumeError('無法取得續跑權限，可能已有其他分頁接手此工作。');
-          return;
-        }
+      try {
+        // Keep the workspace lease through provider execution and the final
+        // session/checkpoint persistence so another tab cannot race the commit.
+        return await commitRunResult();
+      } finally {
+        lockLease.release();
       }
-
-      await commitRunResult();
     } catch (error) {
-      controllerRef.current = null;
-      flushStreamingBuffer();
+      const ownsController = runController !== null && controllerRef.current === runController;
+      if (ownsController) {
+        controllerRef.current = null;
+      }
+      const runDisplayed = isRunSessionDisplayed();
+      const runOwnsUi = ownsController || runDisplayed;
+      if (runOwnsUi) {
+        flushStreamingBuffer();
+      }
       const errorMessageText = (error as Error).message;
       console.error('Error during chat stream:', error);
       latestErrorMessageRef.current = errorMessageText;
-      setIsLoading(false);
-      setIsThinking(false);
-      setStatusText('');
-      setRunState(null);
-      actions?.setAgentRunState?.(null);
-      setStreamingResponse('');
-      setStreamingGeometryBoards([]);
-      setStreamingSpeechUtterances([]);
-      setSubagentBatches({});
-      setToolCallRecords([]);
+      if (runOwnsUi) {
+        setIsLoading(false);
+        setIsThinking(false);
+        setStatusText('');
+        setRunState(null);
+        actions?.setAgentRunState?.(null);
+        setStreamingResponse('');
+        setStreamingGeometryBoards([]);
+        setStreamingSpeechUtterances([]);
+        setSubagentBatches({});
+        setToolCallRecords([]);
+      }
 
-      const runDisplayed = isRunSessionDisplayed();
-      const baseSession = activeRunSessionRef.current ?? sessionRef.current;
+      const baseSession =
+        activeRunSessionsRef.current.get(displaySession.id)?.session ?? displaySession;
       const classification = classifyChatError(errorMessageText, bundleStrings.errors);
       const errorMessage = buildAssistantMessage(
         `${classification.message}\n\n（${errorMessageText}）`,
         { isError: true },
       );
-      // Retain the unsent user input so the recipient can edit and retry.
-      setInputValue(message);
-      if (attachments?.length) {
-        setPendingAttachments(attachments);
+      // Retain unsent input only for the run owner still shown in this editor;
+      // a late run from session A must never restore its text into session B.
+      const canRestoreSubmittedInput =
+        runDisplayed &&
+        (!submittedDraft ||
+          (submittedDraft.sessionId === sessionRef.current.id &&
+            submittedDraft.ownerId === draftKeyRef.current));
+      if (canRestoreSubmittedInput) {
+        setInputValue(message);
+        if (attachments?.length) {
+          setPendingAttachments(attachments);
+        }
       }
       const finalSession = {
         ...baseSession,
@@ -1407,11 +1596,37 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         promptTokenCount: 0,
         candidatesTokenCount: 0,
       });
+      return false;
     } finally {
       if (runOwnershipSessionIdRef.current === displaySession.id) {
         runOwnershipSessionIdRef.current = null;
       }
-      activeRunSessionRef.current = null;
+      const activeRun = activeRunSessionsRef.current.get(displaySession.id);
+      if (activeRun?.token === runToken) {
+        activeRunSessionsRef.current.delete(displaySession.id);
+      }
+      setActiveRunRevision(revision => revision + 1);
+    }
+  };
+
+  const isCurrentDraftOwner = (submission: SubmittedDraft): boolean =>
+    sessionRef.current.id === submission.sessionId && draftKeyRef.current === submission.ownerId;
+
+  const clearCapturedDraft = async (submission: SubmittedDraft): Promise<void> => {
+    const mode = await clearWorkspaceDraftAsync('chat', submission.ownerId);
+    if (draftKeyRef.current === submission.ownerId) {
+      setDraftPersistenceMode(mode);
+    }
+  };
+
+  const clearPendingSubmission = (submission: SubmittedDraft): void => {
+    const pending = pendingSubmittedDraftRef.current;
+    if (
+      pending?.ownerId === submission.ownerId &&
+      pending.sessionId === submission.sessionId &&
+      pending.text === submission.text
+    ) {
+      pendingSubmittedDraftRef.current = null;
     }
   };
 
@@ -1422,42 +1637,70 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
 
     const userMessage = input.trim();
+    const submittedDraft: SubmittedDraft = {
+      ownerId: draftKeyRef.current,
+      sessionId: sessionRef.current.id,
+      text: userMessage,
+    };
+    pendingSubmittedDraftRef.current = submittedDraft;
     setInputValue('');
-    if (draftPersistenceEnabled) {
-      setDraftPersistenceMode(persistChatDraft(draftKeyRef.current, ''));
-    }
     setPendingAttachments([]);
     setAttachmentError(null);
     setPendingEmptyResponseNotice(null);
 
-    if (interruptedCheckpoint) {
-      await persistCheckpointArchive(interruptedCheckpoint, {
-        clearProject: resumeUnavailableReason !== null && Boolean(interruptedCheckpoint.projectId),
+    try {
+      if (interruptedCheckpoint) {
+        await persistCheckpointArchive(interruptedCheckpoint, {
+          clearProject: resumeProjectMissing && Boolean(interruptedCheckpoint.projectId),
+        });
+      }
+
+      const baseSession = sessionRef.current;
+      const newUserMessage: ChatMessage = {
+        role: 'user',
+        content: userMessage,
+        timestamp: Date.now(),
+        ...(attachments.length > 0 ? { attachments } : {}),
+      };
+      const updatedSession = {
+        ...baseSession,
+        messages: [...baseSession.messages, newUserMessage],
+      };
+
+      const sent = await executeRun({
+        message: userMessage,
+        attachments: attachments.length > 0 ? attachments : undefined,
+        displaySession: updatedSession,
+        historyMessages: baseSession.messages.filter(
+          messageItem => !isSyntheticMessage(messageItem),
+        ),
+        submittedDraft,
       });
+      clearPendingSubmission(submittedDraft);
+      if (draftPersistenceEnabled) {
+        if (sent) {
+          await clearCapturedDraft(submittedDraft);
+        } else if (isCurrentDraftOwner(submittedDraft) && !inputRef.current.trim()) {
+          setInputValue(userMessage);
+        }
+      } else if (!sent && isCurrentDraftOwner(submittedDraft) && !inputRef.current.trim()) {
+        setInputValue(userMessage);
+      }
+    } catch (error) {
+      clearPendingSubmission(submittedDraft);
+      if (isCurrentDraftOwner(submittedDraft) && !inputRef.current.trim()) {
+        setInputValue(userMessage);
+      }
+      throw error;
     }
-
-    const baseSession = sessionRef.current;
-    const newUserMessage: ChatMessage = {
-      role: 'user',
-      content: userMessage,
-      timestamp: Date.now(),
-      ...(attachments.length > 0 ? { attachments } : {}),
-    };
-    const updatedSession = {
-      ...baseSession,
-      messages: [...baseSession.messages, newUserMessage],
-    };
-
-    await executeRun({
-      message: userMessage,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      displaySession: updatedSession,
-      historyMessages: baseSession.messages.filter(messageItem => !isSyntheticMessage(messageItem)),
-    });
   };
 
   const handleResume = async () => {
-    if (!interruptedCheckpoint || resumeUnavailableReason) {
+    if (
+      !interruptedCheckpoint ||
+      resumeUnavailableReason ||
+      (resumeBudgetAcknowledgementRequired && !acknowledgeResumeBudget)
+    ) {
       return;
     }
 
@@ -1471,7 +1714,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       updatedAt: Date.now(),
     };
 
-    await executeRun({
+    const submittedDraft: SubmittedDraft = {
+      ownerId: draftKeyRef.current,
+      sessionId: sessionRef.current.id,
+      text: interruptedCheckpoint.originalMessage,
+    };
+    const sent = await executeRun({
       message: interruptedCheckpoint.originalMessage,
       displaySession: mergedSession,
       historyMessages:
@@ -1479,7 +1727,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           ? baseSession.messages.filter(messageItem => !isSyntheticMessage(messageItem))
           : mergedSession.messages,
       resumeCheckpoint: interruptedCheckpoint,
+      submittedDraft,
     });
+    if (sent && draftPersistenceEnabled) {
+      await clearCapturedDraft(submittedDraft);
+    }
   };
 
   const handleDiscardInterruptedRun = async () => {
@@ -1488,7 +1740,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
 
     await persistCheckpointArchive(interruptedCheckpoint, {
-      clearProject: resumeUnavailableReason !== null && Boolean(interruptedCheckpoint.projectId),
+      clearProject: resumeProjectMissing && Boolean(interruptedCheckpoint.projectId),
     });
   };
 
@@ -1509,6 +1761,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       !handoff?.summary ||
       currentSession.messages.length > 0 ||
       isLoading ||
+      activeRunSessionsRef.current.size > 0 ||
       handoffKickoffSessionIdRef.current === currentSession.id
     ) {
       return;
@@ -1525,31 +1778,53 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       displaySession: { ...currentSession, messages: [kickoffMessage] },
       historyMessages: [],
     });
-  }, [currentSession, isLoading]);
+  }, [activeRunRevision, currentSession, isLoading]);
 
   const handlePromptSelect = async (prompt: string) => {
     if (isLoading || inputUnavailable) {
       return;
     }
 
+    const submittedDraft: SubmittedDraft = {
+      ownerId: draftKeyRef.current,
+      sessionId: sessionRef.current.id,
+      text: prompt,
+    };
+    pendingSubmittedDraftRef.current = submittedDraft;
     setInputValue(prompt);
-    const baseSession = sessionRef.current;
-    const newUserMessage: ChatMessage = {
-      role: 'user',
-      content: prompt,
-      timestamp: Date.now(),
-    };
-    const updatedSession = {
-      ...baseSession,
-      messages: [...baseSession.messages, newUserMessage],
-    };
+    try {
+      const baseSession = sessionRef.current;
+      const newUserMessage: ChatMessage = {
+        role: 'user',
+        content: prompt,
+        timestamp: Date.now(),
+      };
+      const updatedSession = {
+        ...baseSession,
+        messages: [...baseSession.messages, newUserMessage],
+      };
 
-    await executeRun({
-      message: prompt,
-      displaySession: updatedSession,
-      historyMessages: baseSession.messages.filter(messageItem => !isSyntheticMessage(messageItem)),
-    });
-    setInputValue('');
+      const sent = await executeRun({
+        message: prompt,
+        displaySession: updatedSession,
+        historyMessages: baseSession.messages.filter(
+          messageItem => !isSyntheticMessage(messageItem),
+        ),
+        submittedDraft,
+      });
+      clearPendingSubmission(submittedDraft);
+      if (sent) {
+        if (isCurrentDraftOwner(submittedDraft)) {
+          setInputValue('');
+        }
+        if (draftPersistenceEnabled) {
+          await clearCapturedDraft(submittedDraft);
+        }
+      }
+    } catch (error) {
+      clearPendingSubmission(submittedDraft);
+      throw error;
+    }
   };
 
   const citationContentsById = useMemo(
@@ -1612,7 +1887,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                     setStatusText('');
                     setInputValue('');
                     setInterruptedCheckpoint(null);
-                    setResumeUnavailableReason(null);
+                    setResumeProjectMissing(false);
+                    setAcknowledgeResumeBudget(false);
                     setResumeError(null);
                   }}
                   className='flex min-h-11 items-center space-x-1 rounded-lg bg-purple-700 px-3 py-2 text-sm font-medium text-purple-100 transition-colors hover:bg-purple-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300 md:space-x-2 md:px-4'
@@ -1641,12 +1917,41 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
       <main
         ref={containerRef}
-        onScroll={handleScroll}
+        onScroll={handleChatScroll}
         className='chat-scroll flex-1 overflow-y-auto'
         role='main'
         aria-label='聊天對話'
       >
         <div className='mx-auto max-w-4xl px-4 py-5 md:px-6 md:py-8'>
+          {!hideHeader && (
+            <details
+              open={agentRunControlsOpen || Boolean(interruptedCheckpoint)}
+              onToggle={event => setAgentRunControlsOpen(event.currentTarget.open)}
+              className='mb-4 rounded-2xl border border-gray-800 bg-gray-900/60 p-3 text-sm text-gray-100 md:p-4'
+              data-testid='agent-run-controls-details'
+            >
+              <summary className='cursor-pointer list-none rounded-lg px-1 py-1 text-sm font-semibold text-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 [&::-webkit-details-marker]:hidden'>
+                Agent 執行設定/用量
+              </summary>
+              <AgentRunControls
+                budget={runBudget}
+                onBudgetChange={setRunBudget}
+                state={controlsState}
+                checkpoint={interruptedCheckpoint}
+                disabled={isLoading}
+                className='mt-3'
+              />
+            </details>
+          )}
+          {resumeError && !interruptedCheckpoint && (
+            <div
+              className='mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100'
+              role='alert'
+              data-testid='agent-run-error'
+            >
+              {resumeError}
+            </div>
+          )}
           {interruptedCheckpoint && (
             <div
               className='mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100'
@@ -1662,7 +1967,25 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                   {resumeUnavailableReason && (
                     <p className='mt-2 text-amber-200'>{resumeUnavailableReason}</p>
                   )}
-                  {resumeError && <p className='mt-2 text-rose-200'>{resumeError}</p>}
+                  {resumeError && (
+                    <p className='mt-2 text-rose-200' role='alert'>
+                      {resumeError}
+                    </p>
+                  )}
+                  {resumeBudgetAcknowledgementRequired && (
+                    <label className='mt-3 flex items-start gap-2 text-xs text-amber-50'>
+                      <input
+                        type='checkbox'
+                        checked={acknowledgeResumeBudget}
+                        onChange={event => setAcknowledgeResumeBudget(event.target.checked)}
+                        disabled={isLoading}
+                        className='mt-0.5 h-4 w-4 rounded border-amber-200/50 bg-gray-900 text-cyan-500 focus:ring-cyan-400'
+                      />
+                      <span>
+                        我了解這筆舊紀錄的工具用量可能不完整，並明確允許在目前軟預算下續跑。
+                      </span>
+                    </label>
+                  )}
                   {interruptedCheckpoint.partialText && (
                     <details className='mt-2'>
                       <summary className='cursor-pointer text-amber-50'>
@@ -1678,7 +2001,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
                   <button
                     type='button'
                     onClick={() => void handleResume()}
-                    disabled={Boolean(resumeUnavailableReason) || isLoading}
+                    disabled={
+                      Boolean(resumeUnavailableReason) ||
+                      (resumeBudgetAcknowledgementRequired && !acknowledgeResumeBudget) ||
+                      isLoading
+                    }
                     className='rounded-lg bg-cyan-600 px-4 py-2 font-medium text-white transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50'
                   >
                     繼續

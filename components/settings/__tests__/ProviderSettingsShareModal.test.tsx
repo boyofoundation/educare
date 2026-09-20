@@ -7,8 +7,9 @@ import ProviderSettingsShareModal from '../ProviderSettingsShareModal';
 import { CryptoService } from '../../../services/cryptoService';
 import {
   buildProviderSettingsPayload,
-  buildProviderSettingsShareUrl,
+  buildProviderSettingsShareEntryUrl,
   encryptProviderSettingsPayload,
+  serializeProviderSettingsShareFile,
 } from '../../../services/providerSettingsShareService';
 import {
   DEFAULT_PROVIDER_SETTINGS,
@@ -24,8 +25,9 @@ vi.mock('../../../services/cryptoService', () => ({
 
 vi.mock('../../../services/providerSettingsShareService', () => ({
   buildProviderSettingsPayload: vi.fn(),
-  buildProviderSettingsShareUrl: vi.fn(),
+  buildProviderSettingsShareEntryUrl: vi.fn(),
   encryptProviderSettingsPayload: vi.fn(),
+  serializeProviderSettingsShareFile: vi.fn(),
   getProviderDisplayName: vi.fn((provider: string) => {
     switch (provider) {
       case 'gemini':
@@ -51,7 +53,9 @@ vi.mock('qrcode', () => ({
   },
 }));
 
-const SHARE_URL = 'https://example.com/settings?ps=encrypted-provider-settings';
+const SHARE_URL = 'https://example.com/settings?ps=file';
+const SHARE_FILE =
+  '{"format":"educare-provider-settings-share","schemaVersion":1,"encryptedPayload":"encrypted-provider-settings"}';
 const QR_CODE_DATA_URL = 'data:image/png;base64,provider-share-qr';
 const GENERATED_PASSWORD = 'generated-password-123';
 const AVAILABLE_PROVIDERS: ProviderType[] = ['gemini', 'openrouter', 'lmstudio'];
@@ -150,7 +154,8 @@ describe('ProviderSettingsShareModal', () => {
       buildPayloadForProvider(provider),
     );
     vi.mocked(encryptProviderSettingsPayload).mockResolvedValue('encrypted-provider-settings');
-    vi.mocked(buildProviderSettingsShareUrl).mockReturnValue(SHARE_URL);
+    vi.mocked(buildProviderSettingsShareEntryUrl).mockReturnValue(SHARE_URL);
+    vi.mocked(serializeProviderSettingsShareFile).mockReturnValue(SHARE_FILE);
     qrCodeToDataURLMock.mockResolvedValue(QR_CODE_DATA_URL);
 
     clipboardWriteText.mockReset();
@@ -218,6 +223,7 @@ describe('ProviderSettingsShareModal', () => {
     expect(sharePanel.getByRole('button', { name: '複製連結' })).toBeInTheDocument();
     expect(sharePanel.getByRole('button', { name: '複製密碼' })).toBeInTheDocument();
     expect(sharePanel.getByRole('button', { name: '下載 QR Code' })).toBeInTheDocument();
+    expect(sharePanel.getByRole('button', { name: '下載加密設定檔' })).toBeInTheDocument();
     expect(qrCodeToDataURLMock).toHaveBeenCalledWith(
       SHARE_URL,
       expect.objectContaining({
@@ -235,6 +241,7 @@ describe('ProviderSettingsShareModal', () => {
     expect(mockLink.download).toBe('gemini-provider-share-qr.png');
     expect(mockLink.href).toBe(QR_CODE_DATA_URL);
     expect(mockLink.click).toHaveBeenCalledTimes(1);
+    expect(serializeProviderSettingsShareFile).toHaveBeenCalledWith('encrypted-provider-settings');
 
     createElementSpy.mockRestore();
   });

@@ -12,7 +12,11 @@ const { bundleService, credentials, providerManager } = vi.hoisted(() => ({
     AGENT_BUNDLE_LARGE_FILE_BYTES: 2 * 1024 * 1024,
   },
   credentials: { encryptBundleProviderCredentials: vi.fn() },
-  providerManager: { getAvailableProviders: vi.fn(), getSettings: vi.fn() },
+  providerManager: {
+    getAvailableProviders: vi.fn(),
+    getSettings: vi.fn(),
+    getEffectiveProviderSettings: vi.fn(),
+  },
 }));
 
 vi.mock('../../services/agentBundleService', () => bundleService);
@@ -81,6 +85,7 @@ describe('BundleBuilder', () => {
     bundleService.buildAgentBundle.mockReturnValue(bundleFixture());
     providerManager.getAvailableProviders.mockReturnValue([{ type: 'gemini' }]);
     providerManager.getSettings.mockReturnValue({ providers: {} });
+    providerManager.getEffectiveProviderSettings.mockReturnValue(undefined);
     credentials.encryptBundleProviderCredentials.mockResolvedValue({
       v: 1,
       algorithm: 'AES-GCM',
@@ -212,6 +217,49 @@ describe('BundleBuilder', () => {
         manifest: expect.objectContaining({ schemaVersion: 2 }),
         encryptedProviderSettings: expect.objectContaining({ ciphertext: 'encrypted-settings' }),
       }),
+    );
+  });
+
+  it('uses effective provider settings so temporary overrides are what get exported', async () => {
+    const effectiveSettings = {
+      activeProvider: 'openai',
+      providers: { openai: { enabled: true, config: { model: 'gpt-4o', apiKey: 'session-key' } } },
+    };
+    providerManager.getEffectiveProviderSettings.mockReturnValue(effectiveSettings);
+    bundleService.validateBundle.mockReturnValue({
+      bundle: bundleFixture(),
+      errors: [],
+      warnings: [],
+    });
+    const assistants = [
+      makeAssistant({ id: 'a1', name: '甲' }),
+      makeAssistant({ id: 'a2', name: '乙' }),
+    ];
+
+    await reachStep3(assistants);
+    fireEvent.change(screen.getByLabelText('協作包名稱'), { target: { value: '我的協作包' } });
+    fireEvent.click(screen.getByLabelText('隨附目前已設定 AI 服務商的加密設定'));
+    fireEvent.change(screen.getByLabelText('要隨附的已設定 AI 服務商'), {
+      target: { value: 'gemini' },
+    });
+    fireEvent.change(screen.getByLabelText('保護密碼'), { target: { value: 'a-shared-password' } });
+    fireEvent.change(screen.getByLabelText('確認密碼'), { target: { value: 'a-shared-password' } });
+    fireEvent.click(
+      screen.getByLabelText('我知道密碼必須另行安全傳送，且收件者可改用自己的 AI 服務商。'),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '匯出 JSON' }));
+    });
+
+    await waitFor(() =>
+      expect(credentials.encryptBundleProviderCredentials).toHaveBeenCalledOnce(),
+    );
+    expect(credentials.encryptBundleProviderCredentials).toHaveBeenCalledWith(
+      expect.anything(),
+      effectiveSettings,
+      'gemini',
+      'a-shared-password',
     );
   });
 
