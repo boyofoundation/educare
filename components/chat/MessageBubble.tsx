@@ -271,7 +271,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
         </div>
         <div className='group flex min-w-0 flex-col gap-3'>
           <div
-            className={`message-bubble message-bubble--assistant w-full max-w-[90%] rounded-2xl rounded-bl-md px-5 py-4 shadow-lg md:max-w-[70ch] md:px-6 ${
+            className={`message-bubble message-bubble--assistant ${message.isError ? 'message-bubble--error' : ''} w-full max-w-[90%] rounded-2xl rounded-bl-md px-5 py-4 shadow-lg md:max-w-[70ch] md:px-6 ${
               message.isError
                 ? 'border border-rose-500/40 bg-rose-500/10 text-rose-50'
                 : 'border border-gray-700/50 bg-gray-800/80 text-gray-100 backdrop-blur-sm'
