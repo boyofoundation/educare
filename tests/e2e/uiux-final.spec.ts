@@ -29,12 +29,15 @@ const skipOnboardingIfPresent = async (page: import('@playwright/test').Page) =>
 
 const openSettings = async (page: import('@playwright/test').Page) => {
   await skipOnboardingIfPresent(page);
-  const settingsButton = page.getByRole('button', { name: '設定' }).first();
-  if (await settingsButton.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await settingsButton.click();
+  const menuButton = page.getByRole('button', { name: '開啟選單' });
+  if (await menuButton.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await menuButton.click();
+    await page
+      .getByRole('navigation', { name: '主要導覽' })
+      .getByRole('button', { name: '設定' })
+      .click();
   } else {
-    await page.getByRole('button', { name: '開啟選單' }).click();
-    await page.getByRole('button', { name: '設定' }).click();
+    await page.getByRole('button', { name: '設定' }).first().click();
   }
 };
 
@@ -50,7 +53,7 @@ test.describe('UIUX integrated acceptance @final', () => {
     await expect(dialog).toHaveAttribute('aria-modal', 'true');
     await expect(dialog).toContainText('先選用途，再開始備課');
 
-    await dialog.getByRole('button', { name: /英文教學樣板/ }).click();
+    await dialog.getByRole('button', { name: /英文教學/ }).click();
     await expect(dialog.getByRole('button', { name: '套用樣板並開始' })).toBeEnabled();
     await dialog.getByRole('button', { name: '套用樣板並開始' }).click();
     await expect(overlay).toBeHidden();
@@ -85,7 +88,14 @@ test.describe('UIUX integrated acceptance @final', () => {
     await expect(navigation).toBeVisible();
     await navigation.getByRole('button', { name: '關閉選單' }).focus();
     await page.keyboard.press('Escape');
-    await expect(navigation).toBeHidden();
+    await expect
+      .poll(async () =>
+        navigation.evaluate(element => ({
+          ariaHidden: element.getAttribute('aria-hidden'),
+          inert: element.hasAttribute('inert') || (element as HTMLElement).inert === true,
+        })),
+      )
+      .toEqual(expect.objectContaining({ ariaHidden: 'true', inert: true }));
     await expect(menuButton).toBeFocused();
   });
 
