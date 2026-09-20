@@ -46,6 +46,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onSend,
   isLoading,
   disabled = false,
+  sendDisabled = false,
+  sendDisabledReason,
+  ariaDescribedBy,
   isWorkspaceOpen: _isWorkspaceOpen = false,
   isRunning = false,
   onStop,
@@ -61,7 +64,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const speechRecognitionRef = React.useRef<SpeechRecognitionLike | null>(null);
   const inputLocked = isLoading || disabled || isRunning;
-  const canSend = !inputLocked && (value.trim() !== '' || attachments.length > 0);
+  const canSend =
+    !inputLocked && !sendDisabled && (value.trim() !== '' || attachments.length > 0);
 
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (!imageInputEnabled || inputLocked || !onAddAttachmentFiles) {
@@ -112,7 +116,13 @@ const ChatInput: React.FC<ChatInputProps> = ({
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !isComposing) {
+    if (
+      e.key === 'Enter' &&
+      !e.shiftKey &&
+      !e.nativeEvent.isComposing &&
+      !isComposing &&
+      canSend
+    ) {
       e.preventDefault();
       onSend();
     }
@@ -278,7 +288,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               className='w-full resize-none rounded-2xl border-2 border-gray-600/40 bg-gray-700/60 px-4 py-3 text-base leading-7 text-white shadow-lg transition-all duration-300 hover:border-gray-500/60 focus:border-cyan-500/60 focus:bg-gray-700/80 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-60 md:px-5 md:py-3.5'
               disabled={isLoading || disabled || isRunning}
               aria-label='輸入訊息'
-              aria-describedby='input-help'
+              aria-describedby={['input-help', ariaDescribedBy].filter(Boolean).join(' ') || undefined}
               aria-multiline='true'
               role='textbox'
               style={{
@@ -297,6 +307,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           <button
             onClick={onSend}
             disabled={!canSend}
+            title={sendDisabled ? sendDisabledReason : undefined}
             className={`relative flex min-h-12 min-w-12 items-center justify-center rounded-2xl border px-4 py-3 text-base font-semibold text-white shadow-lg transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 focus:ring-offset-gray-800 md:min-w-[108px] md:px-7 ${
               !canSend
                 ? 'cursor-not-allowed border-gray-600/30 bg-gray-600/50'

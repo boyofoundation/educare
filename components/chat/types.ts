@@ -37,6 +37,12 @@ export interface ChatInputProps {
   onSend: () => void;
   isLoading: boolean;
   disabled?: boolean;
+  /** Prevents submission while keeping the draft editable (for example offline). */
+  sendDisabled?: boolean;
+  /** Explains why sending is unavailable to assistive technology and pointer users. */
+  sendDisabledReason?: string;
+  /** Additional status/help element IDs to associate with the textarea. */
+  ariaDescribedBy?: string;
   isWorkspaceOpen?: boolean;
   /** G5: 當 agent run 進行中為 true,顯示「停止」鈕並鎖定輸入。 */
   isRunning?: boolean;
@@ -81,6 +87,8 @@ export interface ChatContainerProps {
   webSpeechToolsEnabled?: boolean;
   /** 覆寫本地／分享模式的路由目標；空陣列會明確停用路由。 */
   routableTargetsOverride?: RoutableTarget[] | null;
+  /** Called when chat needs provider setup; the host can preserve a return-to-chat target. */
+  onRequestProviderSetup?: () => void;
   /** Optional host-owned route proposal decisions, used by the isolated bundle runner. */
   onAcceptRouteProposal?: (proposal: RouteProposal) => Promise<void>;
   onDeclineRouteProposal?: (proposal: RouteProposal) => Promise<void>;

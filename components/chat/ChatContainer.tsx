@@ -29,6 +29,7 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from '../../services/imageAttachmentService';
 import { PROVIDER_SETTINGS_CHANGED_EVENT } from '../../services/llmAdapter';
+import { providerManager } from '../../services/providerRegistry';
 import { bundleStrings } from '../bundle/bundleStrings';
 import { useStickToBottom } from '../../hooks/useStickToBottom';
 import type {
@@ -55,6 +56,88 @@ import {
 const INTERRUPTION_NOTICE = '⚠️ 上次工作已中斷';
 const EMPTY_RESPONSE_NOTICE = '（本次回覆沒有內容）';
 const STICKY_SCROLL_THRESHOLD_PX = 100;
+const CHAT_DRAFTS_STORAGE_KEY = 'educare.chat-drafts.v1';
+const CHAT_DRAFT_SAVE_DELAY_MS = 500;
+
+type StoredChatDrafts = Record<string, string>;
+
+interface ProviderReadiness {
+  ready: boolean;
+  displayName: string | null;
+  supportsLocalMode: boolean;
+}
+
+const buildChatDraftKey = (assistantId: string, sessionId: string): string =>
+  `${assistantId}:${sessionId}`;
+
+const readChatDrafts = (): StoredChatDrafts => {
+  if (typeof localStorage === 'undefined') {
+    return {};
+  }
+
+  try {
+    const raw = localStorage.getItem(CHAT_DRAFTS_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => typeof value === 'string'),
+    ) as StoredChatDrafts;
+  } catch {
+    return {};
+  }
+};
+
+const readChatDraft = (draftKey: string): string => readChatDrafts()[draftKey] ?? '';
+
+const persistChatDraft = (draftKey: string, value: string): void => {
+  if (typeof localStorage === 'undefined') {
+    return;
+  }
+
+  try {
+    const drafts = readChatDrafts();
+    if (value.trim()) {
+      drafts[draftKey] = value;
+    } else {
+      delete drafts[draftKey];
+    }
+
+    if (Object.keys(drafts).length === 0) {
+      localStorage.removeItem(CHAT_DRAFTS_STORAGE_KEY);
+    } else {
+      localStorage.setItem(CHAT_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+    }
+  } catch {
+    // Draft persistence is best effort; never block typing or provider setup.
+  }
+};
+
+const readProviderReadiness = (): ProviderReadiness => {
+  const activeProvider = providerManager.getActiveProvider();
+  if (!activeProvider) {
+    return { ready: false, displayName: null, supportsLocalMode: false };
+  }
+
+  let ready = false;
+  try {
+    ready = activeProvider.isAvailable();
+  } catch {
+    ready = false;
+  }
+
+  return {
+    ready,
+    displayName: activeProvider.displayName,
+    supportsLocalMode: activeProvider.supportsLocalMode,
+  };
+};
 
 const buildInterruptedNotice = (checkpoint: AgentRunCheckpoint): ChatMessage => ({
   role: 'model',
@@ -127,14 +210,21 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   mathToolsEnabled = false,
   webSpeechToolsEnabled = false,
   routableTargetsOverride,
+  onRequestProviderSetup,
   onAcceptRouteProposal,
   onDeclineRouteProposal,
 }) => {
   const appContext = useContext(AppContext);
   const isSandboxMode = sharedMode || sandboxMode;
   const actions = appContext?.actions ?? null;
+  const draftPersistenceEnabled = !sharedMode;
+  const draftKey = useMemo(
+    () => buildChatDraftKey(assistantId, session.id),
+    [assistantId, session.id],
+  );
+  const initialDraft = draftPersistenceEnabled ? readChatDraft(draftKey) : '';
   const setAgentRunState = actions?.setAgentRunState;
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(initialDraft);
   const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [imageInputSupported, setImageInputSupported] = useState(() =>
@@ -166,6 +256,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const subagentBatchesRef = useRef<Record<string, SubagentRunRecord[]>>({});
   const toolCallRecordsRef = useRef<ToolCallRecord[]>([]);
   const latestErrorMessageRef = useRef<string | null>(null);
+  const inputRef = useRef(initialDraft);
+  const draftKeyRef = useRef(draftKey);
   const streamingBufferRef = useRef('');
   const streamingFlushFrameRef = useRef<number | null>(null);
   const routeProposalRef = useRef<RouteProposal | undefined>(undefined);
@@ -180,6 +272,146 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     resetScrollToTop,
     updatePinnedState,
   } = useStickToBottom(STICKY_SCROLL_THRESHOLD_PX);
+
+  const setInputValue = useCallback((value: string) => {
+    inputRef.current = value;
+    setInput(value);
+  }, []);
+
+  const hasRuntimeContext = Boolean(appContext?.state);
+  const [isOnline, setIsOnline] = useState(
+    () => typeof navigator === 'undefined' || navigator.onLine !== false,
+  );
+  const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness>(() =>
+    readProviderReadiness(),
+  );
+
+  useEffect(() => {
+    if (draftKeyRef.current === draftKey) {
+      return;
+    }
+
+    if (draftPersistenceEnabled) {
+      persistChatDraft(draftKeyRef.current, inputRef.current);
+    }
+
+    draftKeyRef.current = draftKey;
+    const restoredDraft = draftPersistenceEnabled ? readChatDraft(draftKey) : '';
+    inputRef.current = restoredDraft;
+    setInput(restoredDraft);
+  }, [draftKey, draftPersistenceEnabled]);
+
+  useEffect(() => {
+    if (!draftPersistenceEnabled) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      persistChatDraft(draftKeyRef.current, inputRef.current);
+    }, CHAT_DRAFT_SAVE_DELAY_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [draftKey, draftPersistenceEnabled, input]);
+
+  useEffect(() => {
+    return () => {
+      if (draftPersistenceEnabled) {
+        persistChatDraft(draftKeyRef.current, inputRef.current);
+      }
+    };
+  }, [draftPersistenceEnabled]);
+
+  useEffect(() => {
+    if (!hasRuntimeContext) {
+      return;
+    }
+
+    let disposed = false;
+    let refreshTimer: number | null = null;
+
+    const refreshProviderReadiness = () => {
+      const next = readProviderReadiness();
+      setProviderReadiness(previous =>
+        previous.ready === next.ready &&
+        previous.displayName === next.displayName &&
+        previous.supportsLocalMode === next.supportsLocalMode
+          ? previous
+          : next,
+      );
+
+      if (!disposed && !next.ready) {
+        refreshTimer = window.setTimeout(refreshProviderReadiness, 500);
+      }
+    };
+
+    const handleProviderSettingsChanged = () => {
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+        refreshTimer = null;
+      }
+      refreshProviderReadiness();
+    };
+
+    refreshProviderReadiness();
+    window.addEventListener(PROVIDER_SETTINGS_CHANGED_EVENT, handleProviderSettingsChanged);
+
+    return () => {
+      disposed = true;
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      window.removeEventListener(
+        PROVIDER_SETTINGS_CHANGED_EVENT,
+        handleProviderSettingsChanged,
+      );
+    };
+  }, [hasRuntimeContext]);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  const providerUnavailable = hasRuntimeContext && !providerReadiness.ready;
+  const networkUnavailable =
+    hasRuntimeContext &&
+    providerReadiness.ready &&
+    !isOnline &&
+    !providerReadiness.supportsLocalMode;
+  const inputUnavailable = providerUnavailable || networkUnavailable;
+  const inputGuidance = providerUnavailable
+    ? {
+        message: '尚未設定可用的 AI 服務商。請先完成設定；目前輸入內容會保留。',
+        actionLabel: '設定 AI 服務商',
+        reason: '請先設定可用的 AI 服務商。',
+      }
+    : networkUnavailable
+      ? {
+          message: '目前沒有網路連線，雲端 AI 暫時無法使用；輸入內容會保留，恢復連線後即可傳送。',
+          actionLabel: null,
+          reason: '目前離線，恢復網路後才能傳送。',
+        }
+      : null;
+
+  const handleRequestProviderSetup = () => {
+    if (draftPersistenceEnabled) {
+      persistChatDraft(draftKeyRef.current, inputRef.current);
+    }
+
+    if (onRequestProviderSetup) {
+      onRequestProviderSetup();
+      return;
+    }
+
+    actions?.setViewMode?.('provider_settings');
+  };
 
   useEffect(() => {
     isThinkingRef.current = isThinking;
