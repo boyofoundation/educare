@@ -327,8 +327,9 @@ describe('AssistantContainer', () => {
       };
       render(<AssistantContainer {...testProps} />);
 
-      // Click the edit button in AssistantList to enter edit mode
-      const editButton = screen.getByRole('button', { name: '編輯助理' });
+      // Open the management menu, then enter edit mode.
+      fireEvent.click(screen.getByRole('button', { name: '管理助理' }));
+      const editButton = await screen.findByRole('button', { name: '編輯助理' });
       fireEvent.click(editButton);
 
       // Mock renders 'Edit Mode' when assistant is provided

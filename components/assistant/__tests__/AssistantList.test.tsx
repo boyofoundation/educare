@@ -92,7 +92,7 @@ describe('AssistantList', () => {
       expect(screen.queryByRole('button', { name: /分享助理/i })).not.toBeInTheDocument();
     });
 
-    it('renders action buttons when an assistant is selected', () => {
+    it('keeps the primary share action visible and tucks management actions into one menu', () => {
       const propsWithSelected = {
         ...mockProps,
         selectedAssistant: TEST_ASSISTANTS.basic,
@@ -100,9 +100,18 @@ describe('AssistantList', () => {
 
       render(<AssistantList {...propsWithSelected} />);
 
+      expect(screen.getByRole('button', { name: /分享助理/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '管理助理' })).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      );
+      expect(screen.queryByRole('button', { name: /編輯助理/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /刪除助理/i })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: '管理助理' }));
+
       expect(screen.getByRole('button', { name: /編輯助理/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /刪除助理/i })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /分享助理/i })).toBeInTheDocument();
     });
   });
 
@@ -144,6 +153,7 @@ describe('AssistantList', () => {
 
       render(<AssistantList {...propsWithSelected} />);
 
+      fireEvent.click(screen.getByRole('button', { name: '管理助理' }));
       const editButton = screen.getByRole('button', { name: /編輯助理/i });
       fireEvent.click(editButton);
 
@@ -158,6 +168,7 @@ describe('AssistantList', () => {
 
       render(<AssistantList {...propsWithSelected} />);
 
+      fireEvent.click(screen.getByRole('button', { name: '管理助理' }));
       const deleteButton = screen.getByRole('button', { name: /刪除助理/i });
       fireEvent.click(deleteButton);
 
@@ -207,6 +218,7 @@ describe('AssistantList', () => {
 
       render(<AssistantList {...propsWithSelected} />);
 
+      fireEvent.click(screen.getByRole('button', { name: '管理助理' }));
       expect(screen.getByRole('button', { name: /新增助理/i })).toHaveAttribute(
         'aria-label',
         '新增助理',
@@ -240,6 +252,7 @@ describe('AssistantList', () => {
 
       render(<AssistantList {...propsWithSelected} />);
 
+      fireEvent.click(screen.getByRole('button', { name: '管理助理' }));
       expect(screen.getByRole('button', { name: /新增助理/i })).toHaveAttribute(
         'title',
         '新增助理',
@@ -338,17 +351,17 @@ describe('AssistantList', () => {
       expect(mockProps.onCreateNew).toHaveBeenCalled();
     });
 
-    it('renders compact edit/share/delete for the selected assistant', () => {
+    it('keeps management actions out of the collapsed navigation rail', () => {
       render(
         <AssistantList {...mockProps} selectedAssistant={TEST_ASSISTANTS.basic} collapsed={true} />,
       );
 
-      expect(screen.getByRole('button', { name: '編輯助理' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: '刪除助理' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: '分享助理' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '編輯助理' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '刪除助理' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '分享助理' })).not.toBeInTheDocument();
     });
 
-    it('keeps compact action controls at least 44px for touch input', () => {
+    it('keeps collapsed navigation controls at least 44px for touch input', () => {
       render(
         <AssistantList
           {...mockProps}
@@ -360,14 +373,7 @@ describe('AssistantList', () => {
         />,
       );
 
-      for (const name of [
-        '匯入助理設定檔',
-        '打包協作包',
-        '分享助理',
-        '匯出助理設定檔',
-        '編輯助理',
-        '刪除助理',
-      ]) {
+      for (const name of ['新增助理', '選擇助理 Basic Assistant', '選擇助理 RAG Assistant']) {
         expect(screen.getByRole('button', { name })).toHaveClass('w-11', 'h-11');
       }
     });
@@ -404,14 +410,16 @@ describe('AssistantList', () => {
       const createButton = screen.getByRole('button', { name: /新增助理/i });
       expect(createButton).toHaveClass('hover:text-cyan-400', 'hover:bg-cyan-500/20');
 
+      fireEvent.click(screen.getByRole('button', { name: '管理助理' }));
+
       const editButton = screen.getByRole('button', { name: /編輯助理/i });
-      expect(editButton).toHaveClass('hover:text-cyan-400', 'hover:bg-cyan-500/20');
+      expect(editButton).toHaveClass('assistant-menu__item');
 
       const deleteButton = screen.getByRole('button', { name: /刪除助理/i });
-      expect(deleteButton).toHaveClass('hover:text-red-400', 'hover:bg-red-500/20');
+      expect(deleteButton).toHaveClass('assistant-menu__item', 'assistant-menu__item--danger');
 
       const shareButton = screen.getByRole('button', { name: /分享助理/i });
-      expect(shareButton).toHaveClass('hover:text-blue-400', 'hover:bg-blue-500/20');
+      expect(shareButton).toHaveClass('assistant-action');
     });
   });
 });
