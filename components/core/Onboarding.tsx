@@ -5,6 +5,7 @@ import {
   OnboardingCompletionReason,
 } from '../../services/onboardingPreferences';
 import { ASSISTANT_TEMPLATES, AssistantTemplate } from '../assistant/TemplateSelector';
+import Modal from '../ui/Modal';
 
 export interface OnboardingProps {
   /** Pass this prop when the shell owns visibility. Omit it for first-run mode. */
@@ -64,13 +65,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({
     return null;
   }
 
-  const setOpen = (nextOpen: boolean) => {
-    if (isOpen === undefined) {
-      setInternalOpen(nextOpen);
-    }
-    onOpenChange?.(nextOpen);
-  };
-
   const finish = (reason: OnboardingCompletionReason, templateId?: string) => {
     closeGuide(reason, onOpenChange, onComplete, onSkip, templateId);
     if (isOpen === undefined) {
@@ -79,39 +73,23 @@ export const Onboarding: React.FC<OnboardingProps> = ({
   };
 
   return (
-    <div
-      className={`fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm ${className ?? ''}`}
-      data-testid='onboarding-overlay'
+    <Modal
+      isOpen={open}
+      onClose={() => finish('skip')}
+      title='先選用途，再開始備課'
+      size='wide'
+      className={`max-h-[calc(100dvh-2rem)] border-cyan-800/60 bg-slate-900 text-slate-100 ${className ?? ''}`}
     >
-      <section
-        aria-labelledby='onboarding-title'
-        aria-modal='true'
-        className='max-h-[calc(100dvh-2rem)] w-full max-w-3xl overflow-y-auto rounded-2xl border border-cyan-800/60 bg-slate-900 p-6 text-slate-100 shadow-2xl sm:p-8'
-        role='dialog'
-      >
+      <div data-testid='onboarding-overlay' className='p-0'>
         <div className='flex items-start justify-between gap-4'>
           <div>
             <p className='text-sm font-semibold uppercase tracking-[0.18em] text-cyan-300'>
               EduCare 開始引導
             </p>
-            <h1 id='onboarding-title' className='mt-2 text-2xl font-bold sm:text-3xl'>
-              先選用途，再開始備課
-            </h1>
             <p className='mt-3 max-w-2xl text-sm leading-6 text-slate-300'>
               你可以直接套用教學樣板、匯入現有助理，或先瀏覽已保存的內容。這些選擇只會記錄在這台裝置，之後可從設定重新開啟引導。
             </p>
           </div>
-          <button
-            aria-label='關閉開始引導'
-            className='rounded-lg p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400'
-            onClick={() => {
-              finish('skip');
-              setOpen(false);
-            }}
-            type='button'
-          >
-            ×
-          </button>
         </div>
 
         <div className='mt-7 grid gap-3 sm:grid-cols-2' role='list' aria-label='教學用途樣板'>
@@ -120,6 +98,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             return (
               <button
                 aria-pressed={selected}
+                aria-label={`${template.name}樣板${selected ? '（已選取）' : ''}`}
                 className={`rounded-xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
                   selected
                     ? 'border-cyan-400 bg-cyan-950/70'
@@ -159,7 +138,9 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             className='shrink-0 rounded-lg bg-cyan-600 px-4 py-3 font-semibold text-white transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50'
             disabled={!selectedTemplate}
             onClick={() => {
-              if (!selectedTemplate) return;
+              if (!selectedTemplate) {
+                return;
+              }
               onApplyTemplate?.(selectedTemplate);
               finish('template', selectedTemplate.id);
             }}
@@ -179,7 +160,9 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             type='button'
           >
             匯入助理／協作包
-            <span className='mt-1 block text-xs font-normal text-slate-400'>使用現有檔案，不需要先設定雲端。</span>
+            <span className='mt-1 block text-xs font-normal text-slate-400'>
+              使用現有檔案，不需要先設定雲端。
+            </span>
           </button>
           <button
             className='rounded-lg border border-slate-600 px-4 py-3 text-left text-sm font-semibold text-slate-100 transition hover:border-cyan-400 hover:bg-slate-800'
@@ -190,7 +173,9 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             type='button'
           >
             先瀏覽已保存內容
-            <span className='mt-1 block text-xs font-normal text-slate-400'>資料留在本機，可稍後再建立助理。</span>
+            <span className='mt-1 block text-xs font-normal text-slate-400'>
+              資料留在本機，可稍後再建立助理。
+            </span>
           </button>
         </div>
 
@@ -200,17 +185,15 @@ export const Onboarding: React.FC<OnboardingProps> = ({
             className='rounded-lg px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white'
             onClick={() => {
               finish('skip');
-              setOpen(false);
             }}
             type='button'
           >
             先跳過
           </button>
         </div>
-      </section>
-    </div>
+      </div>
+    </Modal>
   );
 };
 
 export default Onboarding;
-

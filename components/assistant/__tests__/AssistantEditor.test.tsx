@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AssistantEditor } from '../AssistantEditor';
 import { TEST_ASSISTANTS, TEST_RAG_CHUNKS, setupAssistantTestEnvironment } from './test-utils';
@@ -285,5 +285,53 @@ describe('AssistantEditor', () => {
 
     expect(screen.getByText(/增加 token 成本/)).toBeInTheDocument();
     expect(screen.getByText(/shared mode 會在執行時強制停用/)).toBeInTheDocument();
+  });
+
+  it('keeps basic fields visible while collapsing advanced settings for a new assistant', () => {
+    render(<AssistantEditor {...props} />);
+
+    expect(screen.getByLabelText('助理名稱')).toBeVisible();
+    expect(screen.getByLabelText(/公開描述/)).toBeVisible();
+    expect(screen.getByTestId('advanced-settings')).not.toHaveAttribute('open');
+  });
+
+  it('asks before leaving a dirty draft and preserves it when the user stays', async () => {
+    render(<AssistantEditor {...props} />);
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: '未保存助理' } });
+    testEnvironment.confirmSpy.mockReturnValue(false);
+    fireEvent.click(screen.getByTestId('cancel-button'));
+
+    await waitFor(() =>
+      expect(testEnvironment.confirmSpy).toHaveBeenCalledWith('尚有未保存的變更，確定要離開嗎？'),
+    );
+    expect(props.onCancel).not.toHaveBeenCalled();
+  });
+
+  it('shows a retryable save error without dropping the draft', async () => {
+    props.onSave.mockRejectedValueOnce(new Error('IndexedDB unavailable'));
+    render(<AssistantEditor {...props} />);
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: '保留草稿' } });
+    fireEvent.click(screen.getByTestId('save-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('assistant-save-status')).toHaveTextContent(
+        /IndexedDB unavailable/,
+      ),
+    );
+    expect(screen.getByLabelText('助理名稱')).toHaveValue('保留草稿');
+  });
+
+  it('requires confirmation before a template replaces an edited draft', () => {
+    render(<AssistantEditor {...props} />);
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: '我的草稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '英文教學樣板' }));
+    fireEvent.click(screen.getByRole('button', { name: /套用此樣板/ }));
+
+    expect(screen.getByTestId('template-overwrite-confirmation')).toBeInTheDocument();
+    expect(screen.getByText(/目前的編輯內容會被樣板覆蓋/)).toBeInTheDocument();
+    expect(screen.getByLabelText('助理名稱')).toHaveValue('我的草稿');
   });
 });

@@ -12,6 +12,8 @@ export interface AssistantTemplate {
   badgeColor: string;
 }
 
+// The catalog is also consumed by the standalone first-run guide.
+// eslint-disable-next-line react-refresh/only-export-components
 export const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
   {
     id: 'tpl_english_teaching',

@@ -23,7 +23,19 @@ const DEFAULT_PREFERENCES: OnboardingPreferences = {
   dismissed: false,
 };
 
-const getStorage = (): Storage | null => {
+// Tests and some privacy modes expose a storage-shaped object whose getItem
+// always returns null. Keep a tab-local fallback so a completion action still
+// has deterministic behavior in that environment; real localStorage remains
+// the durable source across reloads.
+let memoryPreferences: OnboardingPreferences = { ...DEFAULT_PREFERENCES };
+
+interface StorageLike {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+  removeItem: (key: string) => void;
+}
+
+const getStorage = (): StorageLike | null => {
   if (typeof window === 'undefined') {
     return null;
   }
@@ -65,14 +77,14 @@ const normalize = (value: unknown): OnboardingPreferences => {
 export const getOnboardingPreferences = (): OnboardingPreferences => {
   const storage = getStorage();
   if (!storage) {
-    return { ...DEFAULT_PREFERENCES };
+    return { ...memoryPreferences };
   }
 
   try {
     const raw = storage.getItem(ONBOARDING_PREFERENCES_KEY);
-    return raw ? normalize(JSON.parse(raw)) : { ...DEFAULT_PREFERENCES };
+    return raw ? normalize(JSON.parse(raw)) : { ...memoryPreferences };
   } catch {
-    return { ...DEFAULT_PREFERENCES };
+    return { ...memoryPreferences };
   }
 };
 
@@ -88,6 +100,7 @@ export const saveOnboardingPreferences = (
   update: Partial<OnboardingPreferences>,
 ): OnboardingPreferences => {
   const next = normalize({ ...getOnboardingPreferences(), ...update });
+  memoryPreferences = next;
   const storage = getStorage();
 
   if (storage) {
@@ -120,6 +133,7 @@ export const markOnboardingCompleted = completeOnboarding;
 
 /** Clear the completion marker so Settings can offer a true “reopen guide”. */
 export const resetOnboardingPreferences = (): OnboardingPreferences => {
+  memoryPreferences = { ...DEFAULT_PREFERENCES };
   const storage = getStorage();
   if (storage) {
     try {
@@ -134,4 +148,3 @@ export const resetOnboardingPreferences = (): OnboardingPreferences => {
 export const reopenOnboarding = resetOnboardingPreferences;
 
 export const isOnboardingCompleted = (): boolean => getOnboardingPreferences().completed;
-
