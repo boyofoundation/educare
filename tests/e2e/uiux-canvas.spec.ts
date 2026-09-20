@@ -376,6 +376,7 @@ test.describe('UIUX Canvas production flows @canvas @flows', () => {
     await seedCanvasDatabase(page, { assistant, session });
     await openFreshApp(page);
 
+    await page.getByRole('button', { name: '工作區' }).click();
     await page.getByRole('button', { name: 'HTML Projects' }).click();
     const picker = page.getByRole('dialog', { name: 'HTML Canvas projects' });
     await expect(picker).toBeVisible();
