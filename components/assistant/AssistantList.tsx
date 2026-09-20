@@ -100,7 +100,6 @@ export const AssistantList: React.FC<AssistantListProps> = ({
   onExport,
   onImport,
   onBuildBundle,
-  collapsed = false,
 }) => {
   const importInputRef = useRef<globalThis.HTMLInputElement | null>(null);
   const menuRef = useRef<globalThis.HTMLDivElement | null>(null);
@@ -150,63 +149,6 @@ export const AssistantList: React.FC<AssistantListProps> = ({
     setIsMenuOpen(false);
     action();
   };
-
-  if (collapsed) {
-    return (
-      <nav
-        aria-label='助理選擇'
-        className='assistant-switcher assistant-switcher--collapsed mb-4 flex flex-col items-center gap-2'
-      >
-        <button
-          aria-label='新增助理'
-          className='assistant-rail-action flex h-11 w-11 items-center justify-center rounded-xl bg-cyan-600/20 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 hover:text-cyan-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-          onClick={onCreateNew}
-          title='新增助理'
-          type='button'
-        >
-          <PlusIcon className='h-5 w-5' />
-        </button>
-
-        <div className='sidebar-divider w-full border-t border-gray-700/40' />
-
-        <div
-          aria-label='助理列表'
-          className='chat-scroll flex max-h-48 w-full flex-col items-center gap-1.5 overflow-y-auto py-1'
-          role='listbox'
-        >
-          {assistants.map(assistant => {
-            const isSelected = selectedAssistant?.id === assistant.id;
-            const initial = (assistant.name?.trim()?.[0] ?? '?').toUpperCase();
-
-            return (
-              <div className='relative flex w-full justify-center' key={assistant.id}>
-                {isSelected && (
-                  <span
-                    aria-hidden='true'
-                    className='sidebar-active-spine absolute left-1 top-1/2 h-6 w-1 -translate-y-1/2 rounded-full bg-cyan-400'
-                  />
-                )}
-                <button
-                  aria-label={`選擇助理 ${assistant.name}`}
-                  aria-pressed={isSelected}
-                  className={`assistant-avatar flex h-11 w-11 items-center justify-center rounded-full text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
-                    isSelected
-                      ? 'assistant-avatar--selected bg-cyan-500 text-white ring-2 ring-cyan-300/50 shadow-lg shadow-cyan-500/20'
-                      : 'bg-gray-700/60 text-gray-300 hover:bg-gray-600/70 hover:text-white'
-                  }`}
-                  onClick={() => onSelect(assistant.id)}
-                  title={assistant.name}
-                  type='button'
-                >
-                  {initial}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </nav>
-    );
-  }
 
   return (
     <nav aria-label='助理選擇' className='assistant-switcher relative mb-5 px-1'>

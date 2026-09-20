@@ -12,7 +12,6 @@ export interface AssistantListProps {
   onImport?: (file: File) => void;
   onBuildBundle?: () => void;
   canShare?: boolean;
-  collapsed?: boolean;
 }
 
 export interface AssistantCardProps {

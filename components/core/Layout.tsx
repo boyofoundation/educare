@@ -108,8 +108,6 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   const [sessionTitleDraft, setSessionTitleDraft] = useState('');
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
   const [retrySessionAction, setRetrySessionAction] = useState<(() => void) | null>(null);
-  const [isConversationsExpanded, setIsConversationsExpanded] = useState(true);
-  const [isWorkspaceExpanded, setIsWorkspaceExpanded] = useState(false);
   const [showAllSessions, setShowAllSessions] = useState(false);
   const [openSessionMenuId, setOpenSessionMenuId] = useState<string | null>(null);
   const sessionMenuRef = useRef<globalThis.HTMLDivElement | null>(null);
@@ -129,8 +127,8 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   );
 
   const visibleSessions = useMemo(
-    () => orderedSessions.slice(0, collapsed ? 5 : showAllSessions ? orderedSessions.length : 6),
-    [collapsed, orderedSessions, showAllSessions],
+    () => orderedSessions.slice(0, showAllSessions ? orderedSessions.length : 6),
+    [orderedSessions, showAllSessions],
   );
 
   const drawerInteractive = !isTouch || state.isSidebarOpen;
@@ -194,12 +192,6 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
     setOpenSessionMenuId(null);
     setEditingSessionId(null);
   }, [state.currentAssistant?.id]);
-
-  useEffect(() => {
-    if (['practice', 'data_management', 'bundle_import'].includes(state.viewMode)) {
-      setIsWorkspaceExpanded(true);
-    }
-  }, [state.viewMode]);
 
   useEffect(() => {
     if (!openSessionMenuId) {
@@ -390,7 +382,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
     );
   }
 
-  const mainOffset = isDesktop && state.isSidebarOpen ? (collapsed ? 'pl-20' : 'pl-72') : '';
+  const mainOffset = isDesktop && state.isSidebarOpen && !collapsed ? 'pl-72' : '';
 
   const title =
     state.viewMode === 'chat' && state.currentAssistant
@@ -554,9 +546,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   const sessionActionFeedback = sessionActionError ? (
     <div
       role='alert'
-      className={`mb-2 flex items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-200 ${
-        collapsed ? 'mx-0 flex-col' : ''
-      }`}
+      className='mb-2 flex items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-200'
     >
       <span>{sessionActionError}</span>
       {retrySessionAction && (
@@ -583,361 +573,267 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
       )}
 
       {/* Sidebar */}
+      {/* Sidebar — 桌面收折時整個隱藏 (w-0)，只留 shell 層的浮動展開鈕。 */}
       <div
-        className={`app-sidebar ${state.isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 h-[100dvh] z-50 ${
-          state.isMobile || state.isTablet ? 'w-80' : collapsed ? 'w-20' : 'w-72'
-        } bg-gray-900/95 backdrop-blur-sm flex flex-col overflow-hidden ${
-          collapsed
-            ? 'px-2 pt-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]'
-            : 'px-4 pt-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]'
-        } border-r border-gray-700/50 shadow-2xl transition-all duration-300 ease-in-out`}
+        className={`app-sidebar ${state.isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 h-[100dvh] z-50 overflow-hidden ${
+          state.isMobile || state.isTablet ? 'w-80' : collapsed ? 'w-0' : 'w-72'
+        } ${collapsed ? 'border-r-0' : 'border-r border-gray-700/50'} bg-gray-900/95 backdrop-blur-sm shadow-2xl transition-all duration-300 ease-in-out`}
         role='navigation'
         aria-label='主要導覽'
-        aria-hidden={!drawerInteractive}
-        inert={!drawerInteractive}
+        aria-hidden={!drawerInteractive || collapsed}
+        inert={!drawerInteractive || collapsed}
       >
-        {/* Desktop collapse toggle — always reachable so there is no dead-end state */}
-        {isDesktop && (
-          <button
-            type='button'
-            data-testid='sidebar-collapse-toggle'
-            onClick={actions.toggleSidebarCollapse}
-            className='sidebar-collapse-toggle absolute top-[5.25rem] -right-[1.375rem] z-50 flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-            aria-label={collapsed ? '展開側邊欄' : '收折側邊欄'}
-            aria-expanded={!collapsed}
-            title={collapsed ? '展開側邊欄' : '收折側邊欄'}
+        {!collapsed && (
+          <div
+            className={`flex h-full ${state.isMobile || state.isTablet ? 'w-80' : 'w-72'} flex-col px-4 pt-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]`}
           >
-            <span className='sidebar-collapse-toggle__glyph flex h-6 w-6 items-center justify-center rounded-full border bg-gray-700 shadow-md'>
-              <svg className='h-3.5 w-3.5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                <path
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  strokeWidth={2.5}
-                  d={collapsed ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'}
-                />
-              </svg>
-            </span>
-          </button>
-        )}
-
-        {/* Brand area — 收折模式只顯示 logo；mobile/tablet 時右側附關閉鈕 */}
-        <div
-          className={`sidebar-brand flex items-center border-b border-gray-700/50 ${
-            collapsed ? 'justify-center pb-3 mb-3' : 'justify-between gap-2 px-1 pb-3.5 mb-4'
-          }`}
-        >
-          <div className={`flex items-center ${collapsed ? '' : 'gap-2.5 min-w-0'}`}>
-            <BrandMark className='h-8 w-8 flex-shrink-0' />
-            {!collapsed && (
-              <div className='min-w-0 leading-tight'>
-                <div className='sidebar-brand__title truncate text-base font-bold tracking-tight text-white'>
-                  EduCare
-                </div>
-                <div className='sidebar-brand__subtitle text-[10px] font-medium uppercase tracking-[0.18em] text-cyan-400/90'>
-                  AI 教學助理
-                </div>
-              </div>
-            )}
-          </div>
-          {(state.isMobile || state.isTablet) && (
-            <button
-              ref={drawerCloseButtonRef}
-              onClick={() => actions.setSidebarOpen(false)}
-              className='sidebar-close flex min-h-11 min-w-11 items-center justify-center p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 flex-shrink-0'
-              aria-label='關閉選單'
-              title='關閉選單'
-            >
-              <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                <path
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  strokeWidth={2}
-                  d='M6 18L18 6M6 6l12 12'
-                />
-              </svg>
-            </button>
-          )}
-        </div>
-
-        {/* Assistant Selection */}
-        <AssistantList
-          assistants={state.assistants}
-          selectedAssistant={state.currentAssistant}
-          onSelect={assistantId => {
-            // 強制切換到聊天模式，無論當前是什麼模式
-            const result = actions.navigate({ viewMode: 'chat', assistantId });
-            if (result.allowed) {
-              closeDrawerIfMobile();
-            }
-          }}
-          onEdit={assistant => {
-            const result = actions.navigate({
-              viewMode: 'edit_assistant',
-              assistantId: assistant.id,
-            });
-            if (result.allowed) {
-              closeDrawerIfMobile();
-            }
-          }}
-          onDelete={actions.deleteAssistant}
-          onShare={actions.openShareModal}
-          onCreateNew={() => {
-            requestNavigation({ viewMode: 'new_assistant' });
-          }}
-          onExport={assistant => {
-            try {
-              downloadAssistantPackage(assistant);
-            } catch (error) {
-              window.alert(`匯出助理設定檔失敗：${(error as Error).message}`);
-            }
-          }}
-          onImport={async file => {
-            try {
-              const result = actions.navigate({ viewMode: 'chat', file });
-              if (!result.allowed) {
-                return;
-              }
-              await result.completion;
-              closeDrawerIfMobile();
-            } catch (error) {
-              window.alert(`匯入助理設定檔失敗：${(error as Error).message}`);
-            }
-          }}
-          onBuildBundle={() => {
-            requestNavigation({ viewMode: 'bundle_builder' });
-          }}
-          canShare={canShare}
-          collapsed={collapsed}
-        />
-
-        {/* Local navigation search stays in the current app shell; it never queries shared or bundle data. */}
-        <div className={collapsed ? 'mb-3 flex justify-center' : 'mb-3 px-1'}>
-          <button
-            type='button'
-            data-testid='sidebar-search-toggle'
-            onClick={() => setIsSearchOpen(previous => !previous)}
-            className={
-              collapsed
-                ? 'sidebar-search-toggle flex h-11 w-11 items-center justify-center rounded-xl border border-gray-600/40 bg-gray-800/60 text-gray-300 transition hover:border-cyan-500/50 hover:text-cyan-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                : 'sidebar-search-toggle flex min-h-11 w-full items-center gap-2 rounded-lg border bg-gray-800/50 px-3 py-2 text-left text-sm text-gray-300 transition hover:border-cyan-500/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-            }
-            aria-expanded={isSearchOpen}
-            aria-controls='sidebar-local-search'
-            aria-label='搜尋助理、聊天與素材'
-            title='搜尋助理、聊天與素材'
-          >
-            <svg
-              className='h-4 w-4 flex-shrink-0'
-              fill='none'
-              stroke='currentColor'
-              viewBox='0 0 24 24'
-            >
-              <path
-                strokeLinecap='round'
-                strokeLinejoin='round'
-                strokeWidth={2}
-                d='m21 21-4.35-4.35m2.1-5.4a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z'
-              />
-            </svg>
-            {!collapsed && <span>搜尋助理、聊天與素材</span>}
-          </button>
-          {isSearchOpen && !collapsed && (
-            <div
-              id='sidebar-local-search'
-              data-testid='navigation-search-results'
-              className='mt-2 space-y-2'
-            >
-              <input
-                type='search'
-                autoFocus
-                value={searchQuery}
-                onChange={event => setSearchQuery(event.target.value)}
-                placeholder='搜尋名稱、訊息或檔案…'
-                className='sidebar-search-input w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
-                aria-label='搜尋本機內容'
-              />
-              {searchError && (
-                <div
-                  role='alert'
-                  className='flex items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-200'
-                >
-                  <span>{searchError}</span>
-                  <button
-                    type='button'
-                    onClick={() => setSearchRetryToken(previous => previous + 1)}
-                    className='rounded border border-red-300/40 px-2 py-1 font-medium text-red-100 hover:bg-red-500/20'
-                  >
-                    重試
-                  </button>
-                </div>
-              )}
-              {isSearchLoading && <p className='px-2 text-xs text-gray-500'>搜尋中…</p>}
-              {!isSearchLoading &&
-                !searchError &&
-                searchQuery.trim() &&
-                searchResults.length === 0 && (
-                  <p className='px-2 text-xs text-gray-500'>找不到符合的本機內容。</p>
-                )}
-              {searchResults.length > 0 && (
-                <div className='sidebar-search-results max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700/60 bg-gray-950/50 p-1'>
-                  {searchResults.map(result => (
-                    <button
-                      type='button'
-                      key={`${result.kind}:${result.id}`}
-                      onClick={() => {
-                        void actions.openSearchResult(result);
-                        setSearchQuery('');
-                        setIsSearchOpen(false);
-                        closeDrawerIfMobile();
-                      }}
-                      className='sidebar-search-result w-full rounded-md px-2.5 py-2 text-left transition hover:bg-cyan-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                    >
-                      <div className='flex items-center gap-2'>
-                        <span className='rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200'>
-                          {getLocalSearchResultKindLabel(result.kind)}
-                        </span>
-                        <span className='min-w-0 flex-1 truncate text-xs font-medium text-gray-100'>
-                          {result.title}
-                        </span>
-                      </div>
-                      <p className='mt-1 line-clamp-2 text-[11px] leading-4 text-gray-400'>
-                        {result.snippet || result.subtitle}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {sessionActionFeedback}
-
-        {/* Conversation list */}
-        {state.currentAssistant &&
-          (collapsed ? (
-            <div
-              className='chat-scroll flex flex-1 flex-col items-center gap-1.5 overflow-y-auto py-2'
-              aria-label='聊天記錄'
-            >
+            {/* Desktop collapse toggle — visible only while expanded (no dead-end state) */}
+            {isDesktop && !collapsed && (
               <button
                 type='button'
-                onClick={() => {
-                  if (
-                    actions.navigate({
-                      viewMode: 'chat',
-                      newSessionAssistantId: state.currentAssistant!.id,
-                    }).allowed
-                  ) {
-                    closeDrawerIfMobile();
-                  }
-                }}
-                className='sidebar-primary-action flex h-11 w-11 items-center justify-center rounded-xl bg-cyan-600 text-white shadow-lg shadow-cyan-600/25 transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70'
-                title='新增聊天'
-                aria-label='新增聊天'
+                data-testid='sidebar-collapse-toggle'
+                onClick={actions.toggleSidebarCollapse}
+                className='sidebar-collapse-toggle absolute top-[5.25rem] -right-[1.375rem] z-50 flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                aria-label='收折側邊欄'
+                aria-expanded={false}
+                title='收折側邊欄'
               >
-                <PlusIcon className='h-4 w-4' />
-              </button>
-              <div className='sidebar-divider my-1 w-8 border-t border-gray-700/40' />
-              <div className='flex w-full flex-col items-center gap-1.5'>
-                {visibleSessions.map((sess: ChatSession) => {
-                  const isActive = state.currentSession?.id === sess.id;
-                  return (
-                    <div key={sess.id} className='relative flex w-full justify-center'>
-                      {isActive && (
-                        <span
-                          aria-hidden='true'
-                          className='sidebar-active-spine absolute left-1 top-1/2 h-6 w-1 -translate-y-1/2 rounded-full bg-cyan-400'
-                        />
-                      )}
-                      <button
-                        type='button'
-                        onClick={() => {
-                          openSessionFromSidebar(sess.id);
-                        }}
-                        className={`sidebar-session-avatar flex h-11 w-11 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
-                          isActive
-                            ? 'bg-cyan-500 text-white shadow-lg shadow-cyan-500/30 ring-2 ring-cyan-300/50'
-                            : 'bg-gray-800/40 text-gray-300 hover:bg-gray-700/60 hover:text-white'
-                        }`}
-                        title={sess.title}
-                        aria-label={`開啟聊天 ${sess.title}`}
-                        aria-pressed={isActive}
-                      >
-                        <ChatIcon className='w-4 h-4' />
-                      </button>
-                    </div>
-                  );
-                })}
-                {orderedSessions.length > visibleSessions.length && (
-                  <button
-                    type='button'
-                    onClick={actions.toggleSidebarCollapse}
-                    className='sidebar-quiet-action flex h-11 w-11 items-center justify-center rounded-xl text-gray-400 transition-colors hover:bg-gray-700/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                    aria-label='展開以查看更多聊天'
-                    title='展開以查看更多聊天'
-                  >
-                    <span aria-hidden='true' className='text-lg leading-none'>
-                      ···
-                    </span>
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : (
-            <section className='sidebar-section flex min-h-0 flex-1 flex-col' aria-label='聊天記錄'>
-              <div className='relative mb-2 flex items-center gap-1 px-1'>
-                <button
-                  type='button'
-                  onClick={() => setIsConversationsExpanded(expanded => !expanded)}
-                  className='sidebar-section-toggle flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-left text-sm font-semibold text-gray-300 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                  aria-label='對話'
-                  aria-controls='sidebar-conversation-list'
-                  aria-expanded={isConversationsExpanded}
-                >
+                <span className='sidebar-collapse-toggle__glyph flex h-6 w-6 items-center justify-center rounded-full border bg-gray-700 shadow-md'>
                   <svg
-                    aria-hidden='true'
-                    className={`h-4 w-4 flex-shrink-0 transition-transform ${isConversationsExpanded ? 'rotate-90' : ''}`}
+                    className='h-3.5 w-3.5'
                     fill='none'
                     stroke='currentColor'
                     viewBox='0 0 24 24'
                   >
                     <path
-                      d='m9 5 7 7-7 7'
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                      strokeWidth={2.5}
+                      d='M15 19l-7-7 7-7'
+                    />
+                  </svg>
+                </span>
+              </button>
+            )}
+
+            {/* Brand area — mobile/tablet 時右側附關閉鈕 */}
+            <div className='sidebar-brand flex items-center justify-between gap-2 border-b border-gray-700/50 px-1 pb-3.5 mb-4'>
+              <div className='flex items-center gap-2.5 min-w-0'>
+                <BrandMark className='h-8 w-8 flex-shrink-0' />
+                <div className='min-w-0 leading-tight'>
+                  <div className='sidebar-brand__title truncate text-base font-bold tracking-tight text-white'>
+                    EduCare
+                  </div>
+                  <div className='sidebar-brand__subtitle text-[10px] font-medium uppercase tracking-[0.18em] text-cyan-400/90'>
+                    AI 教學助理
+                  </div>
+                </div>
+              </div>
+              {(state.isMobile || state.isTablet) && (
+                <button
+                  ref={drawerCloseButtonRef}
+                  onClick={() => actions.setSidebarOpen(false)}
+                  className='sidebar-close flex min-h-11 min-w-11 items-center justify-center p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 flex-shrink-0'
+                  aria-label='關閉選單'
+                  title='關閉選單'
+                >
+                  <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                    <path
                       strokeLinecap='round'
                       strokeLinejoin='round'
                       strokeWidth={2}
+                      d='M6 18L18 6M6 6l12 12'
                     />
                   </svg>
-                  <span className='min-w-0 flex-1'>對話</span>
-                  <span className='sidebar-count text-xs font-normal text-gray-500'>
-                    {orderedSessions.length}
-                  </span>
                 </button>
-                <button
-                  type='button'
-                  ref={expandedTokenBtnRef}
-                  onClick={() => setIsTokenUsageOpen(prev => !prev)}
-                  className='sidebar-quiet-action inline-flex h-11 w-11 items-center justify-center rounded-lg text-[10px] font-bold tracking-wide text-gray-400 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                  aria-expanded={isTokenUsageOpen}
-                  aria-haspopup='dialog'
-                  aria-label='檢視 token 用量'
-                  title='檢視 token 用量'
+              )}
+            </div>
+
+            {/* Assistant Selection */}
+            <AssistantList
+              assistants={state.assistants}
+              selectedAssistant={state.currentAssistant}
+              onSelect={assistantId => {
+                // 強制切換到聊天模式，無論當前是什麼模式
+                const result = actions.navigate({ viewMode: 'chat', assistantId });
+                if (result.allowed) {
+                  closeDrawerIfMobile();
+                }
+              }}
+              onEdit={assistant => {
+                const result = actions.navigate({
+                  viewMode: 'edit_assistant',
+                  assistantId: assistant.id,
+                });
+                if (result.allowed) {
+                  closeDrawerIfMobile();
+                }
+              }}
+              onDelete={actions.deleteAssistant}
+              onShare={actions.openShareModal}
+              onCreateNew={() => {
+                requestNavigation({ viewMode: 'new_assistant' });
+              }}
+              onExport={assistant => {
+                try {
+                  downloadAssistantPackage(assistant);
+                } catch (error) {
+                  window.alert(`匯出助理設定檔失敗：${(error as Error).message}`);
+                }
+              }}
+              onImport={async file => {
+                try {
+                  const result = actions.navigate({ viewMode: 'chat', file });
+                  if (!result.allowed) {
+                    return;
+                  }
+                  await result.completion;
+                  closeDrawerIfMobile();
+                } catch (error) {
+                  window.alert(`匯入助理設定檔失敗：${(error as Error).message}`);
+                }
+              }}
+              onBuildBundle={() => {
+                requestNavigation({ viewMode: 'bundle_builder' });
+              }}
+              canShare={canShare}
+            />
+
+            {/* Local navigation search stays in the current app shell; it never queries shared or bundle data. */}
+            <div className='mb-3 px-1'>
+              <button
+                type='button'
+                data-testid='sidebar-search-toggle'
+                onClick={() => setIsSearchOpen(previous => !previous)}
+                className='sidebar-search-toggle flex min-h-11 w-full items-center gap-2 rounded-lg border bg-gray-800/50 px-3 py-2 text-left text-sm text-gray-300 transition hover:border-cyan-500/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                aria-expanded={isSearchOpen}
+                aria-controls='sidebar-local-search'
+                aria-label='搜尋助理、聊天與素材'
+                title='搜尋助理、聊天與素材'
+              >
+                <svg
+                  className='h-4 w-4 flex-shrink-0'
+                  fill='none'
+                  stroke='currentColor'
+                  viewBox='0 0 24 24'
                 >
-                  TK
-                </button>
-                {isTokenUsageOpen && (
-                  <div
-                    ref={tokenPopoverRef}
-                    role='dialog'
-                    aria-label='Token 用量詳細資訊'
-                    className='sidebar-popover absolute right-0 top-full z-30 mt-2 w-64 rounded-xl border border-gray-700/60 bg-gray-900 shadow-2xl shadow-black/50'
+                  <path
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    strokeWidth={2}
+                    d='m21 21-4.35-4.35m2.1-5.4a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z'
+                  />
+                </svg>
+                <span>搜尋助理、聊天與素材</span>
+              </button>
+              {isSearchOpen && (
+                <div
+                  id='sidebar-local-search'
+                  data-testid='navigation-search-results'
+                  className='mt-2 space-y-2'
+                >
+                  <input
+                    type='search'
+                    autoFocus
+                    value={searchQuery}
+                    onChange={event => setSearchQuery(event.target.value)}
+                    placeholder='搜尋名稱、訊息或檔案…'
+                    className='sidebar-search-input w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
+                    aria-label='搜尋本機內容'
+                  />
+                  {searchError && (
+                    <div
+                      role='alert'
+                      className='flex items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-200'
+                    >
+                      <span>{searchError}</span>
+                      <button
+                        type='button'
+                        onClick={() => setSearchRetryToken(previous => previous + 1)}
+                        className='rounded border border-red-300/40 px-2 py-1 font-medium text-red-100 hover:bg-red-500/20'
+                      >
+                        重試
+                      </button>
+                    </div>
+                  )}
+                  {isSearchLoading && <p className='px-2 text-xs text-gray-500'>搜尋中…</p>}
+                  {!isSearchLoading &&
+                    !searchError &&
+                    searchQuery.trim() &&
+                    searchResults.length === 0 && (
+                      <p className='px-2 text-xs text-gray-500'>找不到符合的本機內容。</p>
+                    )}
+                  {searchResults.length > 0 && (
+                    <div className='sidebar-search-results max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700/60 bg-gray-950/50 p-1'>
+                      {searchResults.map(result => (
+                        <button
+                          type='button'
+                          key={`${result.kind}:${result.id}`}
+                          onClick={() => {
+                            void actions.openSearchResult(result);
+                            setSearchQuery('');
+                            setIsSearchOpen(false);
+                            closeDrawerIfMobile();
+                          }}
+                          className='sidebar-search-result w-full rounded-md px-2.5 py-2 text-left transition hover:bg-cyan-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                        >
+                          <div className='flex items-center gap-2'>
+                            <span className='rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200'>
+                              {getLocalSearchResultKindLabel(result.kind)}
+                            </span>
+                            <span className='min-w-0 flex-1 truncate text-xs font-medium text-gray-100'>
+                              {result.title}
+                            </span>
+                          </div>
+                          <p className='mt-1 line-clamp-2 text-[11px] leading-4 text-gray-400'>
+                            {result.snippet || result.subtitle}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {sessionActionFeedback}
+
+            {/* Conversation list */}
+            {state.currentAssistant && (
+              <section
+                className='sidebar-section flex min-h-0 flex-1 flex-col'
+                aria-label='聊天記錄'
+              >
+                <div className='relative mb-2 flex items-center gap-1 px-1'>
+                  <span className='sidebar-section-label flex min-h-11 flex-1 items-baseline gap-2 px-2 text-sm font-semibold'>
+                    對話
+                    <span className='sidebar-count text-xs font-normal'>
+                      {orderedSessions.length}
+                    </span>
+                  </span>
+                  <button
+                    type='button'
+                    ref={expandedTokenBtnRef}
+                    onClick={() => setIsTokenUsageOpen(prev => !prev)}
+                    className='sidebar-quiet-action inline-flex h-11 w-11 items-center justify-center rounded-lg text-[10px] font-bold tracking-wide text-gray-400 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                    aria-expanded={isTokenUsageOpen}
+                    aria-haspopup='dialog'
+                    aria-label='檢視 token 用量'
+                    title='檢視 token 用量'
                   >
-                    {tokenUsagePopoverPanel}
-                  </div>
-                )}
-              </div>
-              {isConversationsExpanded && (
+                    TK
+                  </button>
+                  {isTokenUsageOpen && (
+                    <div
+                      ref={tokenPopoverRef}
+                      role='dialog'
+                      aria-label='Token 用量詳細資訊'
+                      className='sidebar-popover absolute right-0 top-full z-30 mt-2 w-64 rounded-xl border border-gray-700/60 bg-gray-900 shadow-2xl shadow-black/50'
+                    >
+                      {tokenUsagePopoverPanel}
+                    </div>
+                  )}
+                </div>
                 <div className='flex min-h-0 flex-1 flex-col'>
                   <button
                     type='button'
@@ -1136,38 +1032,13 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                     )}
                   </div>
                 </div>
-              )}
-            </section>
-          ))}
+              </section>
+            )}
 
-        {!collapsed && (
-          <section className='sidebar-section sidebar-workspace mt-2 border-t border-gray-700/50 pt-2'>
-            <button
-              type='button'
-              onClick={() => setIsWorkspaceExpanded(expanded => !expanded)}
-              className='sidebar-section-toggle flex min-h-11 w-full items-center gap-2 rounded-lg px-2 text-left text-sm font-semibold text-gray-300 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-              aria-label='工作區'
-              aria-controls='sidebar-workspace-tools'
-              aria-expanded={isWorkspaceExpanded}
-            >
-              <svg
-                aria-hidden='true'
-                className={`h-4 w-4 flex-shrink-0 transition-transform ${isWorkspaceExpanded ? 'rotate-90' : ''}`}
-                fill='none'
-                stroke='currentColor'
-                viewBox='0 0 24 24'
-              >
-                <path
-                  d='m9 5 7 7-7 7'
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  strokeWidth={2}
-                />
-              </svg>
-              <span>工作區</span>
-            </button>
-
-            {isWorkspaceExpanded && (
+            <section className='sidebar-section sidebar-workspace mt-2 border-t border-gray-700/50 pt-2'>
+              <span className='sidebar-section-label block px-2 pb-1 text-sm font-semibold'>
+                工作區
+              </span>
               <div
                 id='sidebar-workspace-tools'
                 className='mt-1 space-y-1'
@@ -1244,98 +1115,44 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                   <span>匯入協作包</span>
                 </button>
               </div>
-            )}
-          </section>
-        )}
+            </section>
 
-        {/* Settings stays persistent while secondary tools remain grouped above. */}
-        <div className='mt-auto pt-2'>
-          <div
-            className={`border-t border-gray-700/50 pt-2.5 ${collapsed ? 'flex justify-center' : ''}`}
-          >
-            <button
-              type='button'
-              onClick={() => {
-                requestNavigation({ viewMode: 'settings' });
-              }}
-              className={
-                collapsed
-                  ? 'sidebar-settings flex w-11 h-11 items-center justify-center text-gray-400 hover:text-white rounded-lg hover:bg-gray-700/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-                  : 'sidebar-settings flex min-h-11 w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-gray-400 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
-              }
-              title='設定'
-              aria-label='設定'
-            >
-              <SettingsIcon className='w-4 h-4' />
-              {!collapsed && <span>設定</span>}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {collapsed && isSearchOpen && (
-        <div
-          id='sidebar-local-search'
-          data-testid='navigation-search-results'
-          className='sidebar-search-popover fixed left-[5.5rem] top-4 z-[60] w-80 rounded-xl border border-gray-700/60 bg-gray-900 p-3 shadow-2xl shadow-black/50'
-        >
-          <input
-            type='search'
-            autoFocus
-            value={searchQuery}
-            onChange={event => setSearchQuery(event.target.value)}
-            placeholder='搜尋名稱、訊息或檔案…'
-            className='sidebar-search-input w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
-            aria-label='搜尋本機內容'
-          />
-          {searchError && (
-            <div
-              role='alert'
-              className='mt-2 flex items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-200'
-            >
-              <span>{searchError}</span>
-              <button
-                type='button'
-                onClick={() => setSearchRetryToken(previous => previous + 1)}
-                className='rounded border border-red-300/40 px-2 py-1 font-medium text-red-100 hover:bg-red-500/20'
-              >
-                重試
-              </button>
-            </div>
-          )}
-          {isSearchLoading && <p className='mt-2 px-2 text-xs text-gray-500'>搜尋中…</p>}
-          {!isSearchLoading && !searchError && searchQuery.trim() && searchResults.length === 0 && (
-            <p className='mt-2 px-2 text-xs text-gray-500'>找不到符合的本機內容。</p>
-          )}
-          {searchResults.length > 0 && (
-            <div className='sidebar-search-results mt-2 max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700/60 bg-gray-950/50 p-1'>
-              {searchResults.map(result => (
+            {/* Settings stays persistent while secondary tools remain grouped above. */}
+            <div className='mt-auto pt-2'>
+              <div className='border-t border-gray-700/50 pt-2.5'>
                 <button
                   type='button'
-                  key={`${result.kind}:${result.id}`}
                   onClick={() => {
-                    void actions.openSearchResult(result);
-                    setSearchQuery('');
-                    setIsSearchOpen(false);
+                    requestNavigation({ viewMode: 'settings' });
                   }}
-                  className='sidebar-search-result w-full rounded-md px-2.5 py-2 text-left transition hover:bg-cyan-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                  className='sidebar-settings flex min-h-11 w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-gray-400 transition-colors hover:bg-gray-800/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                  title='設定'
+                  aria-label='設定'
                 >
-                  <div className='flex items-center gap-2'>
-                    <span className='rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200'>
-                      {getLocalSearchResultKindLabel(result.kind)}
-                    </span>
-                    <span className='min-w-0 flex-1 truncate text-xs font-medium text-gray-100'>
-                      {result.title}
-                    </span>
-                  </div>
-                  <p className='mt-1 line-clamp-2 text-[11px] leading-4 text-gray-400'>
-                    {result.snippet || result.subtitle}
-                  </p>
+                  <SettingsIcon className='w-4 h-4' />
+                  <span>設定</span>
                 </button>
-              ))}
+              </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
+      </div>
+
+      {/* Floating expand button — 桌面收折時左側唯一的進入點 */}
+      {isDesktop && collapsed && (
+        <button
+          type='button'
+          data-testid='sidebar-expand-toggle'
+          className='sidebar-expand-toggle fixed left-0 top-1/2 z-40 flex h-12 w-11 -translate-y-1/2 items-center justify-center rounded-r-xl border border-l-0 shadow-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+          onClick={actions.toggleSidebarCollapse}
+          aria-label='展開側邊欄'
+          aria-expanded={false}
+          title='展開側邊欄'
+        >
+          <svg className='h-4 w-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+            <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2.5} d='M9 5l7 7-7 7' />
+          </svg>
+        </button>
       )}
 
       {/* Main Content */}
