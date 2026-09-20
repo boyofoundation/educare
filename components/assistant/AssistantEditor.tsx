@@ -558,16 +558,16 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
   return (
     <div
       data-testid='assistant-editor'
-      className={`chat-scroll relative flex h-full flex-col overflow-y-auto ${
+      className={`assistant-editor chat-scroll relative flex h-full flex-col overflow-y-auto ${
         compact ? 'bg-[#141c26] p-5' : 'bg-gradient-to-br from-gray-800 to-gray-900 p-8'
       }`}
     >
       <h2
-        className={
+        className={`assistant-editor__title ${
           compact
             ? 'mb-5 text-lg font-semibold text-gray-100'
             : 'mb-8 bg-gradient-to-r from-white to-gray-300 bg-clip-text text-3xl font-bold text-transparent'
-        }
+        }`}
       >
         {assistant ? '編輯助理' : '新增助理'}
       </h2>
@@ -846,7 +846,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       </details>
 
       {showFooterActions && (
-        <div className='sticky bottom-0 z-10 mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-gray-700/70 bg-gray-900/95 py-4 backdrop-blur'>
+        <div className='assistant-editor__footer sticky bottom-0 z-10 mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-gray-700/70 bg-gray-900/95 py-4 backdrop-blur'>
           <div className='min-h-10 flex-1 text-sm' aria-live='polite'>
             {saveStatus === 'saving' && (
               <p className='text-cyan-300' data-testid='assistant-save-status' role='status'>
@@ -912,7 +912,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             <button
               data-testid='cancel-button'
               onClick={() => void handleCancel()}
-              className='rounded-xl bg-gray-600/80 px-6 py-3 font-semibold text-white transition-all duration-300 hover:-translate-y-0.5 hover:bg-gray-500 hover:shadow-lg'
+              className='assistant-editor__cancel rounded-xl bg-gray-600/80 px-6 py-3 font-semibold text-white transition-all duration-300 hover:-translate-y-0.5 hover:bg-gray-500 hover:shadow-lg'
               type='button'
             >
               取消
@@ -920,7 +920,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
             <button
               data-testid='save-button'
               onClick={handleSave}
-              className='rounded-xl bg-gradient-to-r from-cyan-600 to-cyan-500 px-8 py-3 font-bold text-white transition-all duration-300 hover:-translate-y-0.5 hover:from-cyan-500 hover:to-cyan-400 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:transform-none'
+              className='assistant-editor__save rounded-xl bg-gradient-to-r from-cyan-600 to-cyan-500 px-8 py-3 font-bold text-white transition-all duration-300 hover:-translate-y-0.5 hover:from-cyan-500 hover:to-cyan-400 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:transform-none'
               disabled={isSaving}
               type='button'
             >

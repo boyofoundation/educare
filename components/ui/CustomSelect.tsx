@@ -95,13 +95,13 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
   };
 
   return (
-    <div ref={dropdownRef} className={`relative ${className}`}>
+    <div ref={dropdownRef} className={`custom-select relative ${className}`}>
       {/* Selected Value Display */}
       <button
         type='button'
         onClick={toggleDropdown}
         onKeyDown={handleKeyDown}
-        className='w-full p-2.5 bg-gray-700/50 border border-gray-600/30 rounded-lg text-white text-sm focus:ring-cyan-500 focus:border-cyan-500 transition-colors hover:bg-gray-600/50 cursor-pointer flex items-center justify-between appearance-none'
+        className='custom-select__trigger w-full p-2.5 bg-gray-700/50 border rounded-lg text-white text-sm focus:ring-cyan-500 focus:border-cyan-500 transition-colors hover:bg-gray-600/50 cursor-pointer flex items-center justify-between appearance-none'
         aria-haspopup='listbox'
         aria-expanded={isOpen}
         aria-label={selectedAssistant ? `已選擇: ${selectedAssistant.name}` : placeholder}
@@ -109,7 +109,7 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
         <div className='flex items-center min-w-0 flex-1'>
           {selectedAssistant ? (
             <>
-              <div className='w-6 h-6 rounded bg-cyan-500 flex items-center justify-center mr-2 flex-shrink-0'>
+              <div className='custom-select__avatar w-6 h-6 rounded bg-cyan-500 flex items-center justify-center mr-2 flex-shrink-0'>
                 <span className='text-white font-medium text-xs'>
                   {selectedAssistant.name.charAt(0).toUpperCase()}
                 </span>
@@ -117,12 +117,12 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
               <span className='truncate'>{selectedAssistant.name}</span>
             </>
           ) : (
-            <span className='text-gray-400'>{placeholder}</span>
+            <span className='custom-select__placeholder text-gray-400'>{placeholder}</span>
           )}
         </div>
 
         <svg
-          className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          className={`custom-select__chevron w-4 h-4 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}
           fill='none'
           stroke='currentColor'
           viewBox='0 0 24 24'
@@ -133,10 +133,10 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
 
       {/* Dropdown Menu */}
       {isOpen && (
-        <div className='absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600/50 rounded-lg shadow-lg max-h-64 overflow-hidden'>
+        <div className='custom-select__menu absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600/50 rounded-lg shadow-lg max-h-64 overflow-hidden'>
           {/* Search Input */}
           {assistants.length > 5 && (
-            <div className='p-2 border-b border-gray-700/50'>
+            <div className='custom-select__search-wrap p-2 border-b border-gray-700/50'>
               <input
                 ref={searchInputRef}
                 type='text'
@@ -147,15 +147,15 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
                 }}
                 onKeyDown={handleKeyDown}
                 placeholder='搜索助理...'
-                className='w-full px-3 py-1.5 bg-gray-700/50 border border-gray-600/30 rounded text-white text-sm placeholder-gray-400 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500'
+                className='custom-select__search w-full px-3 py-1.5 bg-gray-700/50 border border-gray-600/30 rounded text-white text-sm placeholder-gray-400 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500'
               />
             </div>
           )}
 
           {/* Options List */}
-          <div className='max-h-48 overflow-y-auto py-1' role='listbox'>
+          <div className='custom-select__options max-h-48 overflow-y-auto py-1' role='listbox'>
             {filteredAssistants.length === 0 ? (
-              <div className='px-3 py-2 text-gray-400 text-sm text-center'>
+              <div className='custom-select__empty px-3 py-2 text-gray-400 text-sm text-center'>
                 {searchQuery ? `找不到 "${searchQuery}"` : '沒有助理'}
               </div>
             ) : (
@@ -164,20 +164,24 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
                   key={assistant.id}
                   type='button'
                   onClick={() => handleSelect(assistant)}
-                  className={`w-full px-3 py-2.5 text-left flex items-center hover:bg-gray-700/50 ${
-                    highlightedIndex === index ? 'bg-gray-700/50' : ''
-                  } ${selectedAssistant?.id === assistant.id ? 'bg-cyan-600/20' : ''}`}
+                  className={`custom-select__option w-full px-3 py-2.5 text-left flex items-center hover:bg-gray-700/50 ${
+                    highlightedIndex === index
+                      ? 'custom-select__option--highlighted bg-gray-700/50'
+                      : ''
+                  } ${selectedAssistant?.id === assistant.id ? 'custom-select__option--selected bg-cyan-600/20' : ''}`}
                   role='option'
                   aria-selected={selectedAssistant?.id === assistant.id}
                 >
-                  <div className='w-6 h-6 rounded bg-cyan-500 flex items-center justify-center mr-2 flex-shrink-0'>
+                  <div className='custom-select__avatar w-6 h-6 rounded bg-cyan-500 flex items-center justify-center mr-2 flex-shrink-0'>
                     <span className='text-white font-medium text-xs'>
                       {assistant.name.charAt(0).toUpperCase()}
                     </span>
                   </div>
                   <div className='flex-1 min-w-0'>
-                    <div className='text-white truncate'>{assistant.name}</div>
-                    <div className='text-xs text-gray-400'>
+                    <div className='custom-select__option-title text-white truncate'>
+                      {assistant.name}
+                    </div>
+                    <div className='custom-select__option-meta text-xs text-gray-400'>
                       建立於 {new Date(assistant.createdAt).toLocaleDateString('zh-TW')}
                     </div>
                   </div>

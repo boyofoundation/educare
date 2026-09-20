@@ -623,8 +623,8 @@ export function ProjectPicker({
           size='sm'
           className={
             isCollapsed
-              ? 'flex h-11 w-11 items-center justify-center rounded-xl border border-gray-600/40 bg-gray-800/70 px-0 text-cyan-100 shadow-lg shadow-black/20 hover:border-cyan-500/40 hover:bg-gray-700/80'
-              : 'flex w-full items-center justify-between rounded-xl border border-gray-600/40 bg-gray-800/70 px-3 py-2.5 text-sm font-medium text-white shadow-lg shadow-black/20 hover:border-cyan-500/40 hover:bg-gray-700/80'
+              ? 'project-picker__trigger flex h-11 w-11 items-center justify-center rounded-xl border border-gray-600/40 bg-gray-800/70 px-0 text-cyan-100 shadow-lg shadow-black/20 hover:border-cyan-500/40 hover:bg-gray-700/80'
+              : 'project-picker__trigger flex w-full items-center justify-between rounded-xl border border-gray-600/40 bg-gray-800/70 px-3 py-2.5 text-sm font-medium text-white shadow-lg shadow-black/20 hover:border-cyan-500/40 hover:bg-gray-700/80'
           }
           aria-label='HTML Projects'
           title='HTML Projects'

@@ -1927,10 +1927,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             <details
               open={agentRunControlsOpen || Boolean(interruptedCheckpoint)}
               onToggle={event => setAgentRunControlsOpen(event.currentTarget.open)}
-              className='mb-4 rounded-2xl border border-gray-800 bg-gray-900/60 p-3 text-sm text-gray-100 md:p-4'
+              className='agent-run-controls-shell mb-4 rounded-2xl border border-gray-800 bg-gray-900/60 p-3 text-sm text-gray-100 md:p-4'
               data-testid='agent-run-controls-details'
             >
-              <summary className='cursor-pointer list-none rounded-lg px-1 py-1 text-sm font-semibold text-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 [&::-webkit-details-marker]:hidden'>
+              <summary className='agent-run-controls-shell__summary cursor-pointer list-none rounded-lg px-1 py-1 text-sm font-semibold text-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 [&::-webkit-details-marker]:hidden'>
                 Agent 執行設定/用量
               </summary>
               <AgentRunControls

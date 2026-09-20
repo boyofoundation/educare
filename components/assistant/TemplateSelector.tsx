@@ -117,18 +117,18 @@ export const TemplateSelector: React.FC<TemplateSelectorProps> = ({
 
   return (
     <div
-      className={`mb-8 rounded-2xl border border-gray-700/40 bg-gray-900/40 p-6 shadow-xl backdrop-blur-md ${className ?? ''}`}
+      className={`template-selector mb-8 rounded-2xl border border-gray-700/40 bg-gray-900/40 p-6 shadow-xl backdrop-blur-md ${className ?? ''}`}
       data-testid='template-selector'
     >
       <div className='flex items-center justify-between mb-4'>
         <div>
-          <h3 className='text-lg font-bold text-white flex items-center gap-2'>
+          <h3 className='template-selector__title text-lg font-bold text-white flex items-center gap-2'>
             <span>💡 選擇預設助理樣板</span>
             <span className='px-2 py-0.5 text-xs font-normal text-cyan-400 bg-cyan-950/50 border border-cyan-800/40 rounded-full'>
               推薦
             </span>
           </h3>
-          <p className='text-xs text-gray-400 mt-1'>
+          <p className='template-selector__description text-xs text-gray-400 mt-1'>
             一鍵載入專業的角色設定，省去手動撰寫系統提示詞的繁瑣步驟。
           </p>
         </div>
@@ -145,9 +145,9 @@ export const TemplateSelector: React.FC<TemplateSelectorProps> = ({
               key={template.id}
               onClick={() => setSelectedId(template.id)}
               type='button'
-              className={`group relative text-left flex flex-col justify-between p-5 rounded-xl border-2 bg-gradient-to-br ${template.gradient} ${template.borderGlow} transition-all duration-300 cursor-pointer transform hover:-translate-y-1 ${
+              className={`template-card group relative text-left flex flex-col justify-between p-5 rounded-xl border-2 bg-gradient-to-br ${template.gradient} ${template.borderGlow} transition-all duration-300 cursor-pointer transform hover:-translate-y-1 ${
                 isSelected
-                  ? 'border-cyan-500 bg-gray-800/80 scale-[1.01]'
+                  ? 'template-card--selected border-cyan-500 bg-gray-800/80 scale-[1.01]'
                   : 'border-gray-700/40 bg-gray-800/40 hover:border-gray-600/50'
               }`}
             >
@@ -157,21 +157,21 @@ export const TemplateSelector: React.FC<TemplateSelectorProps> = ({
                     {template.icon}
                   </span>
                   <span
-                    className={`text-[10px] px-2 py-0.5 rounded-md font-semibold tracking-wider ${template.badgeColor}`}
+                    className={`template-card__badge text-[10px] px-2 py-0.5 rounded-md font-semibold tracking-wider ${template.badgeColor}`}
                   >
                     {template.badge}
                   </span>
                 </div>
-                <h4 className='text-sm font-bold text-white mb-1 group-hover:text-cyan-300 transition-colors duration-200'>
+                <h4 className='template-card__title text-sm font-bold text-white mb-1 group-hover:text-cyan-300 transition-colors duration-200'>
                   {template.name}
                 </h4>
-                <p className='text-xs text-gray-400 line-clamp-3 leading-relaxed'>
+                <p className='template-card__description text-xs text-gray-400 line-clamp-3 leading-relaxed'>
                   {template.description}
                 </p>
               </div>
               <div className='mt-4 flex items-center justify-end'>
                 <span
-                  className={`text-xs font-semibold px-3 py-1 rounded-lg transition-all duration-200 ${
+                  className={`template-card__status text-xs font-semibold px-3 py-1 rounded-lg transition-all duration-200 ${
                     isSelected
                       ? 'bg-cyan-500 text-white'
                       : 'bg-gray-700/60 text-gray-300 group-hover:bg-gray-700 group-hover:text-white'
@@ -187,7 +187,7 @@ export const TemplateSelector: React.FC<TemplateSelectorProps> = ({
 
       {/* Preview Section */}
       {activeTemplate && (
-        <div className='bg-gray-950/60 border border-gray-800/80 rounded-xl p-5 animate-fadeIn transition-all duration-300'>
+        <div className='template-preview bg-gray-950/60 border border-gray-800/80 rounded-xl p-5 animate-fadeIn transition-all duration-300'>
           <div className='flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-3 pb-3 border-b border-gray-800/60'>
             <div>
               <span className='text-xs text-gray-500 uppercase font-bold tracking-wider'>
@@ -210,7 +210,7 @@ export const TemplateSelector: React.FC<TemplateSelectorProps> = ({
               <span className='block text-xs font-semibold text-gray-400 mb-1'>
                 系統提示詞 (System Prompt)
               </span>
-              <div className='bg-gray-900/80 rounded-lg p-3 text-xs text-gray-300 font-mono leading-relaxed max-h-36 overflow-y-auto whitespace-pre-wrap select-all border border-gray-850'>
+              <div className='template-preview__prompt bg-gray-900/80 rounded-lg p-3 text-xs text-gray-300 font-mono leading-relaxed max-h-36 overflow-y-auto whitespace-pre-wrap select-all border border-gray-850'>
                 {activeTemplate.systemPrompt}
               </div>
             </div>
