@@ -36,6 +36,7 @@
   --appearance-accent-soft: rgba(34, 211, 238, 0.14);
   --appearance-success: #34d399;
   --appearance-danger: #fda4af;
+  --appearance-button-text: #ffffff;
   --appearance-focus: #67e8f9;
   --appearance-shadow: rgba(2, 6, 23, 0.28);
   --reading-font-size: 1rem;
@@ -59,6 +60,7 @@
   --appearance-accent-soft: #cffafe;
   --appearance-success: #047857;
   --appearance-danger: #be123c;
+  --appearance-button-text: #ffffff;
   --appearance-focus: #0e7490;
   --appearance-shadow: rgba(15, 23, 42, 0.12);
   color-scheme: light;
@@ -82,6 +84,7 @@
     --appearance-accent-soft: #cffafe;
     --appearance-success: #047857;
     --appearance-danger: #be123c;
+    --appearance-button-text: #ffffff;
     --appearance-focus: #0e7490;
     --appearance-shadow: rgba(15, 23, 42, 0.12);
     color-scheme: light;
@@ -122,12 +125,11 @@ body {
 }
 
 /* Keep the top-level shell and navigation readable when a user chooses the light theme. */
-:root[data-theme='light'] #root > .relative.flex.h-screen.overflow-hidden.bg-gradient-to-br,
-:root[data-theme='light'] #root > .flex.h-screen.font-sans.bg-gradient-to-br {
+:root[data-theme='light'] #root > .bg-gradient-to-br {
   background-image: linear-gradient(135deg, #f8fafc, #e2e8f0 52%, #f8fafc) !important;
 }
 
-:root[data-theme='light'] #root > .relative.flex.h-screen.overflow-hidden > main {
+:root[data-theme='light'] #root > .bg-gradient-to-br > main {
   background-image: linear-gradient(135deg, #f8fafc, #e2e8f0) !important;
   color: var(--appearance-text);
 }
@@ -136,6 +138,217 @@ body {
   background-color: rgba(255, 255, 255, 0.94) !important;
   border-color: var(--appearance-border) !important;
   box-shadow: 0 16px 32px var(--appearance-shadow);
+}
+
+/* Existing editor/provider forms use Tailwind dark utilities. Scope overrides to the
+ * outer app document so artifact previews and user-authored HTML are never recolored. */
+:root[data-theme='light'] #root input:not([type='checkbox']):not([type='radio']):not([type='file']),
+:root[data-theme='light'] #root textarea,
+:root[data-theme='light'] #root select {
+  border-color: var(--appearance-border-strong) !important;
+  background-color: var(--appearance-surface) !important;
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light'] #root input::placeholder,
+:root[data-theme='light'] #root textarea::placeholder {
+  color: var(--appearance-text-muted) !important;
+  opacity: 1;
+}
+
+:root[data-theme='light'] #root input[type='checkbox'],
+:root[data-theme='light'] #root input[type='radio'] {
+  accent-color: var(--appearance-accent);
+}
+
+:root[data-theme='light'] #root input:disabled,
+:root[data-theme='light'] #root textarea:disabled,
+:root[data-theme='light'] #root select:disabled {
+  border-color: var(--appearance-border) !important;
+  background-color: var(--appearance-surface-muted) !important;
+  color: var(--appearance-text-muted) !important;
+}
+
+:root[data-theme='light'] #root label,
+:root[data-theme='light'] #root legend {
+  color: var(--appearance-text-secondary);
+}
+
+:root[data-theme='light']
+  #root
+  :where(h1, h2, h3, h4, h5, h6, p, label, legend, dt, dd, li).text-white,
+:root[data-theme='light']
+  :where(
+    [role='dialog'] h1,
+    [role='dialog'] h2,
+    [role='dialog'] h3,
+    [role='dialog'] h4,
+    [role='dialog'] h5,
+    [role='dialog'] h6,
+    [role='dialog'] p,
+    [role='dialog'] label,
+    [role='dialog'] legend,
+    [role='dialog'] dt,
+    [role='dialog'] dd,
+    [role='dialog'] li
+  ).text-white {
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light'] #root :where(p, label, legend, dt, dd, li).text-gray-100,
+:root[data-theme='light'] #root :where(p, label, legend, dt, dd, li).text-gray-200,
+:root[data-theme='light'] #root :where(p, label, legend, dt, dd, li).text-gray-300,
+:root[data-theme='light'] #root :where(p, label, legend, dt, dd, li).text-gray-400,
+:root[data-theme='light'] #root :where(p, label, legend, dt, dd, li).text-gray-500,
+:root[data-theme='light']
+  :where(
+    [role='dialog'] p,
+    [role='dialog'] label,
+    [role='dialog'] legend,
+    [role='dialog'] dt,
+    [role='dialog'] dd,
+    [role='dialog'] li
+  ).text-gray-100,
+:root[data-theme='light']
+  :where(
+    [role='dialog'] p,
+    [role='dialog'] label,
+    [role='dialog'] legend,
+    [role='dialog'] dt,
+    [role='dialog'] dd,
+    [role='dialog'] li
+  ).text-gray-200,
+:root[data-theme='light']
+  :where(
+    [role='dialog'] p,
+    [role='dialog'] label,
+    [role='dialog'] legend,
+    [role='dialog'] dt,
+    [role='dialog'] dd,
+    [role='dialog'] li
+  ).text-gray-300,
+:root[data-theme='light']
+  :where(
+    [role='dialog'] p,
+    [role='dialog'] label,
+    [role='dialog'] legend,
+    [role='dialog'] dt,
+    [role='dialog'] dd,
+    [role='dialog'] li
+  ).text-gray-400,
+:root[data-theme='light']
+  :where(
+    [role='dialog'] p,
+    [role='dialog'] label,
+    [role='dialog'] legend,
+    [role='dialog'] dt,
+    [role='dialog'] dd,
+    [role='dialog'] li
+  ).text-gray-500 {
+  color: var(--appearance-text-secondary) !important;
+}
+
+:root[data-theme='light']
+  #root
+  :where(
+    [class~='bg-gray-700/50'],
+    [class~='bg-gray-700/80'],
+    [class~='bg-gray-800/50'],
+    [class~='bg-gray-800/60'],
+    [class~='bg-gray-800/80'],
+    [class~='bg-gray-900/40'],
+    [class~='bg-gray-900/45'],
+    [class~='bg-gray-900/50'],
+    [class~='bg-gray-900/60'],
+    [class~='bg-gray-950/60']
+  ):not(button):not([role='button']) {
+  border-color: var(--appearance-border) !important;
+  background-color: var(--appearance-surface-muted) !important;
+}
+
+:root[data-theme='light']
+  #root
+  :where(
+    [class~='border-gray-600'],
+    [class~='border-gray-600/30'],
+    [class~='border-gray-600/50'],
+    [class~='border-gray-700'],
+    [class~='border-gray-700/40'],
+    [class~='border-gray-700/50'],
+    [class~='border-gray-700/60'],
+    [class~='border-gray-700/70'],
+    [class~='border-gray-800'],
+    [class~='border-gray-800/60'],
+    [class~='border-gray-800/80']
+  ) {
+  border-color: var(--appearance-border) !important;
+}
+
+:root[data-theme='light'] [role='dialog'] > .bg-gray-800,
+:root[data-theme='light'] [role='dialog'] > [class*='bg-gradient-to-br'] {
+  border-color: var(--appearance-border) !important;
+  background: var(--appearance-surface) !important;
+  color: var(--appearance-text);
+  box-shadow: 0 18px 40px var(--appearance-shadow);
+}
+
+:root[data-theme='light'] [data-testid='share-modal'] > [class*='bg-gradient-to-br'] {
+  border-color: var(--appearance-border) !important;
+  background: var(--appearance-surface) !important;
+  color: var(--appearance-text);
+}
+
+:root[data-theme='light'] [role='dialog'] .text-white {
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light'] [role='dialog'] button.text-white,
+:root[data-theme='light'] [role='dialog'] button .text-white,
+:root[data-theme='light'] [role='dialog'] [role='button'].text-white,
+:root[data-theme='light'] [role='dialog'] [role='button'] .text-white {
+  color: var(--appearance-button-text) !important;
+}
+
+:root[data-theme='light'] #root button:disabled,
+:root[data-theme='light'] [role='dialog'] button:disabled {
+  border-color: var(--appearance-border) !important;
+  background: var(--appearance-surface-muted) !important;
+  color: var(--appearance-text-muted) !important;
+}
+
+:root[data-theme='light'] #root [aria-invalid='true'] {
+  border-color: var(--appearance-danger) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--appearance-danger) 18%, transparent);
+}
+
+:root[data-theme='light'] #root [role='alert'],
+:root[data-theme='light'] #root [aria-live='assertive'] {
+  color: var(--appearance-danger) !important;
+}
+
+:root[data-theme='light'] #root :where(p, span, label, li).text-rose-50,
+:root[data-theme='light'] #root :where(p, span, label, li).text-rose-100,
+:root[data-theme='light'] #root :where(p, span, label, li).text-rose-200,
+:root[data-theme='light'] #root :where(p, span, label, li).text-amber-100,
+:root[data-theme='light'] #root :where(p, span, label, li).text-amber-200 {
+  color: var(--appearance-danger) !important;
+}
+
+:root[data-theme='light']
+  #root
+  :where([class~='bg-rose-500/10'], [class~='bg-rose-500/15'], [class~='bg-amber-500/10']) {
+  border-color: color-mix(
+    in srgb,
+    var(--appearance-danger) 45%,
+    var(--appearance-border)
+  ) !important;
+  background: color-mix(in srgb, var(--appearance-danger) 8%, var(--appearance-surface)) !important;
+}
+
+:root[data-theme='light'] [role='dialog'] [class~='border-gray-700'],
+:root[data-theme='light'] [role='dialog'] [class~='border-gray-700/50'],
+:root[data-theme='light'] [role='dialog'] [class~='border-gray-700/60'] {
+  border-color: var(--appearance-border) !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
