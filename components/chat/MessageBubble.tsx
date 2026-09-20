@@ -271,6 +271,15 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
           </div>
         </div>
         <div className='group flex min-w-0 flex-col gap-3'>
+          {/* 時間順序閱讀:工具活動摘要 → 澄清問答 → 最終回覆。
+              與串流中的版面一致,避免回覆在 commit 後跳到提問/活動之前。 */}
+          <AgentActivityTimeline
+            toolCalls={message.toolCallLog}
+            subagentRuns={message.subagentRuns}
+          />
+          {message.clarifyRecords?.map(record => (
+            <ClarifyQuestionCard key={record.id} record={record} />
+          ))}
           <div
             className={`message-bubble message-bubble--assistant ${message.isError ? 'message-bubble--error' : ''} w-full max-w-[90%] rounded-2xl rounded-bl-md px-5 py-4 shadow-lg md:max-w-[70ch] md:px-6 ${
               message.isError
@@ -311,13 +320,6 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
           {message.speechUtterances?.map(utterance => (
             <SpeechUtteranceCard key={utterance.id} utterance={utterance} />
           ))}
-          {message.clarifyRecords?.map(record => (
-            <ClarifyQuestionCard key={record.id} record={record} />
-          ))}
-          <AgentActivityTimeline
-            toolCalls={message.toolCallLog}
-            subagentRuns={message.subagentRuns}
-          />
           {message.routeProposal && (
             <RouteProposalCard
               proposal={message.routeProposal}

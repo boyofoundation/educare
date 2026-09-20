@@ -336,6 +336,48 @@ describe('MessageBubble', () => {
       expect(screen.getByText('lint-path-not-found')).toBeInTheDocument();
     });
 
+    it('reads chronologically: activity timeline and clarify Q&A above the reply text', () => {
+      const assistantMessage = createMockChatMessage({
+        role: 'model',
+        content: '依據你的選擇，我採用暗色主題完成頁面。',
+        toolCallLog: [
+          {
+            id: 'tool-1',
+            name: 'askUser',
+            startedAt: 1700000000000,
+            status: 'ok',
+            summary: '使用者選擇：暗色',
+            durationMs: 4200,
+          },
+        ],
+        clarifyRecords: [
+          {
+            id: 'clarify-0-0',
+            request: {
+              question: '要使用哪種主題？',
+              options: [{ label: '亮色' }, { label: '暗色' }],
+              allowCustomAnswer: true,
+            },
+            answer: { kind: 'option', label: '暗色' },
+          },
+        ],
+      });
+
+      render(<MessageBubble message={assistantMessage} index={0} />);
+
+      const timeline = screen.getByTestId('agent-activity-timeline');
+      const clarifyCard = screen.getByTestId('clarify-question-card');
+      const reply = screen.getByTestId('markdown-content');
+
+      // 工具活動 → 澄清問答 → 最終回覆:時間順序閱讀,回覆不得跑到提問之前。
+      expect(
+        timeline.compareDocumentPosition(clarifyCard) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        clarifyCard.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
     it('keeps citations closed until the reference list and source are expanded', () => {
       // Arrange
       const assistantMessage = createMockChatMessage({

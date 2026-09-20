@@ -35,14 +35,14 @@ const StreamingResponse: React.FC<StreamingResponseProps> = ({
           {hasActivity && (
             <AgentActivityTimeline toolCalls={toolCallLog} subagentRuns={subagentRuns} live />
           )}
+          {clarifyRecords?.map(record => (
+            <ClarifyQuestionCard key={record.id} record={record} />
+          ))}
           {geometryBoards?.map(board => (
             <GeometryBoard key={board.id} board={board} />
           ))}
           {speechUtterances?.map(utterance => (
             <SpeechUtteranceCard key={utterance.id} utterance={utterance} />
-          ))}
-          {clarifyRecords?.map(record => (
-            <ClarifyQuestionCard key={record.id} record={record} />
           ))}
           {images?.length ? <GeneratedImageGrid images={images} /> : null}
           {content !== '' && (
