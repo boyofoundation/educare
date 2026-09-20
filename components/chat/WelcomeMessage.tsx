@@ -10,7 +10,7 @@ const WelcomeMessage: React.FC<WelcomeMessageProps> = ({
   onPromptSelect,
 }) => {
   return (
-    <div data-testid='welcome-message' className='py-12 text-center md:py-16'>
+    <div data-testid='welcome-message' className='welcome-message py-12 text-center md:py-16'>
       <div className='mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-gray-800/80 shadow-lg ring-1 ring-cyan-500/30'>
         <GeminiIcon className='h-10 w-10 text-cyan-400' />
       </div>

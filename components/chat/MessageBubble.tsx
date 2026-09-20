@@ -246,7 +246,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
             </div>
           </div>
           <div className='group flex min-w-0 flex-col items-end'>
-            <div className='w-full max-w-[90%] rounded-2xl rounded-br-md bg-gradient-to-br from-cyan-500 to-blue-600 px-5 py-4 text-white shadow-lg md:max-w-[70ch] md:px-6'>
+            <div className='message-bubble message-bubble--user w-full max-w-[90%] rounded-2xl rounded-br-md bg-gradient-to-br from-cyan-500 to-blue-600 px-5 py-4 text-white shadow-lg md:max-w-[70ch] md:px-6'>
               {message.attachments && <AttachmentImageGrid attachments={message.attachments} />}
               {(message.content.trim() !== '' || !message.attachments?.length) && (
                 <div className='text-base leading-7'>
@@ -271,7 +271,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
         </div>
         <div className='group flex min-w-0 flex-col gap-3'>
           <div
-            className={`w-full max-w-[90%] rounded-2xl rounded-bl-md px-5 py-4 shadow-lg md:max-w-[70ch] md:px-6 ${
+            className={`message-bubble message-bubble--assistant w-full max-w-[90%] rounded-2xl rounded-bl-md px-5 py-4 shadow-lg md:max-w-[70ch] md:px-6 ${
               message.isError
                 ? 'border border-rose-500/40 bg-rose-500/10 text-rose-50'
                 : 'border border-gray-700/50 bg-gray-800/80 text-gray-100 backdrop-blur-sm'
@@ -324,7 +324,8 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
           {citations.length > 0 && (
             <details
               data-testid='citation-list'
-              className='w-full max-w-[85%] rounded-2xl border border-cyan-500/20 bg-gray-900/60 px-4 py-3 text-sm text-gray-200 md:max-w-[65ch]'
+              data-reading-content='citations'
+              className='citation-list w-full max-w-[85%] rounded-2xl border border-cyan-500/20 bg-gray-900/60 px-4 py-3 text-sm text-gray-200 md:max-w-[65ch]'
             >
               <summary className='flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 text-sm font-medium text-cyan-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400'>
                 <span>📚 參考資料</span>
@@ -342,7 +343,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
                     <details
                       key={citation.chunkId}
                       id={`cite-${messageKey}-${citation.marker}`}
-                      className='rounded-xl border border-gray-700/70 bg-gray-800/80 px-3 py-2'
+                      className='citation-item rounded-xl border border-gray-700/70 bg-gray-800/80 px-3 py-2'
                     >
                       <summary className='cursor-pointer list-none text-sm font-medium text-cyan-100'>
                         <span className='mr-2'>[{citation.marker}]</span>
@@ -356,7 +357,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
                             來源檔案已更新或移除，以下顯示儲存時的摘錄。
                           </p>
                         )}
-                        <pre className='whitespace-pre-wrap rounded-lg bg-gray-950/70 p-3 text-xs text-gray-100'>
+                        <pre className='citation-excerpt whitespace-pre-wrap rounded-lg bg-gray-950/70 p-3 text-xs text-gray-100'>
                           {resolvedContent}
                         </pre>
                       </div>

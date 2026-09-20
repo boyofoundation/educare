@@ -2,6 +2,15 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { ErrorBoundary } from './components/core';
+import {
+  applyAppearancePreferences,
+  loadAppearancePreferences,
+} from './services/appearancePreferences';
+
+// Apply the saved preference before React mounts so the shell does not flash the wrong
+// palette or reading scale. The preview iframe has its own document and is intentionally
+// unaffected by these root attributes.
+applyAppearancePreferences(loadAppearancePreferences());
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
