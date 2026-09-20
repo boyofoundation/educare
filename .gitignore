@@ -75,3 +75,5 @@ test-results*/
 # Personal Claude Code harness (per-machine, migrated from ~/.claude)
 .claude/CLAUDE.md
 .claude/RTK.md
+.omx-state-locks/
+.omx-state-locks.identity.json
