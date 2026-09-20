@@ -11,7 +11,11 @@ import BundleImportPage from '../bundle/BundleImportPage';
 import BundleBuilder from '../bundle/BundleBuilder';
 import BundleProviderSetup from '../bundle/BundleProviderSetup';
 import ProviderSettings from '../settings/ProviderSettings';
+import AppearanceSettings from '../settings/AppearanceSettings';
 import ProviderSettingsImportModal from '../settings/ProviderSettingsImportModal';
+import { Onboarding } from './Onboarding';
+import Modal from '../ui/Modal';
+import { getOnboardingPreferences } from '../../services/onboardingPreferences';
 import { providerManager } from '../../services/providerRegistry';
 import { ChatCompactorService } from '../../services/chatCompactorService';
 import { countConversationRounds, groupMessagesByRounds } from '../../services/conversationUtils';
@@ -24,6 +28,23 @@ function AppContent(): React.JSX.Element {
   const chatTabRef = React.useRef<React.ComponentRef<'button'>>(null);
   const canvasTabRef = React.useRef<React.ComponentRef<'button'>>(null);
   const previousWorkspaceRef = React.useRef<string | null>(null);
+  const [onboardingMode, setOnboardingMode] = React.useState<'initial' | 'open' | 'closed'>(() =>
+    getOnboardingPreferences().completed ? 'closed' : 'initial',
+  );
+  const [initialTemplateId, setInitialTemplateId] = React.useState<string>();
+  const [importChoiceOpen, setImportChoiceOpen] = React.useState(false);
+  const [isImporting, setIsImporting] = React.useState(false);
+  const [importError, setImportError] = React.useState<string | null>(null);
+  const importFileRef = React.useRef<React.ComponentRef<'input'>>(null);
+  const [isOnline, setIsOnline] = React.useState(() => navigator.onLine);
+  const onboardingOpen =
+    onboardingMode === 'open' ||
+    (onboardingMode === 'initial' &&
+      !state.isLoading &&
+      state.isShared === false &&
+      !state.bundleMode &&
+      !state.isBundleImportRoute &&
+      state.assistants.length === 0);
   const bundleMetrics = getBundleMetrics();
   const htmlProjectAccessEnabled =
     !state.currentAssistant?.mathToolsEnabled && !state.currentAssistant?.webSpeechToolsEnabled;
@@ -31,6 +52,51 @@ function AppContent(): React.JSX.Element {
   const hasWorkspace = htmlProjectAccessEnabled && Boolean(state.activeProjectId);
   const workspaceVisible = hasWorkspace && state.isProjectWorkspaceOpen;
   const showPaneTabs = compactLayout && hasWorkspace;
+
+  React.useEffect(() => {
+    if (
+      onboardingMode === 'initial' &&
+      !state.isLoading &&
+      (state.isShared ||
+        state.bundleMode ||
+        state.isBundleImportRoute ||
+        state.assistants.length > 0)
+    ) {
+      setOnboardingMode('closed');
+    }
+  }, [
+    onboardingMode,
+    state.isLoading,
+    state.isShared,
+    state.bundleMode,
+    state.isBundleImportRoute,
+    state.assistants.length,
+  ]);
+
+  React.useEffect(() => {
+    const updateNetwork = () => setIsOnline(navigator.onLine);
+    window.addEventListener('online', updateNetwork);
+    window.addEventListener('offline', updateNetwork);
+    return () => {
+      window.removeEventListener('online', updateNetwork);
+      window.removeEventListener('offline', updateNetwork);
+    };
+  }, []);
+
+  const importAssistant = async (file: File) => {
+    setIsImporting(true);
+    setImportError(null);
+    try {
+      await actions.importAssistantPackage(file);
+      setImportChoiceOpen(false);
+    } catch (error) {
+      setImportError(
+        error instanceof Error ? error.message : '匯入失敗，請確認助理檔案後再試一次。',
+      );
+    } finally {
+      setIsImporting(false);
+    }
+  };
 
   React.useEffect(() => {
     const nextProject = workspaceVisible ? state.activeProjectId : null;
@@ -293,12 +359,111 @@ function AppContent(): React.JSX.Element {
 
   return (
     <Layout>
+      <Onboarding
+        isOpen={onboardingOpen}
+        onOpenChange={open => setOnboardingMode(open ? 'open' : 'closed')}
+        onApplyTemplate={template => {
+          setInitialTemplateId(template.id);
+          actions.setViewMode('new_assistant');
+        }}
+        onImportAssistant={() => {
+          setImportError(null);
+          setImportChoiceOpen(true);
+        }}
+        onBrowse={() => actions.setViewMode('chat')}
+        onSkip={() => actions.setViewMode('chat')}
+      />
+      <Modal
+        isOpen={importChoiceOpen}
+        onClose={() => !isImporting && setImportChoiceOpen(false)}
+        title='匯入助理或協作包'
+      >
+        <p className='mb-4 text-sm text-gray-300'>
+          選擇你已有的檔案種類。資料會儲存在這台裝置，不需要設定 Turso 或 API 金鑰。
+        </p>
+        <input
+          ref={importFileRef}
+          type='file'
+          accept='.zip,application/zip'
+          aria-label='選擇助理壓縮檔'
+          className='hidden'
+          onChange={event => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (file) {
+              void importAssistant(file);
+            }
+          }}
+        />
+        {importError && (
+          <p role='alert' className='mb-4 text-red-300'>
+            {importError}
+          </p>
+        )}
+        {isImporting && (
+          <p role='status' className='mb-4 text-gray-300'>
+            正在匯入並儲存到這台裝置…
+          </p>
+        )}
+        <div className='flex flex-wrap gap-3'>
+          <button
+            type='button'
+            disabled={isImporting}
+            onClick={() => importFileRef.current?.click()}
+            className='min-h-11 rounded-lg bg-cyan-700 px-4 py-2 font-semibold text-white disabled:opacity-50'
+          >
+            {importError ? '重新選擇助理檔案' : '選擇助理檔案'}
+          </button>
+          <button
+            type='button'
+            disabled={isImporting}
+            onClick={() => {
+              setImportChoiceOpen(false);
+              actions.setViewMode('bundle_import');
+            }}
+            className='min-h-11 rounded-lg border border-gray-500 px-4 py-2 text-gray-200 disabled:opacity-50'
+          >
+            匯入協作包檔案
+          </button>
+        </div>
+      </Modal>
+      <Modal
+        isOpen={Boolean(state.pendingNavigation)}
+        onClose={actions.cancelPendingNavigation}
+        title='離開尚未儲存的編輯？'
+      >
+        <p className='mb-4 text-gray-300'>
+          這次修改尚未儲存。離開會捨棄修改，已儲存的助理不受影響。
+        </p>
+        <div className='flex flex-wrap gap-3'>
+          <button
+            type='button'
+            className='min-h-11 rounded-lg bg-cyan-700 px-4 py-2 text-white'
+            onClick={actions.cancelPendingNavigation}
+          >
+            繼續編輯
+          </button>
+          <button
+            type='button'
+            className='min-h-11 rounded-lg border border-gray-500 px-4 py-2 text-gray-200'
+            onClick={actions.confirmPendingNavigation}
+          >
+            捨棄修改並離開
+          </button>
+        </div>
+      </Modal>
       {/* View Mode Content */}
-      {state.viewMode === 'new_assistant' && (
+      {state.viewMode === 'new_assistant' && !onboardingOpen && (
         <AssistantEditor
           assistant={null}
-          onSave={actions.saveAssistant}
+          initialTemplateId={initialTemplateId}
+          onDirtyChange={actions.setEditorDirty}
+          onSave={async assistant => {
+            await actions.saveAssistant(assistant);
+            setInitialTemplateId(undefined);
+          }}
           onCancel={() => {
+            setInitialTemplateId(undefined);
             if (state.assistants.length > 0) {
               actions.setViewMode('chat');
             } else {
@@ -313,6 +478,7 @@ function AppContent(): React.JSX.Element {
         <AssistantEditor
           assistant={state.currentAssistant}
           onSave={actions.saveAssistant}
+          onDirtyChange={actions.setEditorDirty}
           onCancel={() => actions.setViewMode('chat')}
           onShare={actions.openShareModal}
         />
@@ -364,6 +530,7 @@ function AppContent(): React.JSX.Element {
                 assistantId={state.currentAssistant.id}
                 ragChunks={state.currentAssistant.ragChunks ?? []}
                 onNewMessage={handleNewMessage}
+                onRequestProviderSetup={() => actions.openProviderSettings('chat')}
                 sharedMode={!!state.isShared}
                 assistantDescription={state.currentAssistant.description}
                 starterPrompts={state.currentAssistant.starterPrompts ?? []}
@@ -454,16 +621,32 @@ function AppContent(): React.JSX.Element {
                     </span>
                     <div>
                       <p className='text-white font-medium'>
-                        {ready ? `${providerCount} 個 AI 服務商可用` : '尚未配置 AI 服務商'}
+                        {ready ? `已設定 ${providerCount} 個 AI 服務商` : '尚未配置 AI 服務商'}
                       </p>
                       <p className={`text-sm ${ready ? 'text-green-300' : 'text-yellow-300'}`}>
-                        {ready ? 'AI 功能已就緒' : '請至下方完成 AI 服務商設定'}
+                        {ready
+                          ? '設定已保存；這不代表已通過即時連線測試。'
+                          : '請至下方完成 AI 服務商設定'}
                       </p>
                     </div>
                   </div>
                 </div>
               );
             })()}
+            <p role='status' className='mb-6 text-sm text-gray-300'>
+              {isOnline
+                ? '裝置目前有網路連線；實際 AI 服務連線狀態請在服務商設定中測試。'
+                : '目前沒有網路連線。仍可讀取這台裝置的資料；雲端 AI 需要恢復連線。'}{' '}
+              瀏覽器資料不會自動同步到其他裝置，請匯出檔案另存備份。
+            </p>
+            <AppearanceSettings className='mb-6' />
+            <button
+              type='button'
+              onClick={() => setOnboardingMode('open')}
+              className='mb-6 min-h-11 rounded-lg border border-gray-500 px-4 py-2 text-gray-200'
+            >
+              重新開啟開始引導
+            </button>
 
             <section
               className='mb-6 rounded-2xl border border-fuchsia-500/20 bg-fuchsia-500/5 p-5'
@@ -501,7 +684,7 @@ function AppContent(): React.JSX.Element {
             </h3>
             <div className='grid grid-cols-1 sm:grid-cols-2 gap-4'>
               <button
-                onClick={() => actions.setViewMode('provider_settings')}
+                onClick={() => actions.openProviderSettings('settings')}
                 className='group text-left p-5 rounded-2xl border border-gray-700/40 bg-gray-800/40 hover:border-cyan-500/50 hover:bg-gray-800/70 transition-all sm:col-span-2'
               >
                 <div className='flex items-center gap-3 mb-2'>
@@ -534,7 +717,7 @@ function AppContent(): React.JSX.Element {
 
       {(state.viewMode === 'provider_settings' || state.viewMode === 'api_setup') && (
         <div className='absolute inset-0 overflow-y-auto bg-gray-900'>
-          <ProviderSettings onClose={() => actions.setViewMode('settings')} />
+          <ProviderSettings onClose={actions.closeProviderSettings} />
         </div>
       )}
 

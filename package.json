@@ -8,7 +8,7 @@
     "test:e2e": "playwright test --reporter=json",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
-    "test:model-comparison": "playwright test tests/e2e/model-comparison.spec.ts --reporter=html",
+    "test:model-comparison": "playwright test tests/e2e/model-comparison.spec.ts",
     "test:model-comparison:json": "playwright test tests/e2e/model-comparison.spec.ts --reporter=json",
     "dev": "vite",
     "dev:https": "VITE_DEV_HTTPS=true vite",

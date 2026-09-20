@@ -156,8 +156,8 @@ EduCare 是專為財團法人博幼社會福利基金會及其服務的偏鄉兒
 | `pnpm run test:watch`            | Vitest watch 模式                                  |
 | `pnpm run test:ui`               | Vitest UI                                          |
 | `pnpm run test:coverage`         | Vitest 覆蓋率報告                                  |
-| `pnpm run test:e2e`              | Playwright E2E (JSON reporter)                     |
-| `pnpm run test:e2e:ui`           | Playwright UI                                      |
+| `pnpm run test:e2e`              | Headless Playwright E2E（JSON 報告；預設）          |
+| `pnpm run test:e2e:ui`           | 僅供必要的 GUI 除錯，不用於一般 E2E                 |
 | `pnpm run test:model-comparison` | 模型比較 Playwright 規格                           |
 | `pnpm run quality`               | typecheck + lint + format:check + test             |
 | `pnpm run init-turso`            | 初始化 Turso 資料庫                                |

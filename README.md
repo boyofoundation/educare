@@ -178,8 +178,8 @@ Multi-turn agent orchestration with checkpointing and recovery:
 | `pnpm run test:watch`            | Vitest watch mode                                       |
 | `pnpm run test:ui`               | Vitest UI                                               |
 | `pnpm run test:coverage`         | Vitest coverage report                                  |
-| `pnpm run test:e2e`              | Playwright E2E (JSON reporter)                          |
-| `pnpm run test:e2e:ui`           | Playwright UI                                           |
+| `pnpm run test:e2e`              | Headless Playwright E2E (JSON reporter; default)         |
+| `pnpm run test:e2e:ui`           | Optional GUI debugging only; not routine E2E             |
 | `pnpm run test:model-comparison` | Model-comparison Playwright spec                        |
 | `pnpm run quality`               | typecheck + lint + format:check + test                  |
 | `pnpm run init-turso`            | Initialize Turso DB                                     |

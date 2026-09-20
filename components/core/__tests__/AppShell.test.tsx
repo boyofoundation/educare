@@ -11,6 +11,22 @@ import * as providerMock from '../../../services/providerRegistry';
 import * as htmlPreviewMock from '../../../services/htmlPreviewService';
 import * as htmlProjectStoreMock from '../../../services/htmlProjectStore';
 
+const onboardingState = vi.hoisted(() => ({ completed: true }));
+vi.mock('../../../services/onboardingPreferences', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../services/onboardingPreferences')>();
+  return {
+    ...actual,
+    getOnboardingPreferences: vi.fn(() => ({
+      completed: onboardingState.completed,
+      dismissed: false,
+    })),
+    completeOnboarding: vi.fn(() => {
+      onboardingState.completed = true;
+      return { completed: true, dismissed: false };
+    }),
+  };
+});
+
 // Mock ErrorBoundary separately to test error handling
 vi.mock('../ErrorBoundary', () => {
   const MockErrorBoundary = vi.fn(({ children }: { children: React.ReactNode }) => {
@@ -117,13 +133,16 @@ vi.mock('../../assistant', () => ({
     assistant,
     onCancel,
     onSave,
+    initialTemplateId,
   }: {
     assistant?: { name: string } | null;
     onCancel?: () => void;
     onSave?: (a: unknown) => void;
+    initialTemplateId?: string;
   }) =>
     React.createElement('div', { 'data-testid': 'assistant-editor' }, [
       React.createElement('span', { key: 'mode' }, assistant ? 'Edit Mode' : 'New Mode'),
+      React.createElement('span', { key: 'template' }, initialTemplateId ?? 'no-initial-template'),
       React.createElement(
         'button',
         { key: 'cancel', 'data-testid': 'cancel-button', onClick: onCancel },
@@ -296,7 +315,9 @@ let mockURLSearchParams: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  onboardingState.completed = true;
   Object.defineProperty(window, 'innerWidth', { value: 1280, writable: true });
+  Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
 
   mockURLSearchParams = vi.fn().mockImplementation(() => ({
     has: vi.fn().mockReturnValue(false),
@@ -370,6 +391,82 @@ afterEach(() => {
 });
 
 describe('AppShell', () => {
+  describe('First-run guide integration', () => {
+    it('opens the guide for an empty device and passes a chosen template to the editor', async () => {
+      onboardingState.completed = false;
+      render(<AppShell />);
+
+      await screen.findByText('先選用途，再開始備課');
+      expect(screen.queryByTestId('assistant-editor')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /英文教學/ }));
+      fireEvent.click(screen.getByRole('button', { name: '套用樣板並開始' }));
+
+      expect(await screen.findByTestId('assistant-editor')).toHaveTextContent(
+        'tpl_english_teaching',
+      );
+      expect(screen.queryByText('先選用途，再開始備課')).not.toBeInTheDocument();
+      expect(onboardingState.completed).toBe(true);
+    });
+
+    it('allows skipping and does not reopen the guide after remounting', async () => {
+      onboardingState.completed = false;
+      const first = render(<AppShell />);
+      fireEvent.click(await screen.findByRole('button', { name: '先跳過' }));
+      expect(screen.queryByText('先選用途，再開始備課')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('assistant-editor')).not.toBeInTheDocument();
+      first.unmount();
+
+      render(<AppShell />);
+      await screen.findByTestId('assistant-editor');
+      expect(screen.queryByText('先選用途，再開始備課')).not.toBeInTheDocument();
+    });
+
+    it('does not intercept an existing assistant or a shared deep link', async () => {
+      onboardingState.completed = false;
+      vi.mocked(dbMock.getAllAssistants).mockResolvedValue([TEST_ASSISTANTS.basic]);
+      vi.mocked(dbMock.getAssistant).mockResolvedValue(TEST_ASSISTANTS.basic);
+      vi.mocked(dbMock.getSessionsForAssistant).mockResolvedValue([TEST_SESSIONS.withMessages]);
+      const existing = render(<AppShell />);
+      await screen.findByTestId('chat-container');
+      expect(screen.queryByText('先選用途，再開始備課')).not.toBeInTheDocument();
+      existing.unmount();
+
+      mockURLSearchParams.mockImplementation(() => ({
+        has: vi.fn().mockImplementation(key => key === 'share'),
+        get: vi.fn().mockImplementation(key => (key === 'share' ? 'public-assistant' : null)),
+      }));
+      render(<AppShell />);
+      await screen.findByTestId('shared-assistant');
+      expect(screen.queryByText('先選用途，再開始備課')).not.toBeInTheDocument();
+    });
+
+    it('provides separate local assistant and bundle import choices without provider setup', async () => {
+      onboardingState.completed = false;
+      render(<AppShell />);
+      fireEvent.click(await screen.findByRole('button', { name: /匯入助理／協作包/ }));
+      expect(await screen.findByRole('dialog', { name: '匯入助理或協作包' })).toBeVisible();
+      expect(screen.getByRole('button', { name: '選擇助理檔案' })).toBeVisible();
+      expect(screen.getByRole('button', { name: '匯入協作包檔案' })).toBeVisible();
+      expect(screen.queryByTestId('provider-settings')).not.toBeInTheDocument();
+    });
+
+    it('offers appearance controls and reopening the guide in settings without claiming connectivity', async () => {
+      render(<AppShell />);
+      await screen.findByTestId('assistant-editor');
+      fireEvent.click(screen.getByRole('button', { name: '設定' }));
+
+      expect(await screen.findByTestId('appearance-settings')).toBeInTheDocument();
+      expect(screen.getByText('設定已保存；這不代表已通過即時連線測試。')).toBeInTheDocument();
+      expect(screen.queryByText('AI 功能已就緒')).not.toBeInTheDocument();
+      Object.defineProperty(navigator, 'onLine', { value: false, configurable: true });
+      fireEvent(window, new Event('offline'));
+      expect(screen.getByText(/目前沒有網路連線。仍可讀取這台裝置的資料/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: '重新開啟開始引導' }));
+      expect(await screen.findByText('先選用途，再開始備課')).toBeVisible();
+    });
+  });
+
   describe('Component Structure', () => {
     it('should render within ErrorBoundary and AppProvider', async () => {
       render(<AppShell />);
@@ -1393,7 +1490,7 @@ describe('AppShell', () => {
         });
 
         await waitFor(() => {
-          expect(screen.getByText('2 個 AI 服務商可用')).toBeInTheDocument();
+          expect(screen.getByText('已設定 2 個 AI 服務商')).toBeInTheDocument();
         });
       }
     });

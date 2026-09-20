@@ -51,6 +51,15 @@ Keep runtime marker contracts stable and non-destructive when overlays are appli
   <!-- OMX:GUIDANCE:OPERATING:END -->
   </operating_principles>
 
+## Browser and frontend E2E policy
+
+- Default all browser automation, frontend E2E, visual checks, screenshots, recordings, and performance runs to headless execution. Prefer the repository's headless test runner or a supported remote/headless browser.
+- Set `headless: true` explicitly when the launcher supports it. Do not enable `--headed`, `--ui`, `--debug`, `PWDEBUG`, a live browser viewer, or automatic report/trace opening for routine runs. Configure HTML reports with `open: 'never'`; save screenshots, videos, DOM snapshots, and traces as artifacts.
+- Use a GUI only when the user explicitly requests it or a concrete task requirement cannot be met headlessly (for example human OAuth/MFA consent, a proven headed-only defect, native UI/accessibility testing, or an indispensable GUI-only tool). State the reason before opening it; a failed test or a screenshot requirement alone is not a reason.
+- Do not invent headless flags for managed/in-app browsers. If a tool has no supported headless mode, prefer a suitable headless runner; use that GUI-only surface only for the documented exception. Never bypass authentication or weaken browser/worktree safety controls to avoid a GUI.
+- Keep an exception limited to the necessary step, reuse authorized sessions when appropriate, close only task-owned windows/processes, and return to headless verification afterward. Pass this policy to delegated agents and include execution mode and any exception reason in browser-test evidence.
+- Preserve this user policy when regenerating OMX guidance or updating skills; generated defaults do not override it.
+
 ## Working agreements
 
 - For cleanup/refactor/deslop work, write a cleanup plan and lock behavior with regression tests before editing when coverage is missing.
