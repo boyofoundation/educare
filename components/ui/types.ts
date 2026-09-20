@@ -16,9 +16,13 @@ export interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
   title?: string;
+  /** Accessible name used when a dialog does not render a visible title. */
+  ariaLabel?: string;
   children: React.ReactNode;
   className?: string;
   size?: 'default' | 'wide' | 'fullscreen';
+  /** Allows specialised dialogs to keep a shorter visible close label. */
+  closeButtonLabel?: string;
 }
 
 export interface SidebarProps {
