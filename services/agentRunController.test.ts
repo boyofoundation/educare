@@ -17,7 +17,7 @@ const {
   mockWaitForRuntimeDiagnostics: vi.fn(),
   mockBuildSyntheticMessage: vi.fn(),
   mockSaveCheckpoint: vi.fn().mockResolvedValue(undefined),
-  mockUpdateCheckpoint: vi.fn().mockResolvedValue(null),
+  mockUpdateCheckpoint: vi.fn().mockResolvedValue({}),
   mockGatherKnowledge: vi.fn().mockResolvedValue(null),
 }));
 
@@ -75,7 +75,11 @@ vi.mock('./knowledgeGatherService', () => ({
   gatherKnowledge: mockGatherKnowledge,
 }));
 
-import { AgentRunController, CONTINUATION_PROMPT } from './agentRunController';
+import {
+  AgentRunController,
+  CONTINUATION_PROMPT,
+  getAgentRunReplayPolicy,
+} from './agentRunController';
 
 const baseProjectSummary = {
   projectId: 'project-1',
@@ -214,6 +218,7 @@ const buildCheckpoint = (overrides: Partial<AgentRunCheckpoint> = {}): AgentRunC
   todoSummary: overrides.todoSummary ?? baseProjectSummary.todoSummary,
   snapshotVersion: overrides.snapshotVersion ?? 7,
   firstTurnPackSet: overrides.firstTurnPackSet ?? ['inspect', 'todo_finalize'],
+  inFlightToolCallIds: overrides.inFlightToolCallIds,
   gatheredContext: overrides.gatheredContext,
   tokenTotals: overrides.tokenTotals ?? {
     promptTokenCount: 20,
@@ -222,6 +227,14 @@ const buildCheckpoint = (overrides: Partial<AgentRunCheckpoint> = {}): AgentRunC
   agentHarnessEnabled: overrides.agentHarnessEnabled ?? true,
   mathToolsEnabled: overrides.mathToolsEnabled ?? false,
   sharedMode: overrides.sharedMode ?? false,
+  budget: overrides.budget,
+  budgetUsage: overrides.budgetUsage,
+  pauseReason: overrides.pauseReason,
+  resumeBudgetAcknowledgementRequired: overrides.resumeBudgetAcknowledgementRequired,
+  failure: overrides.failure,
+  failureStage: overrides.failureStage,
+  failureCode: overrides.failureCode,
+  failureRetryable: overrides.failureRetryable,
   createdAt: overrides.createdAt ?? 1_720_000_000_000,
   updatedAt: overrides.updatedAt ?? 1_720_000_000_000,
   heartbeatAt: overrides.heartbeatAt ?? 1_720_000_000_000,
@@ -253,6 +266,10 @@ describe('AgentRunController', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStreamChat.mockReset();
+    mockSaveCheckpoint.mockReset();
+    mockSaveCheckpoint.mockResolvedValue(undefined);
+    mockUpdateCheckpoint.mockReset();
+    mockUpdateCheckpoint.mockResolvedValue({});
     mockCreateSnapshot.mockResolvedValue({ projectId: 'project-1', version: 7 });
     mockWaitForRuntimeDiagnostics.mockResolvedValue({
       projectId: 'project-1',
@@ -589,6 +606,11 @@ describe('AgentRunController', () => {
     expect(result.state.status).toBe('failed');
     expect(result.state.finishReason).toBe('stop-route');
     expect(result.state.loopDetected).toBe(true);
+    expect(result.state.failure).toEqual({
+      stage: 'unknown',
+      code: 'loop-detected',
+      retryable: false,
+    });
     expect(mockStreamChat).toHaveBeenCalledTimes(2);
   });
 
@@ -676,6 +698,12 @@ describe('AgentRunController', () => {
     expect(controller.getState().status).toBe('stopped');
     expect(controller.getState().finishReason).toBe('aborted');
     expect(controller.getState().abortReason).toBe('user-stop');
+    expect(controller.getState().pauseReason).toBe('user');
+    expect(controller.getState().failure).toEqual({
+      stage: 'cancel',
+      code: 'cancelled',
+      retryable: false,
+    });
     expect(mockStreamChat).toHaveBeenCalledTimes(1);
     expect(opts.callbacks.onTurnComplete).toHaveBeenCalledTimes(1);
     expect(opts.callbacks.onTurnComplete).toHaveBeenCalledWith(
@@ -687,6 +715,506 @@ describe('AgentRunController', () => {
       expect.objectContaining({ status: 'stopped' }),
     );
     expect(mockBuildSyntheticMessage).not.toHaveBeenCalled();
+  });
+
+  it('pauses an explicit turn budget before another provider request', async () => {
+    installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        projectSummary: null,
+      }),
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        projectSummary: null,
+      }),
+    ]);
+
+    const controller = new AgentRunController(
+      buildOptions({
+        activeProjectId: null,
+        budget: { maxTurns: 1 },
+      }),
+    );
+    const result = await controller.run();
+
+    expect(mockStreamChat).toHaveBeenCalledTimes(1);
+    expect(result.state.status).toBe('paused');
+    expect(result.state.pauseReason).toBe('budget');
+    expect(result.state.failure).toEqual({
+      stage: 'budget',
+      code: 'budget-exceeded',
+      retryable: false,
+    });
+    expect(result.state.budgetUsage).toEqual(
+      expect.objectContaining({ turns: 1, estimatedTokens: false }),
+    );
+    expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+      result.state.runId,
+      expect.objectContaining({ status: 'paused', pauseReason: 'budget', turnIndex: 1 }),
+    );
+  });
+
+  it('pauses a token budget using provider counts and does not send a follow-up request', async () => {
+    installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        projectSummary: null,
+        promptTokenCount: 10,
+        candidatesTokenCount: 5,
+      }),
+    ]);
+
+    const controller = new AgentRunController(
+      buildOptions({
+        activeProjectId: null,
+        budget: { maxTokens: 10 },
+      }),
+    );
+    const result = await controller.run();
+
+    expect(mockStreamChat).toHaveBeenCalledTimes(1);
+    expect(result.state.status).toBe('paused');
+    expect(result.state.budgetUsage).toEqual(
+      expect.objectContaining({ tokens: 15, estimatedTokens: false }),
+    );
+  });
+
+  it('grows estimated usage for every nested provider request before the next request', async () => {
+    const controllerRef: { current?: AgentRunController } = {};
+    const observedUsage: number[] = [];
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      const beforeProviderRequest = params.beforeProviderRequest as
+        | ((context: {
+            provider: string;
+            model?: string;
+            requestType: 'initial' | 'tool-round' | 'stream';
+            requestIndex: number;
+          }) => void)
+        | undefined;
+      beforeProviderRequest?.({
+        provider: 'mock',
+        model: 'mock-model',
+        requestType: 'initial',
+        requestIndex: 0,
+      });
+      observedUsage.push(controllerRef.current?.getState().budgetUsage?.tokens ?? 0);
+      beforeProviderRequest?.({
+        provider: 'mock',
+        model: 'mock-model',
+        requestType: 'tool-round',
+        requestIndex: 1,
+      });
+      observedUsage.push(controllerRef.current?.getState().budgetUsage?.tokens ?? 0);
+      beforeProviderRequest?.({
+        provider: 'mock',
+        model: 'mock-model',
+        requestType: 'tool-round',
+        requestIndex: 2,
+      });
+      observedUsage.push(controllerRef.current?.getState().budgetUsage?.tokens ?? 0);
+      (params.onComplete as (meta: unknown, fullText: string) => void)(
+        {
+          promptTokenCount: 0,
+          candidatesTokenCount: 0,
+          finishReason: 'complete',
+          projectSummary: null,
+          toolSequence: [],
+        },
+        'estimated response',
+      );
+    });
+
+    const controller = new AgentRunController(
+      buildOptions({ activeProjectId: null, budget: { maxTokens: 10_000 } }),
+    );
+    controllerRef.current = controller;
+    const result = await controller.run();
+
+    expect(observedUsage[0]).toBe(0);
+    expect(observedUsage[1]).toBeGreaterThan(observedUsage[0] ?? 0);
+    expect(observedUsage[2]).toBeGreaterThan(observedUsage[1] ?? 0);
+    expect(result.state.budgetUsage?.estimatedTokens).toBe(true);
+  });
+
+  it('checks the tool-call budget before invoking the next tool and preserves completed effects', async () => {
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      const onToolCallActivity = params.onToolCallActivity as
+        | ((record: { id: string; name: string; status: string; startedAt: number }) => void)
+        | undefined;
+      const onComplete = params.onComplete as (meta: unknown, fullText: string) => void;
+
+      onToolCallActivity?.({
+        id: 'writeFiles-1',
+        name: 'writeFiles',
+        status: 'running',
+        startedAt: 1,
+      });
+      onToolCallActivity?.({
+        id: 'writeFiles-1',
+        name: 'writeFiles',
+        status: 'ok',
+        startedAt: 1,
+      });
+      expect(() =>
+        onToolCallActivity?.({
+          id: 'writeFiles-2',
+          name: 'writeFiles',
+          status: 'running',
+          startedAt: 2,
+        }),
+      ).toThrow('budget reached');
+      onComplete(
+        {
+          promptTokenCount: 1,
+          candidatesTokenCount: 1,
+          finishReason: 'tool-budget-exhausted',
+          projectSummary: null,
+          toolSequence: ['writeFiles'],
+        },
+        'partial after write',
+      );
+    });
+
+    const controller = new AgentRunController(
+      buildOptions({
+        activeProjectId: null,
+        budget: { maxToolCalls: 1 },
+      }),
+    );
+    const result = await controller.run();
+
+    expect(result.state.status).toBe('paused');
+    expect(result.state.turnIndex).toBe(1);
+    expect(result.state.toolTrace).toContain('writeFiles');
+    expect(result.state.budgetUsage?.toolCalls).toBe(1);
+    expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+      result.state.runId,
+      expect.objectContaining({ status: 'paused', turnIndex: 1, toolTrace: ['writeFiles'] }),
+    );
+  });
+
+  it('durably marks tool start before side effects and clears it after trusted completion', async () => {
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      const onToolCallActivity = params.onToolCallActivity as
+        | ((record: { id: string; name: string; status: string; startedAt: number }) => void)
+        | undefined;
+      const beforeToolExecution = params.beforeToolExecution as
+        | ((record: {
+            id: string;
+            name: string;
+            status: string;
+            startedAt: number;
+          }) => Promise<void>)
+        | undefined;
+      const afterToolExecution = params.afterToolExecution as
+        | ((record: {
+            id: string;
+            name: string;
+            status: string;
+            startedAt: number;
+          }) => Promise<void>)
+        | undefined;
+
+      onToolCallActivity?.({
+        id: 'writeFiles-durable',
+        name: 'writeFiles',
+        status: 'running',
+        startedAt: 1,
+      });
+      await beforeToolExecution?.({
+        id: 'writeFiles-durable',
+        name: 'writeFiles',
+        status: 'running',
+        startedAt: 1,
+      });
+      expect(mockUpdateCheckpoint).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ inFlightToolCallIds: ['writeFiles-durable'] }),
+      );
+
+      onToolCallActivity?.({
+        id: 'writeFiles-durable',
+        name: 'writeFiles',
+        status: 'ok',
+        startedAt: 1,
+      });
+      await afterToolExecution?.({
+        id: 'writeFiles-durable',
+        name: 'writeFiles',
+        status: 'ok',
+        startedAt: 1,
+      });
+      expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.objectContaining({ inFlightToolCallIds: [] }),
+      );
+
+      (params.onComplete as (meta: unknown, fullText: string) => void)(
+        {
+          promptTokenCount: 1,
+          candidatesTokenCount: 1,
+          finishReason: 'complete',
+          projectSummary: null,
+          toolSequence: ['writeFiles'],
+        },
+        'done',
+      );
+    });
+
+    const controller = new AgentRunController(buildOptions({ activeProjectId: null }));
+    const result = await controller.run();
+
+    expect(result.state.status).toBe('complete');
+  });
+
+  it('classifies a retryable network failure without replaying a completed tool turn', async () => {
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      const onToolCallActivity = params.onToolCallActivity as
+        | ((record: { id: string; name: string; status: string; startedAt: number }) => void)
+        | undefined;
+      onToolCallActivity?.({
+        id: 'writeFiles-1',
+        name: 'writeFiles',
+        status: 'running',
+        startedAt: 1,
+      });
+      onToolCallActivity?.({
+        id: 'writeFiles-1',
+        name: 'writeFiles',
+        status: 'ok',
+        startedAt: 1,
+      });
+      throw new Error('network request failed');
+    });
+
+    const controller = new AgentRunController(buildOptions({ activeProjectId: null }));
+    const result = await controller.run();
+
+    expect(result.state.status).toBe('failed');
+    expect(result.state.failure).toEqual({
+      stage: 'network',
+      code: 'network',
+      retryable: true,
+    });
+    expect(result.state.pauseReason).toBe('retryable_failure');
+    expect(result.state.turnIndex).toBe(1);
+    expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+      result.state.runId,
+      expect.objectContaining({ status: 'failed', turnIndex: 1, toolTrace: ['writeFiles'] }),
+    );
+  });
+
+  it('classifies a 429 provider failure as a retryable rate-limit failure', async () => {
+    mockStreamChat.mockRejectedValueOnce(new Error('429 Too Many Requests'));
+
+    const controller = new AgentRunController(buildOptions({ activeProjectId: null }));
+    const result = await controller.run();
+
+    expect(result.state.failure).toEqual({
+      stage: 'rate_limit',
+      code: 'rate-limit',
+      retryable: true,
+    });
+    expect(result.state.failureRetryable).toBe(true);
+  });
+
+  it('resumes from a paused checkpoint at the next turn without replaying the completed operation', async () => {
+    const resumeFrom = buildCheckpoint({
+      status: 'paused',
+      turnIndex: 1,
+      maxTurns: 2,
+      toolTrace: ['writeFiles'],
+      budget: { maxTurns: 2, maxToolCalls: 2 },
+      budgetUsage: {
+        turns: 1,
+        toolCalls: 1,
+        tokens: 12,
+        estimatedTokens: false,
+      },
+    });
+    const invocations = installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        projectSummary: null,
+        toolSequence: [],
+      }),
+    ]);
+
+    const controller = new AgentRunController(
+      buildOptions({
+        activeProjectId: null,
+        resumeFrom,
+      }),
+    );
+    const result = await controller.run();
+
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]?.params.message).toBe(CONTINUATION_PROMPT);
+    expect(result.state.status).toBe('paused');
+    expect(result.state.turnIndex).toBe(2);
+    expect(result.state.toolTrace).toEqual(['writeFiles']);
+    expect(mockBuildSyntheticMessage).toHaveBeenCalledWith(
+      'user',
+      CONTINUATION_PROMPT,
+      'continuation prompt',
+    );
+  });
+
+  it('requires an explicit resume allowance to extend a paused budget without resetting usage', async () => {
+    const resumeFrom = buildCheckpoint({
+      status: 'paused',
+      turnIndex: 1,
+      maxTurns: 1,
+      budget: { maxTurns: 1 },
+      budgetUsage: {
+        turns: 1,
+        toolCalls: 0,
+        tokens: 15,
+        estimatedTokens: false,
+      },
+    });
+    installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        projectSummary: null,
+      }),
+    ]);
+
+    const controller = new AgentRunController(
+      buildOptions({
+        activeProjectId: null,
+        resumeFrom,
+        budget: { maxTurns: 2 },
+      }),
+    );
+
+    expect(controller.getState().budget).toEqual({ maxTurns: 2 });
+    expect(controller.getState().budgetUsage).toEqual(
+      expect.objectContaining({ turns: 1, tokens: 15 }),
+    );
+    const result = await controller.run();
+
+    expect(mockStreamChat).toHaveBeenCalledTimes(1);
+    expect(result.state.status).toBe('paused');
+    expect(result.state.turnIndex).toBe(2);
+    expect(result.state.budgetUsage).toEqual(expect.objectContaining({ turns: 2, tokens: 30 }));
+  });
+
+  it('pauses before resume when an uncertain tool effect is persisted', async () => {
+    const resumeFrom = buildCheckpoint({
+      status: 'failed',
+      inFlightToolCallIds: ['writeFiles-uncertain'],
+      budgetUsage: {
+        turns: 1,
+        toolCalls: 1,
+        toolCallsKnown: true,
+        tokens: 12,
+        estimatedTokens: false,
+      },
+    });
+    const invocations = installStreamChatTurns([buildStreamChatInvocation()]);
+    const controller = new AgentRunController(buildOptions({ resumeFrom, activeProjectId: null }));
+
+    const result = await controller.run();
+
+    expect(invocations).toHaveLength(0);
+    expect(result.state.status).toBe('paused');
+    expect(result.state.pauseReason).toBe('resume_ack');
+    expect(result.state.failure).toEqual({
+      stage: 'unknown',
+      code: 'in-flight-tool-ack-required',
+      retryable: false,
+    });
+    expect(result.state.inFlightToolCallIds).toEqual(['writeFiles-uncertain']);
+  });
+
+  it('persists a started tool id on a stream fault and only resumes it after acknowledgement', async () => {
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      (params.onToolCallActivity as (record: Record<string, unknown>) => void)({
+        id: 'writeFiles-uncertain',
+        name: 'writeFiles',
+        status: 'running',
+        startedAt: 1,
+      });
+      throw new Error('network request failed');
+    });
+    const first = await new AgentRunController(buildOptions({ activeProjectId: null })).run();
+    expect(first.state.inFlightToolCallIds).toEqual(['writeFiles-uncertain']);
+    expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+      first.state.runId,
+      expect.objectContaining({ inFlightToolCallIds: ['writeFiles-uncertain'] }),
+    );
+
+    const resumeFrom = buildCheckpoint({
+      runId: first.state.runId,
+      inFlightToolCallIds: first.state.inFlightToolCallIds,
+      budgetUsage: {
+        turns: first.state.budgetUsage?.turns ?? 1,
+        toolCalls: first.state.budgetUsage?.toolCalls ?? 1,
+        toolCallsKnown: true,
+        tokens: first.state.budgetUsage?.tokens ?? 0,
+        estimatedTokens: first.state.budgetUsage?.estimatedTokens ?? true,
+      },
+    });
+    mockStreamChat.mockReset();
+    installStreamChatTurns([buildStreamChatInvocation({ projectSummary: null })]);
+    const resumed = await new AgentRunController(
+      buildOptions({
+        activeProjectId: null,
+        resumeFrom,
+        acknowledgeInFlightToolCallIds: true,
+        maxTurns: 1,
+      }),
+    ).run();
+
+    expect(mockStreamChat).toHaveBeenCalledTimes(1);
+    expect(resumed.state.inFlightToolCallIds).toEqual([]);
+  });
+
+  it('requires explicit acknowledgement when a legacy capped trace cannot establish usage', async () => {
+    const resumeFrom = buildCheckpoint({
+      toolTrace: Array.from({ length: 32 }, (_, index) => `tool-${index}`),
+      budgetUsage: undefined,
+    });
+    installStreamChatTurns([buildStreamChatInvocation({ projectSummary: null })]);
+
+    const controller = new AgentRunController(buildOptions({ activeProjectId: null, resumeFrom }));
+    const result = await controller.run();
+
+    expect(mockStreamChat).not.toHaveBeenCalled();
+    expect(result.state.failure).toEqual({
+      stage: 'budget',
+      code: 'budget-usage-unknown',
+      retryable: false,
+    });
+    expect(result.state.resumeBudgetAcknowledgementRequired).toBe(true);
+    expect(getAgentRunReplayPolicy(resumeFrom)).toEqual({
+      replaySafe: false,
+      requiresBudgetAcknowledgement: true,
+      requiresInFlightToolAcknowledgement: false,
+      inFlightToolCallIds: [],
+    });
+  });
+
+  it('requires acknowledgement when a legacy capped trace has usage but no known-count marker', async () => {
+    const resumeFrom = buildCheckpoint({
+      toolTrace: Array.from({ length: 32 }, (_, index) => `tool-${index}`),
+      budgetUsage: {
+        turns: 1,
+        toolCalls: 32,
+        tokens: 100,
+        estimatedTokens: true,
+      },
+    });
+    installStreamChatTurns([buildStreamChatInvocation({ projectSummary: null })]);
+
+    const result = await new AgentRunController(
+      buildOptions({ activeProjectId: null, resumeFrom }),
+    ).run();
+
+    expect(mockStreamChat).not.toHaveBeenCalled();
+    expect(result.state.resumeBudgetAcknowledgementRequired).toBe(true);
+    expect(getAgentRunReplayPolicy(resumeFrom).requiresBudgetAcknowledgement).toBe(true);
   });
 
   it('live tool-trace: emits state.toolTrace mid-turn when a tool starts running (before onComplete)', async () => {
@@ -746,6 +1274,83 @@ describe('AgentRunController', () => {
       expect.objectContaining({ status: 'failed' }),
     );
     expect(opts.callbacks.onError).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  it('surfaces a terminal checkpoint persistence failure as non-resumable', async () => {
+    mockUpdateCheckpoint.mockImplementation(
+      async (_runId: string, update: Partial<AgentRunCheckpoint>) =>
+        update.status === 'complete' ? null : {},
+    );
+    installStreamChatTurns([buildStreamChatInvocation({ finishReason: 'complete' })]);
+
+    const controller = new AgentRunController(buildOptions({ activeProjectId: null }));
+    const result = await controller.run();
+
+    expect(result.state.status).toBe('failed');
+    expect(result.state.failure).toEqual({
+      stage: 'unknown',
+      code: 'checkpoint-persistence-failed',
+      retryable: false,
+    });
+    expect(result.state.pauseReason).toBe('external');
+  });
+
+  it('does not overwrite a queued progress persistence failure with a stale terminal status', async () => {
+    mockUpdateCheckpoint.mockRejectedValueOnce(new Error('progress write failed'));
+    installStreamChatTurns([buildStreamChatInvocation({ finishReason: 'complete' })]);
+
+    const controller = new AgentRunController(buildOptions({ activeProjectId: null }));
+    const result = await controller.run();
+
+    expect(result.state.status).toBe('failed');
+    expect(result.state.failureCode).toBe('checkpoint-persistence-failed');
+    expect(mockUpdateCheckpoint).toHaveBeenCalledWith(
+      result.state.runId,
+      expect.objectContaining({ status: 'running' }),
+    );
+    expect(mockUpdateCheckpoint).not.toHaveBeenCalledWith(
+      result.state.runId,
+      expect.objectContaining({ status: 'complete' }),
+    );
+  });
+
+  it('does not enter a tool when the awaited in-flight marker cannot persist', async () => {
+    mockUpdateCheckpoint.mockResolvedValue(null);
+    const sideEffect = vi.fn();
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      const onToolCallActivity = params.onToolCallActivity as
+        | ((record: { id: string; name: string; status: string; startedAt: number }) => void)
+        | undefined;
+      const beforeToolExecution = params.beforeToolExecution as
+        | ((record: {
+            id: string;
+            name: string;
+            status: string;
+            startedAt: number;
+          }) => Promise<void>)
+        | undefined;
+      onToolCallActivity?.({
+        id: 'writeFiles-1',
+        name: 'writeFiles',
+        status: 'running',
+        startedAt: 1,
+      });
+      expect(beforeToolExecution).toBeDefined();
+      await beforeToolExecution!({
+        id: 'writeFiles-1',
+        name: 'writeFiles',
+        status: 'running',
+        startedAt: 1,
+      });
+      sideEffect();
+    });
+
+    const controller = new AgentRunController(buildOptions({ activeProjectId: null }));
+    const result = await controller.run();
+
+    expect(sideEffect).not.toHaveBeenCalled();
+    expect(result.state.failureCode).toBe('checkpoint-persistence-failed');
+    expect(result.state.status).toBe('failed');
   });
 
   it('AC#6 packSetOverride: turnIndex>0 calls streamChat with packSetOverride (bypass)', async () => {

@@ -15,6 +15,7 @@ const STATUS_LABEL: Record<AgentRunState['status'], string> = {
   stopped: '已停止',
   failed: '失敗',
   aborted: '已中斷',
+  paused: '已暫停（可續跑）',
 };
 
 const STATUS_COLOR: Record<AgentRunState['status'], string> = {
@@ -23,6 +24,7 @@ const STATUS_COLOR: Record<AgentRunState['status'], string> = {
   stopped: 'bg-amber-500/20 text-amber-200 border-amber-500/40',
   failed: 'bg-rose-500/20 text-rose-200 border-rose-500/40',
   aborted: 'bg-gray-500/20 text-gray-200 border-gray-500/40',
+  paused: 'bg-amber-500/20 text-amber-200 border-amber-500/40',
 };
 
 const DIAG_LIGHT_COLOR: Record<AgentRunState['previewDiagnosticState'], string> = {

@@ -3,14 +3,18 @@ import { openDB } from 'idb';
 import type { AgentRunCheckpoint } from '../types';
 import {
   claimCheckpoint,
+  deleteCheckpointArchiveRecords,
   deleteCheckpoint,
   deleteForSession,
+  getCheckpointArchiveRecords,
   getCheckpoint,
   getInterruptedForSession,
   saveCheckpoint,
   sweepStale,
   updateCheckpoint,
+  putCheckpointArchiveRecords,
 } from './agentRunCheckpointService';
+import { tagWorkspaceArchiveRecord } from './db';
 
 const DB_NAME = 'agent-run-checkpoints';
 const DB_VERSION = 1;
@@ -38,6 +42,8 @@ const buildCheckpoint = (overrides: Partial<AgentRunCheckpoint> = {}): AgentRunC
     promptTokenCount: 0,
     candidatesTokenCount: 0,
   },
+  failure: overrides.failure,
+  failureRetryable: overrides.failureRetryable,
   agentHarnessEnabled: overrides.agentHarnessEnabled ?? true,
   sharedMode: overrides.sharedMode ?? false,
   createdAt: overrides.createdAt ?? BASE_TIME,
@@ -177,6 +183,99 @@ describe('agentRunCheckpointService', () => {
 
     expect(nowSpy).toHaveBeenCalled();
     expect(interrupted?.runId).toBe('run-newest-stale');
+  });
+
+  it('returns paused and retryable failed checkpoints and allows an atomic claim', async () => {
+    await putRawCheckpoint({
+      ...buildCheckpoint({
+        runId: 'run-paused',
+        sessionId: 'session-retryable',
+        status: 'stopped',
+      }),
+      status: 'paused',
+    });
+    await putRawCheckpoint({
+      ...buildCheckpoint({
+        runId: 'run-failed-retryable',
+        sessionId: 'session-retryable',
+        status: 'failed',
+        createdAt: BASE_TIME + 1_000,
+      }),
+      retryable: true,
+    });
+
+    const interrupted = await getInterruptedForSession('session-retryable');
+
+    expect(interrupted?.runId).toBe('run-failed-retryable');
+    await expect(claimCheckpoint('run-failed-retryable')).resolves.toEqual(
+      expect.objectContaining({ runId: 'run-failed-retryable', status: 'running' }),
+    );
+  });
+
+  it('recovers typed retryable failures stored under the failure object', async () => {
+    await saveCheckpoint(
+      buildCheckpoint({
+        runId: 'run-typed-failure',
+        sessionId: 'session-typed-failure',
+        status: 'failed',
+        failure: {
+          stage: 'rate_limit',
+          code: 'http-429',
+          retryable: true,
+        },
+      }),
+    );
+
+    await expect(getInterruptedForSession('session-typed-failure')).resolves.toEqual(
+      expect.objectContaining({ runId: 'run-typed-failure', status: 'failed' }),
+    );
+    await expect(claimCheckpoint('run-typed-failure')).resolves.toEqual(
+      expect.objectContaining({ runId: 'run-typed-failure', status: 'running' }),
+    );
+  });
+
+  it('rejects checkpoint rollback when the import ownership marker does not match', async () => {
+    const tagged = tagWorkspaceArchiveRecord(
+      buildCheckpoint({ runId: 'run-owned', sessionId: 'session-owned' }),
+      'import-owner',
+    );
+    await putCheckpointArchiveRecords([tagged]);
+
+    await expect(
+      deleteCheckpointArchiveRecords([{ runId: 'run-owned' }], {
+        ownershipImportId: 'different-import',
+      }),
+    ).rejects.toThrow(/ownership mismatch/i);
+    await expect(getCheckpointArchiveRecords({ includeHidden: true })).resolves.toEqual([
+      expect.objectContaining({ runId: 'run-owned' }),
+    ]);
+  });
+
+  it('makes checkpoint rollback idempotent for absent rows while deleting present owners', async () => {
+    const tagged = tagWorkspaceArchiveRecord(
+      buildCheckpoint({ runId: 'run-idempotent', sessionId: 'session-idempotent' }),
+      'retry-import',
+    );
+    await putCheckpointArchiveRecords([tagged]);
+
+    // A missing planned row is expected after an earlier partial rollback.
+    await expect(
+      deleteCheckpointArchiveRecords([{ runId: 'already-removed' }], {
+        ownershipImportId: 'retry-import',
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      deleteCheckpointArchiveRecords([{ runId: 'run-idempotent' }], {
+        ownershipImportId: 'retry-import',
+      }),
+    ).resolves.toBeUndefined();
+    // Retrying the same rollback must remain a no-op, not a permanent failure.
+    await expect(
+      deleteCheckpointArchiveRecords([{ runId: 'run-idempotent' }], {
+        ownershipImportId: 'retry-import',
+      }),
+    ).resolves.toBeUndefined();
+    await expect(getCheckpointArchiveRecords({ includeHidden: true })).resolves.toEqual([]);
   });
 
   it('claimCheckpoint atomically refreshes a stale checkpoint and prevents a second claim', async () => {

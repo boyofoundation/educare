@@ -33,6 +33,8 @@ import { getProjectSummaryFromToolResult, streamChat } from './llmService';
 import type { GeometryDoc } from './geometryToolService';
 import type { SpeechUtteranceDoc } from './speechToolService';
 import { gatherKnowledge } from './knowledgeGatherService';
+import { classifyAgentRunFailure, type AgentRunFailureClassification } from './agentRunDiagnostics';
+import { getProviderUsageAccounting } from './providers/providerRequest';
 
 /**
  * Continuation prompt injected (as a synthetic user message) before each
@@ -48,6 +50,7 @@ export const CONTINUATION_PROMPT =
 const G4_RUNTIME_DIAGNOSTICS_WAIT_MS = 500;
 const CHECKPOINT_PARTIAL_FLUSH_MS = 2_000;
 const CHECKPOINT_HEARTBEAT_MS = 5_000;
+const MAX_TOOL_TRACE_LENGTH = 32;
 const SUBAGENT_DELEGATE_TOOL_NAME = 'delegateToSubagents';
 
 const addOptionalTokenCount = (
@@ -128,6 +131,44 @@ export interface AgentRunControllerCallbacks {
   onError?: (error: Error) => void;
 }
 
+/** Local soft budgets for one controller run. They are not provider billing caps. */
+export interface AgentRunBudget {
+  maxTurns?: number;
+  maxToolCalls?: number;
+  maxTokens?: number;
+}
+
+export interface AgentRunReplayPolicy {
+  /** True only when resuming cannot repeat an uncertain operation silently. */
+  replaySafe: boolean;
+  requiresBudgetAcknowledgement: boolean;
+  requiresInFlightToolAcknowledgement: boolean;
+  inFlightToolCallIds: string[];
+}
+
+/**
+ * Pure UI/integration guard for a persisted run. The controller enforces the
+ * same checks before its next provider request; callers can use this helper to
+ * disable an unsafe automatic resume and request explicit acknowledgement.
+ */
+export const getAgentRunReplayPolicy = (checkpoint: AgentRunCheckpoint): AgentRunReplayPolicy => {
+  const legacyCappedTraceUsageUnknown =
+    checkpoint.toolTrace.length >= MAX_TOOL_TRACE_LENGTH &&
+    checkpoint.budgetUsage?.toolCallsKnown !== true &&
+    checkpoint.resumeBudgetAcknowledgementRequired !== false;
+  const requiresBudgetAcknowledgement =
+    checkpoint.resumeBudgetAcknowledgementRequired === true ||
+    checkpoint.budgetUsage?.toolCallsKnown === false ||
+    legacyCappedTraceUsageUnknown;
+  const inFlightToolCallIds = [...(checkpoint.inFlightToolCallIds ?? [])];
+  return {
+    replaySafe: !requiresBudgetAcknowledgement && inFlightToolCallIds.length === 0,
+    requiresBudgetAcknowledgement,
+    requiresInFlightToolAcknowledgement: inFlightToolCallIds.length > 0,
+    inFlightToolCallIds,
+  };
+};
+
 export interface AgentRunControllerOptions {
   assistantId: string;
   sessionId?: string | null;
@@ -158,10 +199,21 @@ export interface AgentRunControllerOptions {
   sharedMode?: boolean;
   /** override run budget; default 5 (sharedMode default 1). */
   maxTurns?: number;
+  /** Optional user-selected local soft budgets; on resume, explicit options may extend limits without resetting usage. */
+  budget?: AgentRunBudget;
+  /** Alias accepted by integrations that use the plural form. */
+  budgets?: AgentRunBudget;
+  /** Direct aliases for controls that expose only one limit. */
+  maxToolCalls?: number;
+  maxTokens?: number;
   /** caller-provided AbortSignal (stop button). Controller also owns an internal AbortController. */
   signal?: AbortSignal;
   /** interrupted-run checkpoint used to resume the existing run state. */
   resumeFrom?: AgentRunCheckpoint;
+  /** Explicitly allow continuation when legacy/capped usage cannot be exact. */
+  acknowledgeResumeBudget?: boolean;
+  /** Explicitly acknowledge tool calls whose side effects were not confirmed. */
+  acknowledgeInFlightToolCallIds?: boolean;
   callbacks: AgentRunControllerCallbacks;
 }
 
@@ -222,15 +274,83 @@ export class AgentRunController {
   private callerSignalLinked = false;
   private latestPartialText = '';
   private checkpointFlush: ((force?: boolean) => Promise<void>) | null = null;
+  private budgetStopRequested = false;
+  private lastToolFailure = false;
+  private lastToolFailureRetryable = false;
+  private checkpointPersistenceFailed = false;
+  private readonly configuredBudget: AgentRunBudget | undefined;
+  private readonly explicitTurnBudget: boolean;
 
   constructor(options: AgentRunControllerOptions) {
     this.options = options;
     this.internalAbort = new AbortController();
 
     const resumeFrom = options.resumeFrom;
+    const optionBudget = options.budget ?? options.budgets;
+    const mergedBudget =
+      resumeFrom?.budget || optionBudget
+        ? { ...(resumeFrom?.budget ?? {}), ...(optionBudget ?? {}) }
+        : undefined;
+    const directBudget: AgentRunBudget = {
+      maxToolCalls: options.maxToolCalls,
+      maxTokens: options.maxTokens,
+    };
+    const hasDirectBudget =
+      typeof directBudget.maxToolCalls !== 'undefined' ||
+      typeof directBudget.maxTokens !== 'undefined';
+    const directBudgetOverrides = hasDirectBudget ? directBudget : {};
+    this.configuredBudget =
+      mergedBudget || hasDirectBudget
+        ? this.normalizeBudget({
+            ...(mergedBudget ?? {}),
+            ...directBudgetOverrides,
+          })
+        : undefined;
+    this.explicitTurnBudget =
+      typeof this.configuredBudget?.maxTurns !== 'undefined' &&
+      (typeof resumeFrom?.budget?.maxTurns !== 'undefined' ||
+        typeof optionBudget?.maxTurns !== 'undefined');
     const maxTurns = options.agentHarnessEnabled
-      ? (resumeFrom?.maxTurns ?? options.maxTurns ?? (options.sharedMode ? 1 : 5))
+      ? (this.configuredBudget?.maxTurns ??
+        resumeFrom?.maxTurns ??
+        options.maxTurns ??
+        (options.sharedMode ? 1 : 5))
       : 1;
+
+    const resumedUsage = resumeFrom?.budgetUsage;
+    const initialBudgetUsage = resumedUsage
+      ? {
+          ...resumedUsage,
+          toolCallsKnown:
+            resumedUsage.toolCallsKnown ??
+            (resumeFrom?.toolTrace.length ?? 0) < MAX_TOOL_TRACE_LENGTH,
+        }
+      : {
+          turns: resumeFrom?.turnIndex ?? 0,
+          toolCalls: resumeFrom?.toolTrace.length ?? 0,
+          toolCallsKnown: (resumeFrom?.toolTrace.length ?? 0) < MAX_TOOL_TRACE_LENGTH,
+          tokens:
+            (resumeFrom?.tokenTotals.promptTokenCount ?? 0) +
+            (resumeFrom?.tokenTotals.candidatesTokenCount ?? 0),
+          estimatedTokens:
+            Boolean(resumeFrom) &&
+            (resumeFrom?.tokenTotals.promptTokenCount ?? 0) +
+              (resumeFrom?.tokenTotals.candidatesTokenCount ?? 0) ===
+              0,
+        };
+
+    const resumeUsageUnknown =
+      Boolean(resumeFrom) &&
+      (resumeFrom?.budgetUsage?.toolCallsKnown === false ||
+        ((resumeFrom?.toolTrace.length ?? 0) >= MAX_TOOL_TRACE_LENGTH &&
+          resumeFrom?.budgetUsage?.toolCallsKnown !== true &&
+          resumeFrom?.resumeBudgetAcknowledgementRequired !== false) ||
+        resumeFrom?.resumeBudgetAcknowledgementRequired === true);
+    const resumeBudgetAcknowledgementRequired =
+      resumeUsageUnknown && options.acknowledgeResumeBudget !== true;
+    const resumedInFlightToolCallIds = resumeFrom?.inFlightToolCallIds ?? [];
+    const inFlightToolCallIds =
+      options.acknowledgeInFlightToolCallIds === true ? [] : [...resumedInFlightToolCallIds];
 
     const now = Date.now();
     this.state = {
@@ -246,6 +366,10 @@ export class AgentRunController {
       previewDiagnosticState: 'not_executed',
       autoContinued: (resumeFrom?.turnIndex ?? 0) > 0,
       toolTrace: resumeFrom?.toolTrace ? [...resumeFrom.toolTrace] : [],
+      inFlightToolCallIds,
+      budget: this.configuredBudget,
+      budgetUsage: { ...initialBudgetUsage },
+      resumeBudgetAcknowledgementRequired,
       startedAt: resumeFrom?.createdAt ?? now,
       updatedAt: now,
     };
@@ -254,7 +378,7 @@ export class AgentRunController {
 
   /**
    * Run the full multi-turn loop. Resolves when terminal
-   * (complete/stopped/failed/aborted).
+   * (complete/stopped/failed/aborted/paused).
    */
   async run(): Promise<AgentRunResult> {
     const { options, state } = this;
@@ -317,6 +441,10 @@ export class AgentRunController {
     let fullText = '';
     let totalPromptTokens = resumeFrom?.tokenTotals.promptTokenCount ?? 0;
     let totalCandidatesTokens = resumeFrom?.tokenTotals.candidatesTokenCount ?? 0;
+    let budgetTokenTotal =
+      this.state.budgetUsage?.tokens ?? totalPromptTokens + totalCandidatesTokens;
+    let budgetTokensEstimated = this.state.budgetUsage?.estimatedTokens ?? false;
+    let totalToolCalls = this.state.budgetUsage?.toolCalls ?? resumeFrom?.toolTrace.length ?? 0;
     let finalUsage: ProviderUsageMetadata | undefined;
     let finalProvider: string | undefined;
     let finalModel: string | undefined;
@@ -338,8 +466,26 @@ export class AgentRunController {
     // 回合結束時由 aggregatedToolTrace + turn.toolSequence 權威校正,故不重複累積)。
     let liveToolTraceThisTurn: string[] = [];
     const liveToolCallIds = new Set<string>();
+    const inFlightToolCallIds = new Set<string>(state.inFlightToolCallIds ?? []);
+    const completedToolCallIdsThisTurn = new Set<string>();
+    const estimatedToolOutputIdsThisTurn = new Set<string>();
+    let completedToolCallsThisTurn = 0;
+    let estimatedToolOutputTokensThisTurn = 0;
+    let pendingNestedRequestTokens = 0;
 
     let lastPartialFlushAt = 0;
+    let terminalCheckpointRequested = false;
+    let checkpointWriteTail: Promise<void> = Promise.resolve();
+    const pendingToolFlushes = new Map<string, Promise<void>>();
+
+    const enqueueCheckpointWrite = (write: () => Promise<void>): Promise<void> => {
+      const queued = checkpointWriteTail.then(write, write);
+      checkpointWriteTail = queued.then(
+        () => undefined,
+        () => undefined,
+      );
+      return queued;
+    };
 
     const buildCheckpointRecord = (
       status: AgentRunStatus,
@@ -357,6 +503,7 @@ export class AgentRunController {
       committedHistoryDelta: [...checkpointHistory],
       partialText,
       toolTrace: [...state.toolTrace],
+      inFlightToolCallIds: [...inFlightToolCallIds],
       todoSummary: state.todoSummary,
       snapshotVersion: state.snapshotVersion,
       firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
@@ -373,6 +520,20 @@ export class AgentRunController {
       htmlProjectEnabled: effectiveHtmlProjectEnabled,
       projectBootstrapEnabled,
       sharedMode: options.sharedMode ?? false,
+      budget: this.configuredBudget,
+      budgetUsage: {
+        turns: state.budgetUsage?.turns ?? state.turnIndex,
+        toolCalls: totalToolCalls,
+        toolCallsKnown: state.budgetUsage?.toolCallsKnown,
+        tokens: budgetTokenTotal,
+        estimatedTokens: budgetTokensEstimated,
+      },
+      pauseReason: state.pauseReason,
+      resumeBudgetAcknowledgementRequired: state.resumeBudgetAcknowledgementRequired,
+      failure: state.failure,
+      failureStage: state.failureStage,
+      failureCode: state.failureCode,
+      failureRetryable: state.failureRetryable,
       createdAt: resumeFrom?.createdAt ?? state.startedAt,
       updatedAt: Date.now(),
       heartbeatAt: Date.now(),
@@ -382,14 +543,22 @@ export class AgentRunController {
       if (!sessionId) {
         return;
       }
+      if (terminalCheckpointRequested) {
+        if (force) {
+          throw new Error('Agent run checkpoint is already terminal.');
+        }
+        return;
+      }
+      if (this.checkpointPersistenceFailed) {
+        throw new Error('Agent run checkpoint persistence is unavailable.');
+      }
 
       const now = Date.now();
       if (!force && now - lastPartialFlushAt < CHECKPOINT_PARTIAL_FLUSH_MS) {
         return;
       }
 
-      lastPartialFlushAt = now;
-      await updateCheckpoint(state.runId, {
+      const update: Partial<AgentRunCheckpoint> = {
         status: 'running',
         turnIndex: state.turnIndex,
         maxTurns: state.maxTurns,
@@ -399,6 +568,7 @@ export class AgentRunController {
         committedHistoryDelta: [...checkpointHistory],
         partialText: this.latestPartialText || undefined,
         toolTrace: [...state.toolTrace],
+        inFlightToolCallIds: [...inFlightToolCallIds],
         todoSummary: state.todoSummary,
         snapshotVersion: state.snapshotVersion,
         firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
@@ -411,17 +581,54 @@ export class AgentRunController {
         mathToolsEnabled: effectiveMathToolsEnabled,
         webSpeechToolsEnabled: effectiveWebSpeechToolsEnabled,
         routableTargets: options.routableTargets,
+        budget: this.configuredBudget,
+        budgetUsage: {
+          turns: state.budgetUsage?.turns ?? state.turnIndex,
+          toolCalls: totalToolCalls,
+          toolCallsKnown: state.budgetUsage?.toolCallsKnown,
+          tokens: budgetTokenTotal,
+          estimatedTokens: budgetTokensEstimated,
+        },
+        pauseReason: state.pauseReason,
+        resumeBudgetAcknowledgementRequired: state.resumeBudgetAcknowledgementRequired,
+        failure: state.failure,
+        failureStage: state.failureStage,
+        failureCode: state.failureCode,
+        failureRetryable: state.failureRetryable,
         heartbeatAt: now,
         updatedAt: now,
-      });
+      };
+      try {
+        await enqueueCheckpointWrite(async () => {
+          const persisted = await updateCheckpoint(state.runId, update);
+          if (!persisted) {
+            throw new Error(`Checkpoint ${state.runId} disappeared during progress update.`);
+          }
+        });
+        lastPartialFlushAt = now;
+      } catch (error) {
+        this.markCheckpointPersistenceFailure(error);
+        throw error;
+      }
     };
 
-    const markTerminalCheckpoint = async (status: AgentRunStatus): Promise<void> => {
+    const markTerminalCheckpoint = async (status: AgentRunStatus): Promise<boolean> => {
       if (!sessionId) {
-        return;
+        return true;
       }
 
-      await updateCheckpoint(state.runId, {
+      terminalCheckpointRequested = true;
+      if (this.checkpointPersistenceFailed) {
+        return false;
+      }
+      await checkpointWriteTail;
+      // A queued progress write can fail while the terminal method is
+      // waiting. Re-check after the await so a stale complete/paused payload
+      // is never written over an explicit durability failure.
+      if (this.checkpointPersistenceFailed) {
+        return false;
+      }
+      const update: Partial<AgentRunCheckpoint> = {
         status,
         turnIndex: state.turnIndex,
         maxTurns: state.maxTurns,
@@ -431,6 +638,7 @@ export class AgentRunController {
         committedHistoryDelta: [...checkpointHistory],
         partialText: this.latestPartialText || undefined,
         toolTrace: [...state.toolTrace],
+        inFlightToolCallIds: [...inFlightToolCallIds],
         todoSummary: state.todoSummary,
         snapshotVersion: state.snapshotVersion,
         firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
@@ -443,9 +651,35 @@ export class AgentRunController {
         mathToolsEnabled: effectiveMathToolsEnabled,
         webSpeechToolsEnabled: effectiveWebSpeechToolsEnabled,
         routableTargets: options.routableTargets,
+        budget: this.configuredBudget,
+        budgetUsage: {
+          turns: state.budgetUsage?.turns ?? state.turnIndex,
+          toolCalls: totalToolCalls,
+          toolCallsKnown: state.budgetUsage?.toolCallsKnown,
+          tokens: budgetTokenTotal,
+          estimatedTokens: budgetTokensEstimated,
+        },
+        pauseReason: state.pauseReason,
+        resumeBudgetAcknowledgementRequired: state.resumeBudgetAcknowledgementRequired,
+        failure: state.failure,
+        failureStage: state.failureStage,
+        failureCode: state.failureCode,
+        failureRetryable: state.failureRetryable,
         heartbeatAt: Date.now(),
         updatedAt: Date.now(),
-      });
+      };
+      try {
+        await enqueueCheckpointWrite(async () => {
+          const persisted = await updateCheckpoint(state.runId, update);
+          if (!persisted) {
+            throw new Error(`Checkpoint ${state.runId} disappeared during terminal update.`);
+          }
+        });
+        return true;
+      } catch (error) {
+        this.markCheckpointPersistenceFailure(error);
+        return false;
+      }
     };
 
     this.checkpointFlush = flushCheckpointProgress;
@@ -457,17 +691,47 @@ export class AgentRunController {
     const heartbeatInterval =
       sessionId !== null && sessionId !== undefined
         ? window.setInterval(() => {
-            void flushCheckpointProgress();
+            void flushCheckpointProgress().catch(error => {
+              this.markCheckpointPersistenceFailure(error);
+            });
           }, CHECKPOINT_HEARTBEAT_MS)
         : null;
 
     this.emitStateChange();
 
     try {
-      while (state.turnIndex < state.maxTurns) {
+      while (
+        state.turnIndex < state.maxTurns ||
+        (this.explicitTurnBudget && state.turnIndex === state.maxTurns)
+      ) {
         // Per-round abort check (in case caller signal aborted between turns).
         if (this.internalAbort.signal.aborted) {
-          this.handleAbortTermination();
+          if (!this.budgetStopRequested) {
+            this.handleAbortTermination();
+          }
+          await markTerminalCheckpoint(this.state.status);
+          break;
+        }
+
+        if (state.resumeBudgetAcknowledgementRequired) {
+          this.pauseForResumeBudgetAcknowledgement();
+          await markTerminalCheckpoint(this.state.status);
+          break;
+        }
+
+        if (inFlightToolCallIds.size > 0) {
+          this.pauseForInFlightToolAcknowledgement();
+          await markTerminalCheckpoint(this.state.status);
+          break;
+        }
+
+        const preRequestBudgetReason = this.getBudgetPauseReason(
+          state.turnIndex,
+          totalToolCalls,
+          budgetTokenTotal,
+        );
+        if (preRequestBudgetReason) {
+          this.pauseForBudget(preRequestBudgetReason);
           await markTerminalCheckpoint(this.state.status);
           break;
         }
@@ -504,6 +768,12 @@ export class AgentRunController {
         // 重置本回合的即時工具軌跡 (回合邊界時 aggregatedToolTrace 已權威校正)。
         liveToolTraceThisTurn = [];
         liveToolCallIds.clear();
+        completedToolCallIdsThisTurn.clear();
+        estimatedToolOutputIdsThisTurn.clear();
+        completedToolCallsThisTurn = 0;
+        estimatedToolOutputTokensThisTurn = 0;
+        this.lastToolFailure = false;
+        this.lastToolFailureRetryable = false;
 
         const isContinuation = state.turnIndex > 0;
         const messageForTurn = isContinuation ? CONTINUATION_PROMPT : options.message;
@@ -540,6 +810,11 @@ export class AgentRunController {
         };
         let streamError: Error | undefined;
         this.latestPartialText = '';
+        pendingNestedRequestTokens = 0;
+        const turnBudgetStartTokenTotal = budgetTokenTotal;
+        let turnObservedProviderTokens = 0;
+        let turnObservedUnknownProviderRequests = 0;
+        let providerRequestCount = 0;
 
         try {
           await streamChat({
@@ -553,6 +828,102 @@ export class AgentRunController {
             activeProjectId: effectiveProjectId,
             knowledgeChunks: options.knowledgeChunks,
             signal: this.internalAbort.signal,
+            beforeProviderRequest: async context => {
+              const requestIndex =
+                typeof context.requestIndex === 'number' && context.requestIndex >= 0
+                  ? context.requestIndex
+                  : providerRequestCount;
+              const isFirstProviderRequest = requestIndex === 0;
+              providerRequestCount = Math.max(providerRequestCount, requestIndex + 1);
+
+              const providerAccounting = getProviderUsageAccounting(context.cumulativeUsage);
+              const completedProviderTokens = providerAccounting.complete
+                ? providerAccounting.knownTokens
+                : undefined;
+              if (completedProviderTokens !== undefined) {
+                // Replace any provisional nested estimate as soon as the
+                // provider exposes actual completed-request usage. The
+                // cumulative value is scoped to this stream/turn, so add it
+                // to the usage already consumed by earlier turns.
+                budgetTokenTotal -= pendingNestedRequestTokens;
+                pendingNestedRequestTokens = 0;
+                const normalizedCompletedTokens = Math.max(0, completedProviderTokens);
+                if (normalizedCompletedTokens > turnObservedProviderTokens) {
+                  budgetTokenTotal += normalizedCompletedTokens - turnObservedProviderTokens;
+                  turnObservedProviderTokens = normalizedCompletedTokens;
+                }
+                budgetTokensEstimated ||= context.cumulativeUsage?.source !== 'api';
+              } else {
+                const knownProviderTokens = providerAccounting.knownTokens;
+                if (
+                  knownProviderTokens !== undefined &&
+                  knownProviderTokens > turnObservedProviderTokens
+                ) {
+                  budgetTokenTotal += knownProviderTokens - turnObservedProviderTokens;
+                  turnObservedProviderTokens = knownProviderTokens;
+                  budgetTokensEstimated = true;
+                }
+                const newUnknownProviderRequests = Math.max(
+                  0,
+                  providerAccounting.unknownRequestCount - turnObservedUnknownProviderRequests,
+                );
+                if (newUnknownProviderRequests > 0) {
+                  const unknownRequestEstimate = Math.max(
+                    1,
+                    this.estimateRequestContextTokens(
+                      options.systemPrompt,
+                      gatheredContext?.ragContext ?? options.ragContext,
+                      history,
+                      messageForTurn,
+                      isContinuation ? undefined : options.attachments,
+                      liveToolTraceThisTurn,
+                      estimatedToolOutputTokensThisTurn,
+                    ) + this.estimateTokens(this.latestPartialText),
+                  );
+                  budgetTokenTotal += unknownRequestEstimate * newUnknownProviderRequests;
+                  turnObservedUnknownProviderRequests += newUnknownProviderRequests;
+                  budgetTokensEstimated = true;
+                }
+              }
+              if (!isFirstProviderRequest) {
+                const nestedRequestTokens = this.estimateRequestContextTokens(
+                  options.systemPrompt,
+                  gatheredContext?.ragContext ?? options.ragContext,
+                  history,
+                  messageForTurn,
+                  isContinuation ? undefined : options.attachments,
+                  liveToolTraceThisTurn,
+                  estimatedToolOutputTokensThisTurn,
+                );
+                pendingNestedRequestTokens += nestedRequestTokens;
+                budgetTokenTotal += nestedRequestTokens;
+                budgetTokensEstimated = true;
+              }
+              if (completedProviderTokens !== undefined || !isFirstProviderRequest) {
+                state.budgetUsage = {
+                  turns: state.budgetUsage?.turns ?? state.turnIndex,
+                  toolCalls: totalToolCalls,
+                  toolCallsKnown: state.budgetUsage?.toolCallsKnown ?? true,
+                  tokens: budgetTokenTotal,
+                  estimatedTokens: budgetTokensEstimated,
+                };
+                this.emitStateChange();
+                await flushCheckpointProgress(true);
+              }
+              if (this.checkpointPersistenceFailed) {
+                throw new Error('Agent run checkpoint persistence is unavailable.');
+              }
+              const nestedBudgetReason = this.getBudgetPauseReason(
+                state.turnIndex,
+                totalToolCalls,
+                budgetTokenTotal,
+              );
+              if (nestedBudgetReason) {
+                this.pauseForBudget(nestedBudgetReason);
+                throw this.createBudgetExceededError(nestedBudgetReason);
+              }
+              void context;
+            },
             packSetOverride: isContinuation ? firstTurnPackSet : undefined,
             subagentDelegationEnabled: effectiveDelegation,
             mathToolsEnabled: effectiveMathToolsEnabled,
@@ -563,7 +934,9 @@ export class AgentRunController {
             onChunk: text => {
               this.latestPartialText += text;
               callbacks.onChunk(text, state.turnIndex);
-              void flushCheckpointProgress();
+              void flushCheckpointProgress().catch(error => {
+                this.markCheckpointPersistenceFailure(error);
+              });
             },
             onImages: nextImages => {
               callbacks.onImages?.(nextImages, state.turnIndex);
@@ -577,13 +950,93 @@ export class AgentRunController {
               // 時立即累積並 emit state,讓 canvas AgentRunPanel 即時看到工具軌跡與活動
               // (否則 state.toolTrace 只在回合邊界更新,loop 期間 UI 凍結、看不到進度)。
               if (record.status === 'running' && !liveToolCallIds.has(record.id)) {
+                if (
+                  typeof this.configuredBudget?.maxToolCalls === 'number' &&
+                  totalToolCalls >= this.configuredBudget.maxToolCalls
+                ) {
+                  this.pauseForBudget('tool_calls');
+                  throw this.createBudgetExceededError('tool_calls');
+                }
+
                 liveToolCallIds.add(record.id);
+                inFlightToolCallIds.add(record.id);
+                totalToolCalls += 1;
                 liveToolTraceThisTurn.push(record.name);
-                state.toolTrace = [...aggregatedToolTrace, ...liveToolTraceThisTurn].slice(-32);
+                state.toolTrace = [...aggregatedToolTrace, ...liveToolTraceThisTurn].slice(
+                  -MAX_TOOL_TRACE_LENGTH,
+                );
+                state.inFlightToolCallIds = [...inFlightToolCallIds];
+                state.budgetUsage = {
+                  turns: state.turnIndex,
+                  toolCalls: totalToolCalls,
+                  toolCallsKnown: state.budgetUsage?.toolCallsKnown ?? true,
+                  tokens: budgetTokenTotal,
+                  estimatedTokens: budgetTokensEstimated,
+                };
                 this.emitStateChange();
-                void flushCheckpointProgress();
+                const toolFlush = flushCheckpointProgress(true);
+                pendingToolFlushes.set(record.id, toolFlush);
+                void toolFlush.catch(error => {
+                  this.markCheckpointPersistenceFailure(error);
+                });
+              }
+              if (
+                (record.status === 'ok' ||
+                  record.status === 'failed' ||
+                  record.status === 'recoverable_error') &&
+                !estimatedToolOutputIdsThisTurn.has(record.id)
+              ) {
+                estimatedToolOutputIdsThisTurn.add(record.id);
+                estimatedToolOutputTokensThisTurn += this.estimateTokens(
+                  [record.name, record.code, record.summary].filter(Boolean).join(' '),
+                );
+              }
+              if (record.status === 'ok' && !completedToolCallIdsThisTurn.has(record.id)) {
+                completedToolCallIdsThisTurn.add(record.id);
+                completedToolCallsThisTurn += 1;
+                inFlightToolCallIds.delete(record.id);
+                state.inFlightToolCallIds = [...inFlightToolCallIds];
+              }
+              if (record.status === 'failed' || record.status === 'recoverable_error') {
+                this.lastToolFailure = true;
+                this.lastToolFailureRetryable = record.status === 'recoverable_error';
+                inFlightToolCallIds.add(record.id);
+                state.inFlightToolCallIds = [...inFlightToolCallIds];
+              }
+              if (
+                record.status === 'ok' ||
+                record.status === 'failed' ||
+                record.status === 'recoverable_error'
+              ) {
+                const toolFlush = flushCheckpointProgress(true);
+                pendingToolFlushes.set(record.id, toolFlush);
+                void toolFlush.catch(error => {
+                  this.markCheckpointPersistenceFailure(error);
+                });
               }
               callbacks.onToolCallActivity?.(record);
+            },
+            beforeToolExecution: async record => {
+              const toolFlush = pendingToolFlushes.get(record.id);
+              if (toolFlush) {
+                await toolFlush;
+                if (pendingToolFlushes.get(record.id) === toolFlush) {
+                  pendingToolFlushes.delete(record.id);
+                }
+                return;
+              }
+              await flushCheckpointProgress(true);
+            },
+            afterToolExecution: async record => {
+              const toolFlush = pendingToolFlushes.get(record.id);
+              if (toolFlush) {
+                await toolFlush;
+                if (pendingToolFlushes.get(record.id) === toolFlush) {
+                  pendingToolFlushes.delete(record.id);
+                }
+                return;
+              }
+              await flushCheckpointProgress(true);
             },
             onRouteProposal: callbacks.onRouteProposal,
             onComplete: (meta, text) => {
@@ -609,6 +1062,39 @@ export class AgentRunController {
               turn.images = meta.images;
               totalPromptTokens += meta.promptTokenCount;
               totalCandidatesTokens += meta.candidatesTokenCount;
+              const tokenDelta = this.getBudgetTokenDelta(
+                meta.promptTokenCount,
+                meta.candidatesTokenCount,
+                meta.usage,
+                this.estimateRequestContextTokens(
+                  options.systemPrompt,
+                  gatheredContext?.ragContext ?? options.ragContext,
+                  history,
+                  messageForTurn,
+                  isContinuation ? undefined : options.attachments,
+                  liveToolTraceThisTurn,
+                  estimatedToolOutputTokensThisTurn,
+                ),
+                turn.text,
+              );
+              budgetTokenTotal =
+                turnBudgetStartTokenTotal +
+                (tokenDelta.estimated
+                  ? Math.max(
+                      tokenDelta.tokens,
+                      turnObservedProviderTokens,
+                      pendingNestedRequestTokens,
+                    )
+                  : tokenDelta.tokens);
+              budgetTokensEstimated ||= tokenDelta.estimated || pendingNestedRequestTokens > 0;
+              pendingNestedRequestTokens = 0;
+              state.budgetUsage = {
+                turns: Math.max(state.budgetUsage?.turns ?? state.turnIndex, state.turnIndex + 1),
+                toolCalls: totalToolCalls,
+                toolCallsKnown: state.budgetUsage?.toolCallsKnown ?? true,
+                tokens: budgetTokenTotal,
+                estimatedTokens: budgetTokensEstimated,
+              };
               if (meta.usage) {
                 finalUsage = meta.usage;
               }
@@ -632,8 +1118,24 @@ export class AgentRunController {
 
         // G17 (5a): abort priority — abort always wins.
         if (this.internalAbort.signal.aborted || turn.finishReason === 'aborted') {
+          if (this.budgetStopRequested) {
+            this.preserveCompletedToolEffects(state, completedToolCallsThisTurn);
+            this.emitStateChange();
+            await markTerminalCheckpoint(this.state.status);
+            const budgetSummary = this.buildTurnSummary(
+              state.turnIndex,
+              'tool-budget-exhausted',
+              turn.text,
+              turn.toolSequence,
+              turn.projectSummary,
+              turn.subagentRuns,
+            );
+            callbacks.onTurnComplete?.(state.turnIndex, budgetSummary);
+            break;
+          }
           // No half-turn write: do NOT append the model message or synthetic
           // continuation prompt for the next turn (we're terminating).
+          this.preserveCompletedToolEffects(state, completedToolCallsThisTurn);
           this.handleAbortTermination();
           await markTerminalCheckpoint(this.state.status);
           // Emit a turn summary reflecting the abort for any UI listeners.
@@ -651,6 +1153,12 @@ export class AgentRunController {
         }
 
         if (streamError) {
+          this.preserveCompletedToolEffects(state, completedToolCallsThisTurn);
+          const failure = classifyAgentRunFailure(streamError, {
+            toolFailure: this.lastToolFailure,
+            toolFailureRetryable: this.lastToolFailureRetryable,
+          });
+          this.setFailure(failure);
           state.status = 'failed';
           state.finishReason = turn.finishReason;
           this.emitStateChange();
@@ -697,7 +1205,20 @@ export class AgentRunController {
         for (const toolName of turn.toolSequence) {
           aggregatedToolTrace.push(toolName);
         }
-        state.toolTrace = aggregatedToolTrace.slice(-32);
+        // The real llmService reports every tool through onToolCallActivity, but
+        // keep mocked/alternate providers honest when they only return metadata.
+        // Never double-count callbacks already observed for this turn.
+        if (turn.toolSequence.length > liveToolCallIds.size) {
+          totalToolCalls += turn.toolSequence.length - liveToolCallIds.size;
+          state.budgetUsage = {
+            turns: Math.max(state.budgetUsage?.turns ?? state.turnIndex, state.turnIndex + 1),
+            toolCalls: totalToolCalls,
+            toolCallsKnown: state.budgetUsage?.toolCallsKnown ?? true,
+            tokens: budgetTokenTotal,
+            estimatedTokens: budgetTokensEstimated,
+          };
+        }
+        state.toolTrace = aggregatedToolTrace.slice(-MAX_TOOL_TRACE_LENGTH);
 
         // G12 (AC#7): loop detection — TWO consecutive turns with identical
         // last-4 tool sequences AND 0 todo `completed` delta → 'failed'.
@@ -717,6 +1238,11 @@ export class AgentRunController {
           currentTodoCompleted === lastTodoCompletedCount &&
           !delegateOnlyLoopCandidate
         ) {
+          this.setFailure({
+            stage: 'unknown',
+            code: 'loop-detected',
+            retryable: false,
+          });
           state.status = 'failed';
           state.finishReason = 'stop-route';
           state.loopDetected = true;
@@ -772,7 +1298,10 @@ export class AgentRunController {
           state.projectId = effectiveProjectId;
           if (!(options.sharedMode ?? false)) {
             effectiveAgentHarnessEnabled = true;
-            state.maxTurns = Math.max(state.maxTurns, options.maxTurns ?? 5);
+            state.maxTurns = Math.max(
+              state.maxTurns,
+              this.configuredBudget?.maxTurns ?? options.maxTurns ?? 5,
+            );
           }
           this.emitStateChange();
         }
@@ -823,6 +1352,25 @@ export class AgentRunController {
         );
         callbacks.onTurnComplete?.(state.turnIndex, turnSummary);
 
+        const postTurnBudgetReason = this.getBudgetPauseReason(
+          state.turnIndex + 1,
+          totalToolCalls,
+          budgetTokenTotal,
+        );
+        if (postTurnBudgetReason) {
+          state.turnIndex += 1;
+          state.budgetUsage = {
+            turns: state.turnIndex,
+            toolCalls: totalToolCalls,
+            toolCallsKnown: state.budgetUsage?.toolCallsKnown ?? true,
+            tokens: budgetTokenTotal,
+            estimatedTokens: budgetTokensEstimated,
+          };
+          this.pauseForBudget(postTurnBudgetReason);
+          await markTerminalCheckpoint(this.state.status);
+          break;
+        }
+
         if (terminalComplete) {
           state.status = 'complete';
           state.finishReason = 'complete';
@@ -835,6 +1383,13 @@ export class AgentRunController {
         // finish reasons (tool-budget-exhausted / stop-route) → continue_needed.
         // Advance to next turn if budget remains.
         state.turnIndex += 1;
+        state.budgetUsage = {
+          turns: state.turnIndex,
+          toolCalls: totalToolCalls,
+          toolCallsKnown: state.budgetUsage?.toolCallsKnown ?? true,
+          tokens: budgetTokenTotal,
+          estimatedTokens: budgetTokensEstimated,
+        };
         await flushCheckpointProgress(true);
         if (state.turnIndex >= state.maxTurns) {
           // Budget reached → run-level 'complete'.
@@ -849,6 +1404,7 @@ export class AgentRunController {
       if (heartbeatInterval !== null) {
         window.clearInterval(heartbeatInterval);
       }
+      await checkpointWriteTail;
       this.checkpointFlush = null;
     }
 
@@ -902,6 +1458,256 @@ export class AgentRunController {
 
   // ---- internal helpers --------------------------------------------------
 
+  private normalizeBudget(budget: AgentRunBudget): AgentRunBudget | undefined {
+    const normalize = (value: number | undefined): number | undefined => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return undefined;
+      }
+      return Math.max(0, Math.floor(value));
+    };
+
+    const normalized: AgentRunBudget = {
+      maxTurns: normalize(budget.maxTurns),
+      maxToolCalls: normalize(budget.maxToolCalls),
+      maxTokens: normalize(budget.maxTokens),
+    };
+    return Object.values(normalized).some(value => typeof value !== 'undefined')
+      ? normalized
+      : undefined;
+  }
+
+  private getBudgetPauseReason(
+    turnIndex: number,
+    toolCalls: number,
+    tokens: number,
+  ): 'turns' | 'tool_calls' | 'tokens' | undefined {
+    if (this.explicitTurnBudget && typeof this.configuredBudget?.maxTurns === 'number') {
+      if (turnIndex >= this.configuredBudget.maxTurns) {
+        return 'turns';
+      }
+    }
+    if (
+      typeof this.configuredBudget?.maxToolCalls === 'number' &&
+      toolCalls >= this.configuredBudget.maxToolCalls
+    ) {
+      return 'tool_calls';
+    }
+    if (
+      typeof this.configuredBudget?.maxTokens === 'number' &&
+      tokens >= this.configuredBudget.maxTokens
+    ) {
+      return 'tokens';
+    }
+    return undefined;
+  }
+
+  private pauseForBudget(reason: 'turns' | 'tool_calls' | 'tokens'): void {
+    if (this.budgetStopRequested) {
+      return;
+    }
+    this.budgetStopRequested = true;
+    this.state.status = 'paused';
+    this.state.finishReason = 'tool-budget-exhausted';
+    this.state.pauseReason = 'budget';
+    this.setFailure({
+      stage: 'budget',
+      code: 'budget-exceeded',
+      retryable: false,
+    });
+    this.internalAbort.abort(`budget:${reason}`);
+    this.emitStateChange();
+  }
+
+  private pauseForResumeBudgetAcknowledgement(): void {
+    if (this.budgetStopRequested) {
+      return;
+    }
+    this.budgetStopRequested = true;
+    this.state.status = 'paused';
+    this.state.finishReason = 'tool-budget-exhausted';
+    this.state.pauseReason = 'budget';
+    this.setFailure({
+      stage: 'budget',
+      code: 'budget-usage-unknown',
+      retryable: false,
+    });
+    this.internalAbort.abort('budget:resume-ack-required');
+    this.emitStateChange();
+  }
+
+  private pauseForInFlightToolAcknowledgement(): void {
+    this.state.status = 'paused';
+    this.state.finishReason = 'tool-budget-exhausted';
+    this.state.pauseReason = 'resume_ack';
+    this.setFailure({
+      stage: 'unknown',
+      code: 'in-flight-tool-ack-required',
+      retryable: false,
+    });
+    this.internalAbort.abort('resume:in-flight-tool-ack-required');
+    this.emitStateChange();
+  }
+
+  private createBudgetExceededError(reason: 'turns' | 'tool_calls' | 'tokens'): Error {
+    const error = new Error(`Agent run ${reason} budget reached.`);
+    error.name = 'AgentRunBudgetExceededError';
+    return error;
+  }
+
+  private preserveCompletedToolEffects(state: AgentRunState, completedToolCalls: number): void {
+    if (completedToolCalls <= 0) {
+      return;
+    }
+    // The current model turn is intentionally not appended to history after a
+    // failed/aborted stream. Advancing the checkpoint turn prevents a reload
+    // from reissuing a turn whose local tool effects already completed.
+    state.turnIndex += 1;
+    if (state.budgetUsage) {
+      state.budgetUsage = {
+        ...state.budgetUsage,
+        turns: state.turnIndex,
+      };
+    }
+  }
+
+  private setFailure(failure: AgentRunFailureClassification): void {
+    this.state.failure = failure;
+    this.state.failureStage = failure.stage;
+    this.state.failureCode = failure.code;
+    this.state.failureRetryable = failure.retryable;
+    if (failure.retryable) {
+      this.state.pauseReason = 'retryable_failure';
+    }
+  }
+
+  private markCheckpointPersistenceFailure(error: unknown): void {
+    if (this.checkpointPersistenceFailed) {
+      return;
+    }
+    this.checkpointPersistenceFailed = true;
+    console.warn('Agent run checkpoint persistence failed; run is non-resumable.');
+    void error;
+    this.state.status = 'failed';
+    this.state.finishReason = 'stop-route';
+    this.state.pauseReason = 'external';
+    this.setFailure({
+      stage: 'unknown',
+      code: 'checkpoint-persistence-failed',
+      retryable: false,
+    });
+    this.internalAbort.abort('checkpoint:persistence-failed');
+    this.emitStateChange();
+  }
+
+  private getBudgetTokenDelta(
+    promptTokenCount: number,
+    candidatesTokenCount: number,
+    usage: ProviderUsageMetadata | undefined,
+    requestTokenEstimate: number,
+    responseText: string,
+  ): { tokens: number; estimated: boolean } {
+    const accounting = getProviderUsageAccounting(usage);
+    if (accounting.complete && accounting.knownTokens !== undefined) {
+      return { tokens: accounting.knownTokens, estimated: false };
+    }
+    if (usage && (accounting.knownTokens !== undefined || accounting.unknownRequestCount > 0)) {
+      const unknownRequestEstimate = Math.max(
+        1,
+        requestTokenEstimate + this.estimateTokens(responseText),
+      );
+      return {
+        tokens:
+          (accounting.knownTokens ?? 0) +
+          unknownRequestEstimate * Math.max(1, accounting.unknownRequestCount),
+        estimated: true,
+      };
+    }
+    if (promptTokenCount > 0 || candidatesTokenCount > 0) {
+      return {
+        tokens: promptTokenCount + candidatesTokenCount,
+        estimated: false,
+      };
+    }
+
+    // Providers may omit usage entirely (or return zero). Keep those counts
+    // visibly estimated; never present them as an exact provider bill.
+    void usage;
+    return {
+      tokens: Math.max(1, requestTokenEstimate + this.estimateTokens(responseText)),
+      estimated: true,
+    };
+  }
+
+  private estimateRequestContextTokens(
+    systemPrompt: string,
+    ragContext: string | undefined,
+    history: readonly ChatMessage[],
+    message: string,
+    attachments: readonly MessageAttachment[] | undefined,
+    toolTrace: readonly string[] = [],
+    estimatedToolOutputTokens = 0,
+  ): number {
+    return (
+      this.estimateTokens(
+        this.buildEstimatedRequestContext(
+          systemPrompt,
+          ragContext,
+          history,
+          message,
+          attachments,
+          toolTrace,
+        ),
+      ) + estimatedToolOutputTokens
+    );
+  }
+
+  /**
+   * Build a complete, transient request-context approximation for providers
+   * that do not return usage. Raw content is used only for the local estimate;
+   * it is never copied into state, checkpoints, or diagnostics.
+   */
+  private buildEstimatedRequestContext(
+    systemPrompt: string,
+    ragContext: string | undefined,
+    history: readonly ChatMessage[],
+    message: string,
+    attachments: readonly MessageAttachment[] | undefined,
+    toolTrace: readonly string[] = [],
+  ): string {
+    const historyText = history
+      .map(entry => {
+        const attachmentShape = (entry.attachments ?? [])
+          .map(
+            attachment =>
+              `[attachment:${attachment.kind}:${attachment.mimeType}:${attachment.data.length}]`,
+          )
+          .join(' ');
+        return `${entry.role}: ${entry.content}${attachmentShape ? ` ${attachmentShape}` : ''}`;
+      })
+      .join('\n');
+    const attachmentText = (attachments ?? [])
+      .map(
+        attachment =>
+          `[attachment:${attachment.kind}:${attachment.mimeType}:${attachment.data.length}]`,
+      )
+      .join(' ');
+    const toolTraceText = toolTrace.length > 0 ? `tools: ${toolTrace.join(', ')}` : '';
+    return [
+      systemPrompt,
+      ragContext ?? '',
+      historyText,
+      `user: ${message}`,
+      attachmentText,
+      toolTraceText,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  private estimateTokens(value: string): number {
+    return Math.max(1, Math.ceil(value.trim().length / 4));
+  }
+
   private linkCallerSignal(): void {
     if (this.callerSignalLinked) {
       return;
@@ -925,6 +1731,12 @@ export class AgentRunController {
   }
 
   private handleAbortTermination(): void {
+    // Checkpoint persistence failure is already a terminal, non-resumable
+    // failure. The internal abort is used to stop provider work, but must not
+    // overwrite that durable-state error as a user/external cancellation.
+    if (this.checkpointPersistenceFailed) {
+      return;
+    }
     const wasUserStop = this.userStopped;
     const status: AgentRunStatus = wasUserStop ? 'stopped' : 'aborted';
     this.state.status = status;
@@ -932,6 +1744,10 @@ export class AgentRunController {
     if (!this.state.abortReason) {
       this.state.abortReason = wasUserStop ? 'user-stop' : 'external-signal';
     }
+    this.state.pauseReason = wasUserStop ? 'user' : 'external';
+    this.setFailure(
+      classifyAgentRunFailure(new Error(this.state.abortReason), { cancelled: true }),
+    );
     this.emitStateChange();
   }
 
