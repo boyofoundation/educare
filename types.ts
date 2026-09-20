@@ -1,4 +1,5 @@
 import type { GeometryDoc } from './services/geometryToolService';
+import type { ClarifyAnswer, ClarifyRequest } from './services/clarifyToolService';
 import type { SpeechUtteranceDoc } from './services/speechToolService';
 
 /** One-based parser-provided locations; omitted when the source cannot prove them. */
@@ -275,6 +276,16 @@ export interface SpeechUtteranceRecord {
   doc: SpeechUtteranceDoc;
 }
 
+/**
+ * 已完成的 askUser 澄清問答紀錄 (問題 + 使用者的選擇/自訂回答/略過)。
+ * 舊資料沒有此欄位時，UI 必須優雅退化。
+ */
+export interface ClarifyRecord {
+  id: string;
+  request: ClarifyRequest;
+  answer: ClarifyAnswer;
+}
+
 export interface ChatMessage {
   role: 'user' | 'model';
   content: string;
@@ -323,6 +334,10 @@ export interface ChatMessage {
    * 已完成的語音發音宣告。舊資料沒有此欄位時，UI 必須優雅退化。
    */
   speechUtterances?: SpeechUtteranceRecord[];
+  /**
+   * 已完成的 askUser 澄清問答。舊資料沒有此欄位時，UI 必須優雅退化。
+   */
+  clarifyRecords?: ClarifyRecord[];
   routeProposal?: RouteProposal;
 }
 
