@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildKnowledgeSearchIndex,
   buildIndexedKnowledgeChunks,
   buildKnowledgeSearchResponse,
+  searchKnowledgeIndex,
   searchKnowledgeBase,
 } from './knowledgeSearchService';
 import type { RagChunk } from '../types';
@@ -79,5 +81,37 @@ describe('knowledgeSearchService', () => {
       chunkIndex: 0,
     });
     expect(response.results[0]?.chunkId).toMatch(/^leave-policy\.md#0:\d+:[0-9a-f]+$/);
+  });
+
+  it('returns provenance for material revisions and keeps index scope isolated', () => {
+    const chunks: RagChunk[] = [
+      {
+        fileName: 'lesson.md',
+        content: 'The water cycle has four stages.',
+        documentId: 'doc-water',
+        contentHash: 'hash-water',
+        sourceVersion: 3,
+        sourceLocation: { paragraph: 2 },
+        sourceType: 'file',
+      },
+    ];
+    const index = buildKnowledgeSearchIndex(chunks, 'assistant-a');
+
+    expect(searchKnowledgeIndex(index, { query: 'water cycle' }, 'assistant-b')).toEqual([]);
+    expect(searchKnowledgeIndex(index, { query: 'water cycle' }, 'assistant-a')[0]).toMatchObject({
+      documentId: 'doc-water',
+      sourceVersion: 3,
+      sourceLocation: { paragraph: 2 },
+      hasSource: true,
+    });
+  });
+
+  it('reports no source instead of fabricating a citation for an unmatched query', () => {
+    const response = buildKnowledgeSearchResponse(knowledgeChunks, {
+      query: 'unrelated topic',
+    });
+
+    expect(response.sourceStatus).toBe('no-source');
+    expect(response.results).toEqual([]);
   });
 });

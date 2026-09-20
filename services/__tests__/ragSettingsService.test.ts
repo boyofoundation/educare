@@ -1,9 +1,13 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   getRagSettingsService,
   DEFAULT_RAG_SETTINGS,
   RagSettingsService,
 } from '../ragSettingsService';
+import {
+  __resetWorkspaceOperationServiceForTesting,
+  withWorkspaceOperation,
+} from '../workspaceOperationService';
 
 // Mock localStorage
 const localStorageMock = {
@@ -31,6 +35,11 @@ describe('RagSettingsService', () => {
     // Note: We need to reset the singleton for testing
     (RagSettingsService as unknown as { instance?: unknown }).instance = undefined;
     service = getRagSettingsService();
+  });
+
+  afterEach(() => {
+    __resetWorkspaceOperationServiceForTesting();
+    localStorageMock.setItem.mockImplementation(() => undefined);
   });
 
   describe('getInstance', () => {
@@ -220,6 +229,36 @@ describe('RagSettingsService', () => {
       expect(newService.getSettings()).toEqual(DEFAULT_RAG_SETTINGS);
       expect(consoleWarnSpy).toHaveBeenCalled();
       consoleWarnSpy.mockRestore();
+    });
+  });
+
+  describe('workspace write barrier', () => {
+    it('defers async settings writes until an exclusive workspace operation finishes', async () => {
+      let pendingWrite: Promise<boolean> | undefined;
+
+      await withWorkspaceOperation('export', async () => {
+        localStorageMock.setItem.mockClear();
+        pendingWrite = service.updateSettingsAsync({ vectorSearchLimit: 30 });
+        await Promise.resolve();
+        expect(localStorageMock.setItem).not.toHaveBeenCalled();
+      });
+
+      await expect(pendingWrite).resolves.toBe(true);
+      expect(service.getVectorSearchLimit()).toBe(30);
+      expect(localStorageMock.setItem).toHaveBeenCalledWith(
+        'gemini_assistant_rag_settings',
+        expect.stringContaining('"vectorSearchLimit":30'),
+      );
+    });
+
+    it('retains the previous in-memory settings when an async write fails', async () => {
+      const previousSettings = service.getSettings();
+      localStorageMock.setItem.mockImplementation(() => {
+        throw new Error('Storage quota exceeded');
+      });
+
+      await expect(service.updateSettingsAsync({ vectorSearchLimit: 30 })).resolves.toBe(false);
+      expect(service.getSettings()).toEqual(previousSettings);
     });
   });
 });

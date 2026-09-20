@@ -75,10 +75,12 @@ describe('RAGFileUpload', () => {
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(mockProps.onRagChunksChange).toHaveBeenCalledWith([
-        { fileName: 'test.pdf', content: 'Chunk 1' },
-        { fileName: 'test.pdf', content: 'Chunk 2' },
-      ]);
+      expect(mockProps.onRagChunksChange).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ fileName: 'test.pdf', content: 'Chunk 1' }),
+          expect.objectContaining({ fileName: 'test.pdf', content: 'Chunk 2' }),
+        ]),
+      );
     });
 
     expect(parseDocumentMock).toHaveBeenCalledWith(file);
@@ -114,6 +116,27 @@ describe('RAGFileUpload', () => {
     });
   });
 
+  it('cancels one in-flight file without adding partial chunks', async () => {
+    parseDocumentMock.mockReturnValue(new Promise(() => {}));
+
+    render(<RAGFileUpload {...mockProps} />);
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: { files: [createMockFile('cancelled.pdf', 'application/pdf')] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '取消處理' })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '取消處理' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/cancelled\.pdf 已取消解析/)).toBeInTheDocument();
+    });
+    expect(mockProps.onRagChunksChange).not.toHaveBeenCalled();
+  });
+
   it('skips unsupported files and keeps chunks unchanged', async () => {
     isSupportedFileMock.mockReturnValue(false);
 
@@ -144,7 +167,9 @@ describe('RAGFileUpload', () => {
 
     await waitFor(() => {
       expect(errorSpy).toHaveBeenCalled();
-      expect(screen.getByText(/broken\.pdf 處理失敗: parse failed/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/broken\.pdf 處理失敗: broken\.pdf 解析失敗：parse failed/),
+      ).toBeInTheDocument();
     });
 
     expect(mockProps.onRagChunksChange).not.toHaveBeenCalled();
@@ -164,12 +189,14 @@ describe('RAGFileUpload', () => {
     fireEvent.change(fileInput, { target: { files: [successfulFile, failedFile] } });
 
     await waitFor(() => {
-      expect(mockProps.onRagChunksChange).toHaveBeenCalledWith([
-        { fileName: 'good.pdf', content: 'Good content' },
-      ]);
+      expect(mockProps.onRagChunksChange).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ fileName: 'good.pdf', content: 'Good content' }),
+        ]),
+      );
     });
     expect(screen.getByTestId('rag-persistence-status')).toHaveTextContent(
-      'broken.pdf 處理失敗: parse failed',
+      'broken.pdf 處理失敗: broken.pdf 解析失敗：parse failed',
     );
     expect(screen.getByRole('button', { name: '重試解析' })).toBeInTheDocument();
     expect(parseDocumentMock).toHaveBeenCalledTimes(2);
@@ -183,10 +210,12 @@ describe('RAGFileUpload', () => {
     fireEvent.click(screen.getByRole('button', { name: '重試解析' }));
 
     await waitFor(() => {
-      expect(mockProps.onRagChunksChange).toHaveBeenLastCalledWith([
-        { fileName: 'good.pdf', content: 'Good content' },
-        { fileName: 'broken.pdf', content: 'Recovered content' },
-      ]);
+      expect(mockProps.onRagChunksChange).toHaveBeenLastCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ fileName: 'good.pdf', content: 'Good content' }),
+          expect.objectContaining({ fileName: 'broken.pdf', content: 'Recovered content' }),
+        ]),
+      );
     });
     expect(parseDocumentMock).toHaveBeenLastCalledWith(failedFile);
     expect(parseDocumentMock).toHaveBeenCalledTimes(3);

@@ -1,4 +1,5 @@
 import { RagSettings } from '../types';
+import { withWorkspaceWrite } from './workspaceOperationService';
 
 const RAG_SETTINGS_KEY = 'gemini_assistant_rag_settings';
 
@@ -97,11 +98,13 @@ export class RagSettingsService {
   /**
    * 儲存設定到 localStorage
    */
-  private saveSettings(): void {
+  private saveSettings(): boolean {
     try {
       localStorage.setItem(RAG_SETTINGS_KEY, JSON.stringify(this.settings));
+      return true;
     } catch (error) {
       console.error('Failed to save RAG settings to localStorage:', error);
+      return false;
     }
   }
 
@@ -122,11 +125,41 @@ export class RagSettingsService {
   }
 
   /**
+   * Update settings after entering the workspace write barrier. The existing
+   * synchronous method remains for compatibility with current consumers.
+   */
+  updateSettingsAsync(newSettings: Partial<RagSettings>): Promise<boolean> {
+    return withWorkspaceWrite(async () => {
+      const previousSettings = this.settings;
+      const validatedSettings = this.validateAndMergeSettings(newSettings);
+      this.settings = { ...this.settings, ...validatedSettings };
+      const persisted = this.saveSettings();
+      if (!persisted) {
+        this.settings = previousSettings;
+      }
+      return persisted;
+    });
+  }
+
+  /**
    * 重設為預設設定
    */
   resetToDefaults(): void {
     this.settings = { ...DEFAULT_RAG_SETTINGS };
     this.saveSettings();
+  }
+
+  /** Reset settings after entering the workspace write barrier. */
+  resetToDefaultsAsync(): Promise<boolean> {
+    return withWorkspaceWrite(async () => {
+      const previousSettings = this.settings;
+      this.settings = { ...DEFAULT_RAG_SETTINGS };
+      const persisted = this.saveSettings();
+      if (!persisted) {
+        this.settings = previousSettings;
+      }
+      return persisted;
+    });
   }
 
   /**

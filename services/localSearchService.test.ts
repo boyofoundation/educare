@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { searchLocalWorkspace } from './localSearchService';
+import {
+  buildLocalSearchIndex,
+  searchLocalSearchIndex,
+  searchLocalWorkspace,
+} from './localSearchService';
 import type { Assistant, ChatSession, HtmlProject } from '../types';
 
 const assistant: Assistant = {
@@ -102,5 +106,39 @@ describe('searchLocalWorkspace', () => {
     expect(materialResults).toHaveLength(2);
     expect(new Set(materialResults.map(result => result.id)).size).toBe(2);
     expect(materialResults.map(result => result.chunkIndex).sort()).toEqual([0, 1]);
+  });
+
+  it('returns exact global jump metadata and keeps search indexes scope-local', () => {
+    const indexed = buildLocalSearchIndex({
+      scopeId: 'workspace-a',
+      query: '',
+      assistants: [
+        {
+          ...assistant,
+          ragChunks: [
+            { fileName: 'first.md', content: 'intro' },
+            {
+              fileName: 'lesson.md',
+              content: 'water cycle stages',
+              documentId: 'document-water',
+              contentHash: 'hash-water',
+              sourceVersion: 2,
+              sourceLocation: { paragraph: 4 },
+              sourceType: 'file',
+            },
+          ],
+        },
+      ],
+      sessions: [],
+    });
+
+    expect(searchLocalSearchIndex(indexed, 'water cycle', 10, 'workspace-b')).toEqual([]);
+    expect(searchLocalSearchIndex(indexed, 'water cycle', 10, 'workspace-a')[0]).toMatchObject({
+      kind: 'material',
+      chunkIndex: 1,
+      documentId: 'document-water',
+      sourceChunkIndex: 0,
+      sourceLocation: { paragraph: 4 },
+    });
   });
 });

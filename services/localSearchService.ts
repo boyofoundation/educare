@@ -1,4 +1,6 @@
 import type { Assistant, ChatMessage, ChatSession, HtmlProject } from '../types';
+import type { RagSourceLocation, RagSourceType } from '../types';
+import { buildIndexedKnowledgeChunks, type IndexedKnowledgeChunk } from './knowledgeSearchService';
 
 /** Searchable local navigation entities. Shared/bundle data is intentionally excluded by callers. */
 export type LocalSearchResultKind = 'assistant' | 'session' | 'message' | 'material' | 'project';
@@ -14,6 +16,14 @@ export interface LocalSearchResult {
   messageIndex?: number;
   /** Zero-based RAG chunk index for material results. */
   chunkIndex?: number;
+  /** Zero-based index within the source document. */
+  sourceChunkIndex?: number;
+  chunkId?: string;
+  documentId?: string;
+  contentHash?: string;
+  sourceVersion?: number;
+  sourceLocation?: RagSourceLocation;
+  sourceType?: RagSourceType;
   projectId?: string;
   score: number;
   updatedAt: number;
@@ -25,6 +35,21 @@ export interface LocalSearchInput {
   sessions: ChatSession[];
   projects?: HtmlProject[];
   limit?: number;
+  /** Optional privacy boundary; callers must keep one workspace per index. */
+  scopeId?: string;
+}
+
+interface IndexedLocalMaterial {
+  chunk: IndexedKnowledgeChunk;
+  globalChunkIndex: number;
+}
+
+export interface LocalSearchIndex {
+  scopeId: string;
+  assistants: Assistant[];
+  sessions: ChatSession[];
+  projects: HtmlProject[];
+  materialByAssistant: Map<string, IndexedLocalMaterial[]>;
 }
 
 const DEFAULT_LIMIT = 24;
@@ -83,6 +108,7 @@ const sortResults = (results: LocalSearchResult[]): LocalSearchResult[] =>
 const addAssistantResults = (
   query: string,
   assistants: Assistant[],
+  materialByAssistant: Map<string, IndexedLocalMaterial[]>,
   results: LocalSearchResult[],
 ): void => {
   for (const assistant of assistants) {
@@ -104,7 +130,7 @@ const addAssistantResults = (
       });
     }
 
-    for (const [chunkIndex, chunk] of (assistant.ragChunks ?? []).entries()) {
+    for (const { chunk, globalChunkIndex } of materialByAssistant.get(assistant.id) ?? []) {
       const chunkScore = scoreFields(query, [
         { value: chunk.fileName, weight: 1.1 },
         { value: chunk.content, weight: 0.65 },
@@ -113,15 +139,23 @@ const addAssistantResults = (
         continue;
       }
       results.push({
-        // File names are user-controlled and may repeat; include the source
-        // chunk index so every result remains a stable, clickable target.
-        id: `${assistant.id}:material:${chunk.fileName}:${chunkIndex}`,
+        // File names are user-controlled and may repeat. Use the stable chunk
+        // id for the result identity, while retaining the global array index
+        // required by the existing exact-source jump contract.
+        id: `${assistant.id}:material:${chunk.chunkId}`,
         kind: 'material',
         title: chunk.fileName,
         subtitle: `${assistant.name} · 素材`,
         snippet: compact(chunk.content),
         assistantId: assistant.id,
-        chunkIndex,
+        chunkIndex: globalChunkIndex,
+        sourceChunkIndex: chunk.chunkIndex,
+        chunkId: chunk.chunkId,
+        ...(chunk.documentId ? { documentId: chunk.documentId } : {}),
+        ...(chunk.contentHash ? { contentHash: chunk.contentHash } : {}),
+        ...(chunk.sourceVersion ? { sourceVersion: chunk.sourceVersion } : {}),
+        ...(chunk.sourceLocation ? { sourceLocation: chunk.sourceLocation } : {}),
+        ...(chunk.sourceType ? { sourceType: chunk.sourceType } : {}),
         score: chunkScore,
         updatedAt: assistant.lastOpenedAt ?? assistant.createdAt,
       });
@@ -211,19 +245,52 @@ const addProjectResults = (
  * Deterministic, local-only search for navigation. Empty queries return no results so the
  * sidebar can remain quiet until the user starts searching.
  */
-export function searchLocalWorkspace(input: LocalSearchInput): LocalSearchResult[] {
-  const query = normalize(input.query.trim());
-  if (!query) {
+export function buildLocalSearchIndex(input: LocalSearchInput): LocalSearchIndex {
+  const materialByAssistant = new Map<string, IndexedLocalMaterial[]>();
+  for (const assistant of input.assistants) {
+    const indexedChunks = buildIndexedKnowledgeChunks(assistant.ragChunks ?? []);
+    materialByAssistant.set(
+      assistant.id,
+      indexedChunks.map((chunk, globalChunkIndex) => ({ chunk, globalChunkIndex })),
+    );
+  }
+
+  return {
+    scopeId: input.scopeId ?? 'workspace-local',
+    assistants: [...input.assistants],
+    sessions: [...input.sessions],
+    projects: [...(input.projects ?? [])],
+    materialByAssistant,
+  };
+}
+
+export function searchLocalSearchIndex(
+  index: LocalSearchIndex,
+  query: string,
+  limit = DEFAULT_LIMIT,
+  scopeId = index.scopeId,
+): LocalSearchResult[] {
+  if (scopeId !== index.scopeId) {
+    return [];
+  }
+
+  const normalizedQuery = normalize(query.trim());
+  if (!normalizedQuery) {
     return [];
   }
 
   const results: LocalSearchResult[] = [];
-  const assistantsById = new Map(input.assistants.map(assistant => [assistant.id, assistant]));
-  addAssistantResults(query, input.assistants, results);
-  addSessionResults(query, assistantsById, input.sessions, results);
-  addProjectResults(query, assistantsById, input.projects ?? [], results);
+  const assistantsById = new Map(index.assistants.map(assistant => [assistant.id, assistant]));
+  addAssistantResults(normalizedQuery, index.assistants, index.materialByAssistant, results);
+  addSessionResults(normalizedQuery, assistantsById, index.sessions, results);
+  addProjectResults(normalizedQuery, assistantsById, index.projects, results);
 
-  return sortResults(results).slice(0, Math.max(1, input.limit ?? DEFAULT_LIMIT));
+  return sortResults(results).slice(0, Math.max(1, limit));
+}
+
+export function searchLocalWorkspace(input: LocalSearchInput): LocalSearchResult[] {
+  const index = buildLocalSearchIndex(input);
+  return searchLocalSearchIndex(index, input.query, input.limit, input.scopeId ?? index.scopeId);
 }
 
 export function getLocalSearchResultKindLabel(kind: LocalSearchResultKind): string {

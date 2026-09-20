@@ -1,8 +1,19 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { RagChunk } from '../../types';
-import { DocumentParserService } from '../../services/documentParserService';
-import { chunkText, DEFAULT_CHUNKING_OPTIONS } from '../../services/textChunkingService';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import type { RagChunk } from '../../types';
+import {
+  getMaterialFileTypeName,
+  isFileParserCancellation,
+  isSupportedMaterialFile,
+  parseFileToChunks,
+} from '../../services/fileParserService';
+import {
+  mergeMaterialChunks,
+  removeMaterialDocument,
+} from '../../services/materialDocumentService';
 import { RAGFileUploadProps } from './types';
+
+const getFileKey = (file: File, index: number): string =>
+  `${file.name}:${file.size}:${file.lastModified}:${index}`;
 
 type ParseState =
   | { type: 'idle' }
@@ -40,6 +51,8 @@ export const RAGFileUpload: React.FC<RAGFileUploadProps> = ({
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [parseState, setParseState] = useState<ParseState>({ type: 'idle' });
   const [lastFiles, setLastFiles] = useState<File[]>([]);
+  const [activeFileKey, setActiveFileKey] = useState<string | null>(null);
+  const abortControllersRef = useRef(new Map<string, AbortController>());
 
   const processFiles = useCallback(
     async (files: File[]) => {
@@ -54,35 +67,48 @@ export const RAGFileUpload: React.FC<RAGFileUploadProps> = ({
       const failureMessages: string[] = [];
       let hasParseFailure = false;
 
-      for (const file of files) {
-        if (!DocumentParserService.isSupportedFile(file)) {
+      for (const [fileIndex, file] of files.entries()) {
+        const fileKey = getFileKey(file, fileIndex);
+        if (!isSupportedMaterialFile(file)) {
           console.warn(`不支援的文件格式: ${file.name}`);
           failedFiles.push(file);
           failureMessages.push(`不支援的文件：${file.name}`);
           continue;
         }
 
+        const controller = new AbortController();
+        abortControllersRef.current.set(fileKey, controller);
+        setActiveFileKey(fileKey);
         try {
-          const fileTypeName = DocumentParserService.getFileTypeName(file);
+          const fileTypeName = getMaterialFileTypeName(file);
           setProcessingStatus(`解析 ${fileTypeName}: ${file.name}…`);
-          const parsedDocument = await DocumentParserService.parseDocument(file);
-          const textChunks = chunkText(parsedDocument.content, DEFAULT_CHUNKING_OPTIONS).chunks;
-
-          for (let i = 0; i < textChunks.length; i += 1) {
-            setProcessingStatus(`處理 ${file.name} 的 ${i + 1}/${textChunks.length} 個區塊…`);
-            successfulChunks.push({ fileName: file.name, content: textChunks[i] });
-          }
+          const parsed = await parseFileToChunks(file, {
+            signal: controller.signal,
+            onProgress: progress => {
+              if (progress.stage === 'chunking') {
+                setProcessingStatus(`處理 ${file.name} 的 ${progress.completed} 個區塊…`);
+              }
+            },
+          });
+          successfulChunks.push(...parsed.chunks);
         } catch (error) {
           console.error(`Error processing file ${file.name}:`, error);
           hasParseFailure = true;
           const errorMessage = error instanceof Error ? error.message : '未知錯誤';
           failedFiles.push(file);
-          failureMessages.push(`${file.name} 處理失敗: ${errorMessage}`);
+          failureMessages.push(
+            isFileParserCancellation(error)
+              ? `${file.name} 已取消解析`
+              : `${file.name} 處理失敗: ${errorMessage}`,
+          );
+        } finally {
+          abortControllersRef.current.delete(fileKey);
+          setActiveFileKey(current => (current === fileKey ? null : current));
         }
       }
 
       if (successfulChunks.length > 0) {
-        onRagChunksChange([...ragChunks, ...successfulChunks]);
+        onRagChunksChange(mergeMaterialChunks(ragChunks, successfulChunks));
         if (failedFiles.length > 0) {
           setLastFiles(failedFiles);
           setParseState({
@@ -118,6 +144,10 @@ export const RAGFileUpload: React.FC<RAGFileUploadProps> = ({
     [onRagChunksChange, ragChunks],
   );
 
+  const cancelFile = useCallback((fileKey: string) => {
+    abortControllersRef.current.get(fileKey)?.abort();
+  }, []);
+
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files ? Array.from(event.target.files) : [];
     // Allow selecting the same file after a parse or persistence failure.
@@ -125,12 +155,24 @@ export const RAGFileUpload: React.FC<RAGFileUploadProps> = ({
     await processFiles(files);
   };
 
-  const removeDocument = (fileName: string) => {
-    onRagChunksChange(ragChunks.filter(chunk => chunk.fileName !== fileName));
+  const removeDocument = (documentId: string, fileName: string) => {
+    const hasDocumentId = ragChunks.some(chunk => chunk.documentId === documentId);
+    onRagChunksChange(
+      hasDocumentId
+        ? removeMaterialDocument(ragChunks, documentId)
+        : removeMaterialDocument(ragChunks, documentId, fileName),
+    );
   };
 
-  const fileNames = useMemo(
-    () => [...new Set<string>(ragChunks.map((chunk: RagChunk) => chunk.fileName))],
+  const materialDocuments = useMemo(
+    () =>
+      ragChunks.reduce<Array<{ id: string; fileName: string }>>((documents, chunk, index) => {
+        const id = chunk.documentId ?? `legacy:${chunk.fileName}`;
+        if (!documents.some(document => document.id === id)) {
+          documents.push({ id, fileName: chunk.fileName || `素材 ${index + 1}` });
+        }
+        return documents;
+      }, []),
     [ragChunks],
   );
   const persistenceCopy = PERSISTENCE_COPY[persistenceState];
@@ -183,6 +225,16 @@ export const RAGFileUpload: React.FC<RAGFileUploadProps> = ({
           >
             <span className='h-2 w-2 animate-bounce rounded-full bg-cyan-400' aria-hidden='true' />
             {processingStatus}
+            {activeFileKey && (
+              <button
+                className='rounded border border-cyan-300/60 px-2 py-1 text-xs text-cyan-100 hover:bg-cyan-900/40 disabled:opacity-50'
+                type='button'
+                onClick={() => cancelFile(activeFileKey)}
+                disabled={disabled}
+              >
+                取消處理
+              </button>
+            )}
           </p>
         )}
       </div>
@@ -210,15 +262,15 @@ export const RAGFileUpload: React.FC<RAGFileUploadProps> = ({
       )}
 
       <div className='mt-4 space-y-2'>
-        {fileNames.map(fileName => (
+        {materialDocuments.map(document => (
           <div
-            key={fileName}
+            key={document.id}
             className='flex items-center justify-between rounded-md bg-gray-700 p-2 text-sm'
           >
-            <span className='truncate text-gray-300'>{fileName}</span>
+            <span className='truncate text-gray-300'>{document.fileName}</span>
             <button
-              aria-label={`移除 ${fileName}`}
-              onClick={() => removeDocument(fileName)}
+              aria-label={`移除 ${document.fileName}`}
+              onClick={() => removeDocument(document.id, document.fileName)}
               className='ml-4 rounded px-2 py-1 text-red-300 hover:bg-red-900/30 hover:text-red-200'
               disabled={disabled || persistenceState === 'saving'}
               type='button'
