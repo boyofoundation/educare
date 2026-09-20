@@ -23,11 +23,12 @@ export interface AppearanceSettingsProps {
   className?: string;
 }
 
-const THEME_LABELS: Record<AppearancePreferences['theme'], { label: string; description: string }> = {
-  system: { label: '跟隨系統', description: '依照裝置的明暗模式切換' },
-  light: { label: '淺色', description: '適合明亮環境與紙張閱讀' },
-  dark: { label: '深色', description: '降低暗處閱讀時的眩光' },
-};
+const THEME_LABELS: Record<AppearancePreferences['theme'], { label: string; description: string }> =
+  {
+    system: { label: '跟隨系統', description: '依照裝置的明暗模式切換' },
+    light: { label: '淺色', description: '適合明亮環境與紙張閱讀' },
+    dark: { label: '深色', description: '降低暗處閱讀時的眩光' },
+  };
 
 const FONT_SIZE_LABELS: Record<ReadingFontSize, { label: string; description: string }> = {
   small: { label: '精簡', description: '較多內容同時顯示' },
@@ -52,10 +53,11 @@ const AppearanceSettings: React.FC<AppearanceSettingsProps> = ({
   const descriptionId = useId();
   const isControlled = value !== undefined;
   const preferences = value ?? localPreferences;
+  const { theme, fontSize, reducedMotion } = preferences;
 
   useEffect(() => {
-    applyAppearancePreferences(preferences);
-  }, [preferences.theme, preferences.fontSize, preferences.reducedMotion]);
+    applyAppearancePreferences({ theme, fontSize, reducedMotion });
+  }, [fontSize, reducedMotion, theme]);
 
   const updatePreferences = (updates: Partial<AppearancePreferences>) => {
     const nextPreferences: AppearancePreferences = {
@@ -73,9 +75,7 @@ const AppearanceSettings: React.FC<AppearanceSettingsProps> = ({
       storage === undefined ? undefined : storage,
     );
     onChange?.(nextPreferences);
-    setStatusMessage(
-      persisted ? '外觀設定已儲存。' : '外觀設定已套用，但瀏覽器未允許保存偏好。',
-    );
+    setStatusMessage(persisted ? '外觀設定已儲存。' : '外觀設定已套用，但瀏覽器未允許保存偏好。');
   };
 
   const handleThemeChange = (theme: AppearancePreferences['theme']) => {

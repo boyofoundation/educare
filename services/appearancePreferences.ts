@@ -19,6 +19,10 @@ export interface AppearanceStorage {
   setItem: (key: string, value: string) => void;
 }
 
+export interface AppearanceMediaQuery {
+  matches: boolean;
+}
+
 export const DEFAULT_APPEARANCE_PREFERENCES: Readonly<AppearancePreferences> = {
   // Keep the existing dark working environment for current users. System and light remain
   // explicit opt-in choices and are applied without changing the embedded preview document.
@@ -50,7 +54,7 @@ const getStorage = (): AppearanceStorage | null => {
   return null;
 };
 
-const getSystemThemeQuery = (): Pick<MediaQueryList, 'matches'> | null => {
+const getSystemThemeQuery = (): AppearanceMediaQuery | null => {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
     return null;
   }
@@ -79,14 +83,18 @@ export function normalizeAppearancePreferences(value: unknown): AppearancePrefer
   };
 }
 
-export function loadAppearancePreferences(storage: AppearanceStorage | null = getStorage()): AppearancePreferences {
+export function loadAppearancePreferences(
+  storage: AppearanceStorage | null = getStorage(),
+): AppearancePreferences {
   if (!storage) {
     return { ...DEFAULT_APPEARANCE_PREFERENCES };
   }
 
   try {
     const raw = storage.getItem(APPEARANCE_STORAGE_KEY);
-    return raw ? normalizeAppearancePreferences(JSON.parse(raw)) : { ...DEFAULT_APPEARANCE_PREFERENCES };
+    return raw
+      ? normalizeAppearancePreferences(JSON.parse(raw))
+      : { ...DEFAULT_APPEARANCE_PREFERENCES };
   } catch {
     return { ...DEFAULT_APPEARANCE_PREFERENCES };
   }
@@ -101,7 +109,10 @@ export function saveAppearancePreferences(
   }
 
   try {
-    storage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(normalizeAppearancePreferences(preferences)));
+    storage.setItem(
+      APPEARANCE_STORAGE_KEY,
+      JSON.stringify(normalizeAppearancePreferences(preferences)),
+    );
     return true;
   } catch {
     return false;
@@ -116,7 +127,7 @@ export function resolveAppearanceTheme(
 }
 
 export function getSystemTheme(
-  mediaQuery: Pick<MediaQueryList, 'matches'> | null = getSystemThemeQuery(),
+  mediaQuery: AppearanceMediaQuery | null = getSystemThemeQuery(),
 ): ResolvedAppearanceTheme {
   // Dark is the compatibility fallback because EduCare historically shipped a dark canvas.
   return mediaQuery ? (mediaQuery.matches ? 'dark' : 'light') : 'dark';
