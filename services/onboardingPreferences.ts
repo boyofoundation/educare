@@ -6,6 +6,8 @@
  * completed and which route the user chose so the shell can safely reopen it.
  */
 
+import { withWorkspaceWrite } from './workspaceOperationService';
+
 export const ONBOARDING_PREFERENCES_KEY = 'educare:onboarding-preferences';
 
 export type OnboardingCompletionReason = 'template' | 'import' | 'browse' | 'skip';
@@ -123,6 +125,15 @@ export const saveOnboardingPreferences = (
   return { ...next, preferences: { ...next }, persisted };
 };
 
+/**
+ * Persist onboarding preferences through the workspace write barrier.
+ * The synchronous writer remains for compatibility with existing consumers.
+ */
+export const saveOnboardingPreferencesAsync = (
+  update: Partial<OnboardingPreferences>,
+): Promise<OnboardingPersistenceResult> =>
+  withWorkspaceWrite(async () => saveOnboardingPreferences(update));
+
 /** Alias kept for callers that prefer a setter-oriented name. */
 export const setOnboardingPreferences = saveOnboardingPreferences;
 
@@ -131,6 +142,18 @@ export const completeOnboarding = (
   selectedTemplateId?: string,
 ): OnboardingPersistenceResult =>
   saveOnboardingPreferences({
+    completed: true,
+    dismissed: reason === 'skip',
+    completionReason: reason,
+    ...(selectedTemplateId ? { selectedTemplateId } : {}),
+    completedAt: Date.now(),
+  });
+
+export const completeOnboardingAsync = (
+  reason: OnboardingCompletionReason,
+  selectedTemplateId?: string,
+): Promise<OnboardingPersistenceResult> =>
+  saveOnboardingPreferencesAsync({
     completed: true,
     dismissed: reason === 'skip',
     completionReason: reason,
@@ -153,6 +176,9 @@ export const resetOnboardingPreferences = (): OnboardingPreferences => {
   }
   return { ...DEFAULT_PREFERENCES };
 };
+
+export const resetOnboardingPreferencesAsync = (): Promise<OnboardingPreferences> =>
+  withWorkspaceWrite(async () => resetOnboardingPreferences());
 
 export const reopenOnboarding = resetOnboardingPreferences;
 

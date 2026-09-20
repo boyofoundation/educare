@@ -1,11 +1,27 @@
 import type { GeometryDoc } from './services/geometryToolService';
 import type { SpeechUtteranceDoc } from './services/speechToolService';
 
+/** One-based parser-provided locations; omitted when the source cannot prove them. */
+export interface RagSourceLocation {
+  page?: number;
+  paragraph?: number;
+  startOffset?: number;
+  endOffset?: number;
+}
+
+export type RagSourceType = 'file' | 'legacy-import';
+
 export interface RagChunk {
   fileName: string;
   content: string;
   vector?: number[];
   relevanceScore?: number;
+  documentId?: string;
+  contentHash?: string;
+  sourceVersion?: number;
+  sourceLocation?: RagSourceLocation;
+  sourceType?: RagSourceType;
+  chunkId?: string;
 }
 
 export interface MessageCitation {
@@ -57,6 +73,12 @@ export interface Assistant {
 export interface AgentBundleRagChunk {
   fileName: string;
   content: string;
+  documentId?: string;
+  contentHash?: string;
+  sourceVersion?: number;
+  sourceLocation?: RagSourceLocation;
+  sourceType?: RagSourceType;
+  chunkId?: string;
 }
 
 export interface AgentBundleModelParams {
@@ -318,6 +340,19 @@ export interface CompactContext {
 }
 
 /**
+ * The user-visible conversation retained independently from the model context.
+ * `messages` remains the compact, provider-facing history; this record is only
+ * for export/recovery and must never be sent to a provider automatically.
+ */
+export interface OriginalHistoryMetadata {
+  schemaVersion: 1;
+  messages: ChatMessage[];
+  completeness: 'complete' | 'unrecoverable';
+  /** Number of messages discarded by a legacy compactor before this metadata existed. */
+  unrecoverableMessageCount?: number;
+}
+
+/**
  * 對話輪次介面 - 代表一輪完整的對話 (使用者訊息 + AI回覆)
  */
 export interface ConversationRound {
@@ -363,6 +398,8 @@ export interface ChatSession {
   // 壓縮相關欄位
   compactContext?: CompactContext; // 壓縮的對話上下文
   lastCompactionAt?: string; // 最後壓縮時間 (ISO string)
+  /** Full original turns retained for export; excluded from provider context. */
+  originalHistory?: OriginalHistoryMetadata;
   handoffContext?: {
     fromAssistantId: string;
     fromAssistantName: string;
@@ -790,7 +827,14 @@ export interface ReportTurnOutcomeResult {
 }
 
 /** Agent run 狀態機 (T6)。*/
-export type AgentRunStatus = 'running' | 'complete' | 'stopped' | 'failed' | 'aborted';
+export type AgentRunStatus =
+  | 'running'
+  | 'complete'
+  | 'stopped'
+  | 'failed'
+  | 'aborted'
+  /** A soft run budget stopped the loop before another request was sent. */
+  | 'paused';
 
 export interface AgentRunState {
   runId: string;
@@ -812,8 +856,39 @@ export interface AgentRunState {
   autoContinued: boolean;
   /** 跨回合工具軌跡 (最近 N 個工具名稱,供 loop 偵測 G12)。*/
   toolTrace: string[];
+  /** Tool calls that started but did not reach a trusted terminal result. */
+  inFlightToolCallIds?: string[];
   /** 上一次 loop 偵測是否觸發。*/
   loopDetected?: boolean;
+  /** Optional per-run soft limits. Local-only; this is not a provider billing cap. */
+  budget?: {
+    maxTurns?: number;
+    maxToolCalls?: number;
+    maxTokens?: number;
+  };
+  /** Usage tracked by the controller for budget checks. */
+  budgetUsage?: {
+    turns: number;
+    toolCalls: number;
+    /** False when legacy/capped trace data cannot establish the exact count. */
+    toolCallsKnown?: boolean;
+    tokens: number;
+    /** True when one or more token deltas were estimated locally. */
+    estimatedTokens: boolean;
+  };
+  /** Why the run was paused/stopped/failed, without retaining provider payloads. */
+  pauseReason?: 'budget' | 'user' | 'external' | 'retryable_failure' | 'resume_ack';
+  /** Resume must explicitly acknowledge an uncertain prior operation or usage. */
+  resumeBudgetAcknowledgementRequired?: boolean;
+  failure?: {
+    stage: 'provider' | 'rate_limit' | 'network' | 'tool' | 'cancel' | 'budget' | 'unknown';
+    code?: string;
+    retryable: boolean;
+  };
+  /** Flat aliases make the failure classification easy for simple consumers. */
+  failureStage?: NonNullable<AgentRunState['failure']>['stage'];
+  failureCode?: string;
+  failureRetryable?: boolean;
   startedAt: number;
   updatedAt: number;
 }
@@ -831,6 +906,8 @@ export interface AgentRunCheckpoint {
   committedHistoryDelta: ChatMessage[];
   partialText?: string;
   toolTrace: string[];
+  /** Tool calls that started but did not reach a trusted terminal result. */
+  inFlightToolCallIds?: string[];
   todoSummary?: HtmlProjectTodoSummary;
   snapshotVersion?: number;
   firstTurnPackSet?: HtmlProjectToolPackName[];
@@ -852,6 +929,33 @@ export interface AgentRunCheckpoint {
   /** 專案 bootstrap 快照:無 active project 時是否暴露 createProject 工具讓模型自行建立專案。 */
   projectBootstrapEnabled?: boolean;
   sharedMode: boolean;
+  /** Optional per-run soft limits. Local-only; not a provider billing cap. */
+  budget?: {
+    maxTurns?: number;
+    maxToolCalls?: number;
+    maxTokens?: number;
+  };
+  /** Usage tracked by the controller for budget checks. */
+  budgetUsage?: {
+    turns: number;
+    toolCalls: number;
+    /** False when legacy/capped trace data cannot establish the exact count. */
+    toolCallsKnown?: boolean;
+    tokens: number;
+    estimatedTokens: boolean;
+  };
+  /** Why the run was paused/stopped/failed, without retaining provider payloads. */
+  pauseReason?: 'budget' | 'user' | 'external' | 'retryable_failure' | 'resume_ack';
+  /** Resume must explicitly acknowledge an uncertain prior operation or usage. */
+  resumeBudgetAcknowledgementRequired?: boolean;
+  failure?: {
+    stage: 'provider' | 'rate_limit' | 'network' | 'tool' | 'cancel' | 'budget' | 'unknown';
+    code?: string;
+    retryable: boolean;
+  };
+  failureStage?: NonNullable<AgentRunCheckpoint['failure']>['stage'];
+  failureCode?: string;
+  failureRetryable?: boolean;
   createdAt: number;
   updatedAt: number;
   heartbeatAt: number;

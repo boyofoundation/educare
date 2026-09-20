@@ -23,7 +23,8 @@ let state: OfflineState = {
 let registration: ServiceWorkerRegistration | undefined;
 let initialization: Promise<void> | undefined;
 const listeners = new Set<() => void>();
-const updateGuards = new Set<() => Promise<boolean>>();
+export type OfflineUpdateGuardResult = boolean | (() => void);
+const updateGuards = new Set<() => Promise<OfflineUpdateGuardResult>>();
 
 const publish = (patch: Partial<OfflineState>) => {
   state = { ...state, ...patch };
@@ -39,7 +40,9 @@ export const subscribeOfflineState = (listener: () => void) => {
 };
 
 /** The app must flush drafts and reject updates during runs/imports/git writes. */
-export function registerOfflineUpdateGuard(guard: () => Promise<boolean>): () => void {
+export function registerOfflineUpdateGuard(
+  guard: () => Promise<OfflineUpdateGuardResult>,
+): () => void {
   updateGuards.add(guard);
   return () => {
     updateGuards.delete(guard);
@@ -181,16 +184,25 @@ export async function activateOfflineUpdate(): Promise<void> {
   if (updateGuards.size === 0) {
     throw new Error('儲存檢查尚未就緒，請稍後重試。');
   }
-  for (const guard of updateGuards) {
-    if (!(await guard())) {
-      throw new Error('請先保存內容，並等待對話、匯入或作品寫入完成後再更新。');
+  const releases: Array<() => void> = [];
+  try {
+    for (const guard of updateGuards) {
+      const result = await guard();
+      if (!result) {
+        throw new Error('請先保存內容，並等待對話、匯入或作品寫入完成後再更新。');
+      }
+      if (typeof result === 'function') {
+        releases.push(result);
+      }
     }
+    const result = await messageWorker(registration.waiting, 'EDUCARE_OFFLINE_ACTIVATE');
+    if (!result.activated) {
+      throw new Error('請先保存內容並關閉其他 EduCare 分頁，再套用更新。');
+    }
+    // Activation never reloads or repeats a cloud request. Keep acquired run
+    // and persistence leases held through the worker's acknowledgement.
+    publish({ updateAvailable: false });
+  } finally {
+    releases.reverse().forEach(release => release());
   }
-  const result = await messageWorker(registration.waiting, 'EDUCARE_OFFLINE_ACTIVATE');
-  if (!result.activated) {
-    throw new Error('請先保存內容並關閉其他 EduCare 分頁，再套用更新。');
-  }
-  // The user explicitly chooses when to reload. Activation alone never loses
-  // composer state or repeats a cloud request.
-  publish({ updateAvailable: false });
 }

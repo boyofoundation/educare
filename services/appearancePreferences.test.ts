@@ -8,9 +8,14 @@ import {
   normalizeAppearancePreferences,
   resolveAppearanceTheme,
   saveAppearancePreferences,
+  saveAppearancePreferencesAsync,
   type AppearancePreferences,
   type AppearanceStorage,
 } from './appearancePreferences';
+import {
+  __resetWorkspaceOperationServiceForTesting,
+  withWorkspaceOperation,
+} from './workspaceOperationService';
 
 const createStorage = (
   initialValue: string | null = null,
@@ -50,6 +55,7 @@ const createMediaQuery = (matches: boolean) => {
 
 describe('appearancePreferences', () => {
   afterEach(() => {
+    __resetWorkspaceOperationServiceForTesting();
     vi.unstubAllGlobals();
   });
 
@@ -169,5 +175,41 @@ describe('appearancePreferences', () => {
     expect(saveAppearancePreferences(DEFAULT_APPEARANCE_PREFERENCES, storage)).toBe(false);
     applyAppearancePreferences({ ...DEFAULT_APPEARANCE_PREFERENCES, reducedMotion: true });
     expect(document.documentElement.dataset.reducedMotion).toBe('true');
+  });
+
+  it('defers async preference writes until an exclusive workspace operation finishes', async () => {
+    const storage = createStorage();
+    let pendingWrite: Promise<boolean> | undefined;
+
+    await withWorkspaceOperation('export', async () => {
+      pendingWrite = saveAppearancePreferencesAsync(
+        { ...DEFAULT_APPEARANCE_PREFERENCES, theme: 'light' },
+        storage,
+      );
+      await Promise.resolve();
+      expect(storage.setItem).not.toHaveBeenCalled();
+    });
+
+    await expect(pendingWrite).resolves.toBe(true);
+    expect(storage.setItem).toHaveBeenCalledWith(
+      APPEARANCE_STORAGE_KEY,
+      JSON.stringify({ ...DEFAULT_APPEARANCE_PREFERENCES, theme: 'light' }),
+    );
+  });
+
+  it('keeps the previous stored appearance value when an async write fails', async () => {
+    const previousValue = JSON.stringify(DEFAULT_APPEARANCE_PREFERENCES);
+    const storage = createStorage(previousValue);
+    storage.setItem = vi.fn(() => {
+      throw new Error('blocked');
+    });
+
+    await expect(
+      saveAppearancePreferencesAsync(
+        { ...DEFAULT_APPEARANCE_PREFERENCES, theme: 'light' },
+        storage,
+      ),
+    ).resolves.toBe(false);
+    expect(storage.value).toBe(previousValue);
   });
 });

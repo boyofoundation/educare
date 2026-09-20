@@ -1,3 +1,5 @@
+import { withWorkspaceWrite } from './workspaceOperationService';
+
 export const APPEARANCE_STORAGE_KEY = 'educare.appearance.v1';
 
 export const APPEARANCE_THEMES = ['system', 'light', 'dark'] as const;
@@ -145,6 +147,22 @@ export function saveAppearancePreferences(
   } catch {
     return false;
   }
+}
+
+/**
+ * Persist appearance preferences through the workspace write barrier.
+ *
+ * The synchronous writer remains available for compatibility with isolated
+ * consumers and existing tests; application callers should use this variant
+ * so archive snapshots cannot race an appearance write.
+ */
+export function saveAppearancePreferencesAsync(
+  preferences: AppearancePreferences,
+  storage?: AppearanceStorage | null,
+): Promise<boolean> {
+  return withWorkspaceWrite(async () =>
+    saveAppearancePreferences(preferences, storage === undefined ? undefined : storage),
+  );
 }
 
 export function resolveAppearanceTheme(
