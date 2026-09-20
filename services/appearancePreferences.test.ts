@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   APPEARANCE_STORAGE_KEY,
   applyAppearancePreferences,
@@ -29,7 +29,30 @@ const createStorage = (
   };
 };
 
+const createMediaQuery = (matches: boolean) => {
+  const listeners = new Set<() => void>();
+  return {
+    get matches() {
+      return matches;
+    },
+    addEventListener: vi.fn((_type: 'change', listener: () => void) => {
+      listeners.add(listener);
+    }),
+    removeEventListener: vi.fn((_type: 'change', listener: () => void) => {
+      listeners.delete(listener);
+    }),
+    setMatches(nextMatches: boolean) {
+      matches = nextMatches;
+      listeners.forEach(listener => listener());
+    },
+  };
+};
+
 describe('appearancePreferences', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     document.documentElement.removeAttribute('data-theme');
     document.documentElement.removeAttribute('data-theme-preference');
@@ -87,11 +110,45 @@ describe('appearancePreferences', () => {
     expect(document.documentElement.dataset.reducedMotion).toBe('true');
   });
 
-  it('leaves the live system media query in charge for the system theme', () => {
-    applyAppearancePreferences({ ...DEFAULT_APPEARANCE_PREFERENCES, theme: 'system' });
+  it('applies the effective system theme while preserving the system preference', () => {
+    const mediaQuery = createMediaQuery(false);
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => mediaQuery),
+    );
 
-    expect(document.documentElement.dataset.theme).toBeUndefined();
+    const storage = createStorage();
+    const preferences = { ...DEFAULT_APPEARANCE_PREFERENCES, theme: 'system' as const };
+    expect(saveAppearancePreferences(preferences, storage)).toBe(true);
+    applyAppearancePreferences(preferences);
+
+    expect(document.documentElement.dataset.theme).toBe('light');
     expect(document.documentElement.dataset.themePreference).toBe('system');
+
+    mediaQuery.setMatches(true);
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(document.documentElement.dataset.themePreference).toBe('system');
+    expect(loadAppearancePreferences(storage).theme).toBe('system');
+    expect(mediaQuery.addEventListener).toHaveBeenCalledWith('change', expect.any(Function));
+  });
+
+  it('replaces the system listener when an explicit theme is selected', () => {
+    const mediaQuery = createMediaQuery(false);
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => mediaQuery),
+    );
+    const systemPreferences = { ...DEFAULT_APPEARANCE_PREFERENCES, theme: 'system' as const };
+
+    applyAppearancePreferences(systemPreferences);
+    applyAppearancePreferences(systemPreferences);
+    expect(mediaQuery.addEventListener).toHaveBeenCalledTimes(2);
+    expect(mediaQuery.removeEventListener).toHaveBeenCalledTimes(1);
+
+    applyAppearancePreferences({ ...systemPreferences, theme: 'dark' });
+    expect(mediaQuery.removeEventListener).toHaveBeenCalledTimes(2);
+    mediaQuery.setMatches(true);
+    expect(document.documentElement.dataset.theme).toBe('dark');
   });
 
   it('resolves system themes from matchMedia and preserves explicit choices', () => {

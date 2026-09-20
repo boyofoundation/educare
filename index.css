@@ -35,10 +35,15 @@
   --appearance-accent-strong: #22d3ee;
   --appearance-accent-soft: rgba(34, 211, 238, 0.14);
   --appearance-success: #34d399;
+  --appearance-warning: #fcd34d;
   --appearance-danger: #fda4af;
   --appearance-button-text: #ffffff;
   --appearance-focus: #67e8f9;
   --appearance-shadow: rgba(2, 6, 23, 0.28);
+  --syntax-keyword: #fda4af;
+  --syntax-string: #86efac;
+  --syntax-symbol: #7dd3fc;
+  --syntax-function: #c4b5fd;
   --reading-font-size: 1rem;
   --reading-line-height: 1.75;
   color-scheme: dark;
@@ -54,19 +59,25 @@
   --appearance-text-secondary: #334155;
   --appearance-text-muted: #475569;
   --appearance-border: #cbd5e1;
-  --appearance-border-strong: #94a3b8;
+  --appearance-border-strong: #64748b;
   --appearance-accent: #0e7490;
   --appearance-accent-strong: #155e75;
   --appearance-accent-soft: #cffafe;
   --appearance-success: #047857;
+  --appearance-warning: #92400e;
   --appearance-danger: #be123c;
   --appearance-button-text: #ffffff;
   --appearance-focus: #0e7490;
   --appearance-shadow: rgba(15, 23, 42, 0.12);
+  --syntax-keyword: #9f1239;
+  --syntax-string: #166534;
+  --syntax-symbol: #075985;
+  --syntax-function: #5b21b6;
   color-scheme: light;
 }
 
-/* System mode deliberately has no data-theme attribute so this media query remains live. */
+/* The service applies the effective system theme to data-theme and updates it on media changes.
+ * Keep this fallback for SSR and non-browser environments where matchMedia is unavailable. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     --appearance-page: #f8fafc;
@@ -78,15 +89,20 @@
     --appearance-text-secondary: #334155;
     --appearance-text-muted: #475569;
     --appearance-border: #cbd5e1;
-    --appearance-border-strong: #94a3b8;
+    --appearance-border-strong: #64748b;
     --appearance-accent: #0e7490;
     --appearance-accent-strong: #155e75;
     --appearance-accent-soft: #cffafe;
     --appearance-success: #047857;
+    --appearance-warning: #92400e;
     --appearance-danger: #be123c;
     --appearance-button-text: #ffffff;
     --appearance-focus: #0e7490;
     --appearance-shadow: rgba(15, 23, 42, 0.12);
+    --syntax-keyword: #9f1239;
+    --syntax-string: #166534;
+    --syntax-symbol: #075985;
+    --syntax-function: #5b21b6;
     color-scheme: light;
   }
 }
@@ -159,8 +175,16 @@ body {
 
 .ui-control:focus-visible {
   border-color: var(--appearance-focus);
-  outline: 3px solid color-mix(in srgb, var(--appearance-focus) 30%, transparent);
+  outline: 3px solid var(--appearance-focus);
   outline-offset: 1px;
+}
+
+/* Keep the primary composer boundary visible in both palettes. Its legacy translucent
+ * border falls below the 3:1 non-text UI boundary target on the dark surface. */
+#root textarea[aria-label='輸入訊息'] {
+  border-color: var(--appearance-border-strong) !important;
+  background: var(--appearance-surface) !important;
+  color: var(--appearance-text) !important;
 }
 
 :focus-visible {
@@ -406,15 +430,17 @@ body {
 
 :root[data-theme='light'] #root :where(p, span, label, li).text-rose-50,
 :root[data-theme='light'] #root :where(p, span, label, li).text-rose-100,
-:root[data-theme='light'] #root :where(p, span, label, li).text-rose-200,
-:root[data-theme='light'] #root :where(p, span, label, li).text-amber-100,
-:root[data-theme='light'] #root :where(p, span, label, li).text-amber-200 {
+:root[data-theme='light'] #root :where(p, span, label, li).text-rose-200 {
   color: var(--appearance-danger) !important;
 }
 
-:root[data-theme='light']
-  #root
-  :where([class~='bg-rose-500/10'], [class~='bg-rose-500/15'], [class~='bg-amber-500/10']) {
+:root[data-theme='light'] #root :where(p, span, label, li).text-amber-50,
+:root[data-theme='light'] #root :where(p, span, label, li).text-amber-100,
+:root[data-theme='light'] #root :where(p, span, label, li).text-amber-200 {
+  color: var(--appearance-warning) !important;
+}
+
+:root[data-theme='light'] #root :where([class~='bg-rose-500/10'], [class~='bg-rose-500/15']) {
   border-color: color-mix(
     in srgb,
     var(--appearance-danger) 45%,
@@ -423,10 +449,166 @@ body {
   background: color-mix(in srgb, var(--appearance-danger) 8%, var(--appearance-surface)) !important;
 }
 
+:root[data-theme='light'] #root :where([class~='bg-amber-500/10']) {
+  border-color: color-mix(
+    in srgb,
+    var(--appearance-warning) 45%,
+    var(--appearance-border)
+  ) !important;
+  background: color-mix(
+    in srgb,
+    var(--appearance-warning) 10%,
+    var(--appearance-surface)
+  ) !important;
+}
+
 :root[data-theme='light'] [role='dialog'] [class~='border-gray-700'],
 :root[data-theme='light'] [role='dialog'] [class~='border-gray-700/50'],
 :root[data-theme='light'] [role='dialog'] [class~='border-gray-700/60'] {
   border-color: var(--appearance-border) !important;
+}
+
+/* Reading/chat surfaces retain a number of legacy dark utility classes. Bind those
+ * app-document surfaces to the semantic palette while leaving preview iframes untouched. */
+:root[data-theme='light']
+  #root
+  :where(
+    [class~='bg-gradient-to-br'][class~='from-gray-900'][class~='to-gray-900'],
+    [class~='bg-gradient-to-br'][class~='from-gray-800'][class~='to-gray-900']
+  ) {
+  background-color: var(--appearance-page) !important;
+  background-image: linear-gradient(135deg, #f8fafc, #e2e8f0 52%, #f8fafc) !important;
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light']
+  #root
+  :where(main[class~='bg-gradient-to-br'][class~='from-gray-800'][class~='to-gray-900']) {
+  background-image: linear-gradient(135deg, #f8fafc, #e2e8f0) !important;
+}
+
+:root[data-theme='light'] #root :where(div:has(> [role='main'][aria-label='聊天對話'])) {
+  background: var(--appearance-page) !important;
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light']
+  #root
+  :where(
+    div:has(> [role='main'][aria-label='聊天對話']) > [class~='border-b'][class~='bg-gray-800']
+  ) {
+  border-color: var(--appearance-border) !important;
+  background: var(--appearance-surface) !important;
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light']
+  #root
+  :where(div:has(> [role='main'][aria-label='聊天對話']) > [role='main'][aria-label='聊天對話']) {
+  background: var(--appearance-page) !important;
+  color: var(--appearance-text) !important;
+}
+
+/* The composer uses dark utility classes for its shell and controls. */
+:root[data-theme='light'] #root :where([class~='from-gray-800/90'][class~='to-gray-850/90']) {
+  border-color: var(--appearance-border) !important;
+  background: var(--appearance-surface) !important;
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light'] #root textarea[aria-label='輸入訊息']::placeholder {
+  color: var(--appearance-text-muted) !important;
+}
+
+:root[data-theme='light']
+  #root
+  :where(button[aria-label='上傳圖片'], button[aria-label='開始語音輸入']) {
+  border-color: var(--appearance-border-strong) !important;
+  background: var(--appearance-surface-muted) !important;
+  color: var(--appearance-text-secondary) !important;
+}
+
+:root[data-theme='light'] #root button[aria-label='傳送訊息']:disabled {
+  border-color: var(--appearance-border-strong) !important;
+  background: var(--appearance-surface-muted) !important;
+  color: var(--appearance-text-muted) !important;
+}
+
+/* Guidance and storage notices use an amber wash; keep the text amber-dark on light
+ * surfaces instead of inheriting the old pale-on-dark utility colors. */
+:root[data-theme='light']
+  #root
+  :where([data-testid='chat-input-guidance'], [data-testid='chat-draft-persistence-warning']) {
+  border-color: color-mix(
+    in srgb,
+    var(--appearance-warning) 45%,
+    var(--appearance-border)
+  ) !important;
+  background: color-mix(
+    in srgb,
+    var(--appearance-warning) 10%,
+    var(--appearance-surface)
+  ) !important;
+  color: var(--appearance-warning) !important;
+}
+
+:root[data-theme='light']
+  #root
+  :where([data-testid='chat-input-guidance'], [data-testid='chat-draft-persistence-warning'])
+  :where(span, button).text-amber-50,
+:root[data-theme='light']
+  #root
+  :where([data-testid='chat-input-guidance'], [data-testid='chat-draft-persistence-warning'])
+  :where(span, button).text-amber-100,
+:root[data-theme='light']
+  #root
+  :where([data-testid='chat-input-guidance'], [data-testid='chat-draft-persistence-warning'])
+  :where(span, button).text-amber-200 {
+  color: var(--appearance-warning) !important;
+}
+
+/* Code headers and citation metadata are spans/buttons, so the paragraph-only legacy
+ * override does not reach them. */
+:root[data-theme='light'] #root .markdown-content :where([class~='bg-gray-900']) {
+  border-color: var(--appearance-border) !important;
+  background: var(--appearance-code) !important;
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light']
+  #root
+  .markdown-content
+  :where([class~='bg-gray-900'])
+  > :where([class~='bg-gray-800/80']) {
+  border-color: var(--appearance-border) !important;
+  background: var(--appearance-surface-muted) !important;
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light']
+  #root
+  .markdown-content
+  :where([class~='bg-gray-900'])
+  > :where([class~='bg-gray-800/80'])
+  :where(span, button).text-gray-300,
+:root[data-theme='light']
+  #root
+  .markdown-content
+  :where([class~='bg-gray-900'])
+  > :where([class~='bg-gray-800/80'])
+  :where(span, button).text-white {
+  color: var(--appearance-text) !important;
+}
+
+:root[data-theme='light']
+  #root
+  .citation-list
+  :where([class~='text-cyan-100'], [class~='text-cyan-100/75']) {
+  color: var(--appearance-text-secondary) !important;
+}
+
+:root[data-theme='light'] #root .citation-list :where([class~='text-amber-200']) {
+  color: var(--appearance-warning) !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -637,6 +819,41 @@ html {
   color: inherit;
 }
 
+/* The imported highlight theme is dark-only. Keep its layout, but bind all
+ * token colors to the same reading palette as math and citations. */
+.markdown-content pre code.hljs,
+.markdown-content pre code.hljs [class*='hljs-'] {
+  background: transparent;
+  color: inherit;
+}
+
+.markdown-content pre code.hljs :is(.hljs-keyword, .hljs-doctag, .hljs-type, .hljs-template-tag) {
+  color: var(--syntax-keyword);
+}
+
+.markdown-content pre code.hljs :is(.hljs-string, .hljs-regexp, .hljs-addition) {
+  color: var(--syntax-string);
+}
+
+.markdown-content
+  pre
+  code.hljs
+  :is(.hljs-number, .hljs-literal, .hljs-built_in, .hljs-symbol, .hljs-attr, .hljs-meta) {
+  color: var(--syntax-symbol);
+}
+
+.markdown-content pre code.hljs :is(.hljs-title, .hljs-section) {
+  color: var(--syntax-function);
+}
+
+.markdown-content pre code.hljs :is(.hljs-comment, .hljs-quote) {
+  color: var(--appearance-text-muted);
+}
+
+.markdown-content pre code.hljs .hljs-deletion {
+  color: var(--syntax-keyword);
+}
+
 .markdown-content .katex {
   color: var(--appearance-text) !important;
 }
@@ -692,6 +909,30 @@ html {
 
 .message-bubble--assistant .markdown-content {
   color: var(--appearance-text);
+}
+
+.message-bubble--error {
+  border-color: var(--appearance-danger) !important;
+  background: color-mix(in srgb, var(--appearance-danger) 8%, var(--appearance-surface)) !important;
+}
+
+.message-bubble--error > div:first-child {
+  color: var(--appearance-danger);
+}
+
+#root .message-actions,
+#root .message-actions :is(span, button) {
+  color: var(--appearance-text-muted) !important;
+}
+
+#root .message-actions button:hover {
+  color: var(--appearance-accent-strong) !important;
+  background: var(--appearance-accent-soft);
+}
+
+#root .message-actions button:focus-visible {
+  outline: 3px solid var(--appearance-focus);
+  outline-offset: 2px;
 }
 
 .citation-list {

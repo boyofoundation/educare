@@ -215,7 +215,7 @@ const MessageBubbleBase: React.FC<MessageBubbleProps> = ({
 
   const actionRow = (
     <div
-      className={`mt-2 flex flex-wrap items-center gap-2 text-xs ${
+      className={`message-actions mt-2 flex flex-wrap items-center gap-2 text-xs ${
         isUser ? 'justify-end' : 'justify-start'
       } text-gray-500`}
     >

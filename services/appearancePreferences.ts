@@ -21,6 +21,10 @@ export interface AppearanceStorage {
 
 export interface AppearanceMediaQuery {
   matches: boolean;
+  addEventListener?: (type: 'change', listener: () => void) => void;
+  removeEventListener?: (type: 'change', listener: () => void) => void;
+  addListener?: (listener: () => void) => void;
+  removeListener?: (listener: () => void) => void;
 }
 
 export const DEFAULT_APPEARANCE_PREFERENCES: Readonly<AppearancePreferences> = {
@@ -64,6 +68,30 @@ const getSystemThemeQuery = (): AppearanceMediaQuery | null => {
   } catch {
     return null;
   }
+};
+
+let systemThemeSubscription: (() => void) | null = null;
+
+const clearSystemThemeSubscription = (): void => {
+  systemThemeSubscription?.();
+  systemThemeSubscription = null;
+};
+
+const subscribeToSystemTheme = (
+  mediaQuery: AppearanceMediaQuery,
+  listener: () => void,
+): (() => void) => {
+  if (mediaQuery.addEventListener && mediaQuery.removeEventListener) {
+    mediaQuery.addEventListener('change', listener);
+    return () => mediaQuery.removeEventListener?.('change', listener);
+  }
+
+  if (mediaQuery.addListener && mediaQuery.removeListener) {
+    mediaQuery.addListener(listener);
+    return () => mediaQuery.removeListener?.(listener);
+  }
+
+  return () => undefined;
 };
 
 export function normalizeAppearancePreferences(value: unknown): AppearancePreferences {
@@ -141,14 +169,26 @@ export function applyAppearancePreferences(
     return;
   }
 
+  clearSystemThemeSubscription();
+
   const normalized = normalizeAppearancePreferences(preferences);
   root.dataset.themePreference = normalized.theme;
   root.dataset.readingSize = normalized.fontSize;
 
-  if (normalized.theme === 'system') {
-    delete root.dataset.theme;
+  const systemThemeQuery = normalized.theme === 'system' ? getSystemThemeQuery() : null;
+  if (normalized.theme !== 'system' || systemThemeQuery) {
+    root.dataset.theme = resolveAppearanceTheme(normalized.theme, getSystemTheme(systemThemeQuery));
   } else {
-    root.dataset.theme = normalized.theme;
+    // Keep the historical fallback when matchMedia is unavailable (for example, SSR or a
+    // non-browser test environment); the media query CSS can still provide a best effort.
+    delete root.dataset.theme;
+  }
+
+  if (systemThemeQuery) {
+    const updateEffectiveTheme = () => {
+      root.dataset.theme = getSystemTheme(systemThemeQuery);
+    };
+    systemThemeSubscription = subscribeToSystemTheme(systemThemeQuery, updateEffectiveTheme);
   }
 
   if (normalized.reducedMotion) {
