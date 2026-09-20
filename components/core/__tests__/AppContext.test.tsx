@@ -6,6 +6,7 @@ import { useAppContext } from '../useAppContext';
 import { htmlProjectStore } from '../../../services/htmlProjectStore';
 import { htmlPreviewService } from '../../../services/htmlPreviewService';
 import { htmlProjectImportService } from '../../../services/htmlProjectImportService';
+import { getAssistantFromTurso } from '../../../services/tursoService';
 import { TEST_ASSISTANTS, TEST_SESSIONS, RESPONSIVE_BREAKPOINTS } from './test-utils';
 
 const { TEST_HTML_PROJECT, TEST_PROJECT_PREVIEW, TEST_IMPORTED_PROJECT } = vi.hoisted(() => ({
@@ -62,9 +63,13 @@ const mockProviderRegistry = vi.hoisted(() => ({
     getAvailableProviders: vi.fn().mockReturnValue(['gemini']),
   },
 }));
+const mockAssistantPackageService = vi.hoisted(() => ({
+  importAssistantPackageFile: vi.fn(),
+}));
 
 vi.mock('../../../services/db', () => mockDb);
 vi.mock('../../../services/providerRegistry', () => mockProviderRegistry);
+vi.mock('../../../services/assistantPackageService', () => mockAssistantPackageService);
 vi.mock('../../../services/cryptoService', () => ({
   CryptoService: {
     encryptApiKeys: vi.fn().mockResolvedValue('encrypted'),
@@ -140,10 +145,13 @@ function TestConsumer() {
   return (
     <div data-testid='test-consumer'>
       <div data-testid='current-view-mode'>{state.viewMode}</div>
+      <div data-testid='editor-dirty'>{String(state.editorDirty)}</div>
+      <div data-testid='current-assistant-id'>{state.currentAssistant?.id || 'none'}</div>
       <div data-testid='assistants-count'>{state.assistants.length}</div>
       <div data-testid='sessions-count'>{state.sessions.length}</div>
       <div data-testid='current-assistant'>{state.currentAssistant?.name || 'none'}</div>
       <div data-testid='current-session'>{state.currentSession?.title || 'none'}</div>
+      <div data-testid='current-session-id'>{state.currentSession?.id || 'none'}</div>
       <div data-testid='is-loading'>{String(state.isLoading)}</div>
       <div data-testid='error'>{state.error || 'none'}</div>
       <div data-testid='is-sidebar-open'>{String(state.isSidebarOpen)}</div>
@@ -152,6 +160,16 @@ function TestConsumer() {
       <div data-testid='is-model-loading'>{String(state.isModelLoading)}</div>
       <div data-testid='is-share-modal-open'>{String(state.isShareModalOpen)}</div>
       <div data-testid='active-project-id'>{state.activeProjectId || 'none'}</div>
+      <div data-testid='focused-message-target'>
+        {state.focusedMessageTarget
+          ? `${state.focusedMessageTarget.sessionId}:${state.focusedMessageTarget.messageIndex}`
+          : 'none'}
+      </div>
+      <div data-testid='pending-navigation'>
+        {state.pendingNavigation
+          ? `${state.pendingNavigation.viewMode}:${state.pendingNavigation.assistantId || ''}:${state.pendingNavigation.sessionId || ''}:${state.pendingNavigation.projectId || ''}`
+          : 'none'}
+      </div>
       <div data-testid='project-preview-id'>{state.projectPreview?.projectId || 'none'}</div>
       <div data-testid='project-preview-version'>
         {state.projectPreview ? String(state.projectPreview.previewVersion) : 'none'}
@@ -165,6 +183,12 @@ function TestConsumer() {
         Load Data
       </button>
       <button
+        data-testid='load-shared'
+        onClick={() => actions.loadSharedAssistant('test-assistant-1')}
+      >
+        Load Shared Assistant
+      </button>
+      <button
         data-testid='select-assistant'
         onClick={() => actions.selectAssistant('test-assistant-1')}
       >
@@ -175,6 +199,14 @@ function TestConsumer() {
         onClick={() => actions.saveAssistant(TEST_ASSISTANTS.basic)}
       >
         Save Assistant
+      </button>
+      <button
+        data-testid='save-assistant-caught'
+        onClick={() => {
+          void actions.saveAssistant(TEST_ASSISTANTS.basic).catch(() => undefined);
+        }}
+      >
+        Save Assistant (caught)
       </button>
       <button
         data-testid='delete-assistant'
@@ -205,6 +237,46 @@ function TestConsumer() {
       </button>
       <button data-testid='set-view-mode' onClick={() => actions.setViewMode('settings')}>
         Set View Mode
+      </button>
+      <button data-testid='set-editor-dirty' onClick={() => actions.setEditorDirty(true)}>
+        Set Editor Dirty
+      </button>
+      <button
+        data-testid='navigate-settings'
+        onClick={() => actions.navigate({ viewMode: 'settings' })}
+      >
+        Navigate Settings
+      </button>
+      <button
+        data-testid='navigate-target'
+        onClick={() =>
+          actions.navigate({
+            viewMode: 'chat',
+            assistantId: 'test-assistant-2',
+            sessionId: 'test-session-2',
+            projectId: 'test-project-2',
+            messageIndex: 1,
+          })
+        }
+      >
+        Navigate Target
+      </button>
+      <button
+        data-testid='navigate-import'
+        onClick={() =>
+          actions.navigate({
+            viewMode: 'chat',
+            file: new File(['assistant-package'], 'assistant.zip', { type: 'application/zip' }),
+          })
+        }
+      >
+        Navigate Import
+      </button>
+      <button data-testid='confirm-pending-navigation' onClick={actions.confirmPendingNavigation}>
+        Confirm Pending Navigation
+      </button>
+      <button data-testid='cancel-pending-navigation' onClick={actions.cancelPendingNavigation}>
+        Cancel Pending Navigation
       </button>
       <button data-testid='toggle-sidebar' onClick={actions.toggleSidebar}>
         Toggle Sidebar
@@ -330,6 +402,7 @@ describe('AppContext', () => {
     mockDb.getSessionsForAssistant.mockResolvedValue([]);
     mockDb.saveSession.mockResolvedValue(undefined);
     mockDb.deleteSession.mockResolvedValue(undefined);
+    mockAssistantPackageService.importAssistantPackageFile.mockReset();
 
     // Re-establish provider registry defaults
     mockProviderRegistry.initializeProviders.mockResolvedValue(undefined);
@@ -704,6 +777,64 @@ describe('AppContext', () => {
       await waitFor(() => {
         expect(mockDb.saveAssistant).toHaveBeenCalledWith(TEST_ASSISTANTS.basic);
       });
+    });
+
+    it('should continue selecting an assistant when last-opened metadata persistence fails', async () => {
+      mockDb.getAllAssistants.mockResolvedValue([]);
+      mockDb.getAssistant.mockResolvedValue(TEST_ASSISTANTS.basic);
+      mockDb.getSessionsForAssistant.mockResolvedValue([TEST_SESSIONS.withMessages]);
+      mockDb.saveAssistant.mockRejectedValue(new Error('read-only assistant store'));
+
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('is-loading')).toHaveTextContent('false');
+      });
+
+      await act(async () => {
+        screen.getByTestId('select-assistant').click();
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('current-assistant-id')).toHaveTextContent(
+          TEST_ASSISTANTS.basic.id,
+        );
+        expect(screen.getByTestId('sessions-count')).toHaveTextContent('1');
+      });
+    });
+
+    it('keeps the editor dirty when assistant save follow-up loading fails', async () => {
+      mockDb.getAllAssistants.mockResolvedValue([]);
+      mockDb.getAssistant.mockResolvedValue(TEST_ASSISTANTS.basic);
+      mockDb.getSessionsForAssistant.mockRejectedValue(new Error('session store unavailable'));
+
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('is-loading')).toHaveTextContent('false');
+      });
+
+      await act(async () => {
+        screen.getByTestId('set-editor-dirty').click();
+      });
+      await waitFor(() => expect(screen.getByTestId('editor-dirty')).toHaveTextContent('true'));
+
+      await act(async () => {
+        screen.getByTestId('save-assistant-caught').click();
+      });
+
+      await waitFor(() => {
+        expect(mockDb.saveAssistant).toHaveBeenCalledWith(TEST_ASSISTANTS.basic);
+      });
+      expect(screen.getByTestId('editor-dirty')).toHaveTextContent('true');
     });
 
     it('should handle assistant deletion with confirmation', async () => {
@@ -1151,6 +1282,159 @@ describe('AppContext', () => {
     });
   });
 
+  describe('Confirmed navigation intents', () => {
+    it('cancels dirty navigation without discarding the editor draft', async () => {
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('is-loading')).toHaveTextContent('false');
+      });
+
+      await act(async () => {
+        screen.getByTestId('set-editor-dirty').click();
+      });
+      await waitFor(() => expect(screen.getByTestId('editor-dirty')).toHaveTextContent('true'));
+      await act(async () => {
+        screen.getByTestId('navigate-settings').click();
+      });
+
+      expect(screen.getByTestId('pending-navigation')).toHaveTextContent('settings:::');
+      expect(screen.getByTestId('editor-dirty')).toHaveTextContent('true');
+      expect(screen.getByTestId('current-view-mode')).toHaveTextContent('new_assistant');
+
+      await act(async () => {
+        screen.getByTestId('cancel-pending-navigation').click();
+      });
+
+      expect(screen.getByTestId('pending-navigation')).toHaveTextContent('none');
+      expect(screen.getByTestId('editor-dirty')).toHaveTextContent('true');
+      expect(screen.getByTestId('current-view-mode')).toHaveTextContent('new_assistant');
+    });
+
+    it('applies the intended assistant, session, message, and project after confirmation', async () => {
+      const targetAssistant = {
+        ...TEST_ASSISTANTS.withRag,
+        id: 'test-assistant-2',
+        name: 'Target Assistant',
+      };
+      const targetSession = {
+        ...TEST_SESSIONS.withMessages,
+        id: 'test-session-2',
+        assistantId: targetAssistant.id,
+        title: 'Target Chat',
+      };
+      const targetProject = {
+        ...TEST_HTML_PROJECT,
+        id: 'test-project-2',
+        assistantId: targetAssistant.id,
+        sessionId: targetSession.id,
+      };
+      mockDb.getAllAssistants.mockResolvedValue([TEST_ASSISTANTS.basic, targetAssistant]);
+      mockDb.getAssistant.mockImplementation(async assistantId =>
+        assistantId === targetAssistant.id ? targetAssistant : TEST_ASSISTANTS.basic,
+      );
+      mockDb.getSessionsForAssistant.mockImplementation(async assistantId =>
+        assistantId === targetAssistant.id ? [targetSession] : [TEST_SESSIONS.withMessages],
+      );
+      vi.mocked(htmlProjectStore.assertProjectOwnership).mockResolvedValue(targetProject);
+      vi.mocked(htmlPreviewService.resolveProjectForPreview).mockResolvedValue({
+        ...TEST_PROJECT_PREVIEW,
+        projectId: targetProject.id,
+      });
+
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('current-assistant-id')).toHaveTextContent(
+          TEST_ASSISTANTS.basic.id,
+        );
+      });
+
+      await act(async () => {
+        screen.getByTestId('set-editor-dirty').click();
+      });
+      await waitFor(() => expect(screen.getByTestId('editor-dirty')).toHaveTextContent('true'));
+      await act(async () => {
+        screen.getByTestId('navigate-target').click();
+      });
+
+      expect(screen.getByTestId('pending-navigation')).toHaveTextContent(
+        'chat:test-assistant-2:test-session-2:test-project-2',
+      );
+
+      await act(async () => {
+        screen.getByTestId('confirm-pending-navigation').click();
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('current-assistant-id')).toHaveTextContent(targetAssistant.id);
+        expect(screen.getByTestId('current-session-id')).toHaveTextContent(targetSession.id);
+        expect(screen.getByTestId('active-project-id')).toHaveTextContent(targetProject.id);
+        expect(screen.getByTestId('focused-message-target')).toHaveTextContent(
+          `${targetSession.id}:1`,
+        );
+        expect(screen.getByTestId('editor-dirty')).toHaveTextContent('false');
+      });
+      expect(htmlProjectStore.assertProjectOwnership).toHaveBeenCalledWith(
+        targetProject.id,
+        targetAssistant.id,
+      );
+    });
+
+    it('continues a deferred assistant import after dirty navigation is confirmed', async () => {
+      const importedAssistant = {
+        ...TEST_ASSISTANTS.withRag,
+        id: 'imported-assistant',
+        name: 'Imported Assistant',
+      };
+      mockDb.getAllAssistants.mockResolvedValue([TEST_ASSISTANTS.basic]);
+      mockDb.getAssistant.mockResolvedValue(TEST_ASSISTANTS.basic);
+      mockDb.getSessionsForAssistant.mockResolvedValue([TEST_SESSIONS.withMessages]);
+      mockAssistantPackageService.importAssistantPackageFile.mockResolvedValue(importedAssistant);
+
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('current-assistant-id')).toHaveTextContent(
+          TEST_ASSISTANTS.basic.id,
+        );
+      });
+
+      await act(async () => {
+        screen.getByTestId('set-editor-dirty').click();
+      });
+      await waitFor(() => expect(screen.getByTestId('editor-dirty')).toHaveTextContent('true'));
+      await act(async () => {
+        screen.getByTestId('navigate-import').click();
+      });
+      expect(screen.getByTestId('pending-navigation')).toHaveTextContent('chat:::');
+
+      await act(async () => {
+        screen.getByTestId('confirm-pending-navigation').click();
+      });
+
+      await waitFor(() => {
+        expect(mockAssistantPackageService.importAssistantPackageFile).toHaveBeenCalledWith(
+          expect.any(File),
+          expect.arrayContaining([TEST_ASSISTANTS.basic.id]),
+        );
+        expect(mockDb.saveAssistant).toHaveBeenCalledWith(importedAssistant);
+      });
+    });
+  });
+
   describe('Model Loading', () => {
     it('should handle embedding model preloading', async () => {
       render(
@@ -1218,6 +1502,28 @@ describe('AppContext', () => {
   });
 
   describe('Cleanup and Effects', () => {
+    it('preserves shared content and opens settings after provider initialization failure', async () => {
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('is-loading')).toHaveTextContent('false'));
+      vi.mocked(getAssistantFromTurso).mockResolvedValueOnce(TEST_ASSISTANTS.basic);
+      mockProviderRegistry.initializeProviders.mockRejectedValueOnce(
+        new Error('provider chunk unavailable'),
+      );
+
+      await act(async () => screen.getByTestId('load-shared').click());
+
+      await waitFor(() =>
+        expect(screen.getByTestId('current-view-mode')).toHaveTextContent('provider_settings'),
+      );
+      expect(screen.getByTestId('current-assistant')).toHaveTextContent(TEST_ASSISTANTS.basic.name);
+      expect(screen.getByTestId('is-loading')).toHaveTextContent('false');
+      expect(screen.getByTestId('error')).toHaveTextContent('none');
+    });
+
     it('should add and remove resize event listeners', () => {
       render(
         <AppProvider>

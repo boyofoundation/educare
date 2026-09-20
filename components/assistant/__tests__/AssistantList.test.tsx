@@ -177,6 +177,25 @@ describe('AssistantList', () => {
 
       expect(mockProps.onShare).toHaveBeenCalledWith(TEST_ASSISTANTS.basic);
     });
+
+    it('opens the file-first share flow when cloud sharing is unavailable', () => {
+      const propsWithoutCloudSharing = {
+        ...mockProps,
+        selectedAssistant: TEST_ASSISTANTS.basic,
+        canShare: false,
+      };
+
+      render(<AssistantList {...propsWithoutCloudSharing} />);
+
+      const shareButton = screen.getByRole('button', { name: '分享助理' });
+      expect(shareButton).toBeEnabled();
+      expect(shareButton).toHaveAttribute('title', '分享助理');
+      expect(screen.queryByText(/遷移到 Turso/)).not.toBeInTheDocument();
+
+      fireEvent.click(shareButton);
+
+      expect(mockProps.onShare).toHaveBeenCalledWith(TEST_ASSISTANTS.basic);
+    });
   });
 
   describe('Accessibility', () => {
@@ -327,6 +346,30 @@ describe('AssistantList', () => {
       expect(screen.getByRole('button', { name: '編輯助理' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '刪除助理' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '分享助理' })).toBeInTheDocument();
+    });
+
+    it('keeps compact action controls at least 44px for touch input', () => {
+      render(
+        <AssistantList
+          {...mockProps}
+          selectedAssistant={TEST_ASSISTANTS.basic}
+          collapsed={true}
+          onExport={vi.fn()}
+          onImport={vi.fn()}
+          onBuildBundle={vi.fn()}
+        />,
+      );
+
+      for (const name of [
+        '匯入助理設定檔',
+        '打包協作包',
+        '分享助理',
+        '匯出助理設定檔',
+        '編輯助理',
+        '刪除助理',
+      ]) {
+        expect(screen.getByRole('button', { name })).toHaveClass('w-11', 'h-11');
+      }
     });
 
     it('marks the selected assistant avatar as pressed', () => {

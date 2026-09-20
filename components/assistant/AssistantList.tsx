@@ -47,7 +47,6 @@ export const AssistantList: React.FC<AssistantListProps> = ({
   onExport,
   onImport,
   onBuildBundle,
-  canShare = true, // 預設為可分享
   collapsed = false,
 }) => {
   const importInputRef = useRef<globalThis.HTMLInputElement | null>(null);
@@ -94,7 +93,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
             {importFileInput}
             <button
               onClick={() => importInputRef.current?.click()}
-              className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-emerald-400 hover:bg-emerald-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+              className='flex w-11 h-11 items-center justify-center rounded-lg text-gray-400 hover:text-emerald-400 hover:bg-emerald-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
               title='匯入助理設定檔'
               aria-label='匯入助理設定檔'
             >
@@ -106,7 +105,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
         {onBuildBundle && (
           <button
             onClick={onBuildBundle}
-            className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60'
+            className='flex w-11 h-11 items-center justify-center rounded-lg text-gray-400 hover:text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60'
             title='打包協作包'
             aria-label='打包協作包'
           >
@@ -162,26 +161,17 @@ export const AssistantList: React.FC<AssistantListProps> = ({
             <div className='w-full border-t border-gray-700/40' />
             <div className='flex flex-col items-center gap-1'>
               <button
-                onClick={() => {
-                  if (canShare) {
-                    onShare(selectedAssistant);
-                  }
-                }}
-                disabled={!canShare}
-                className={`flex w-9 h-9 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
-                  canShare
-                    ? 'text-gray-400 hover:text-blue-400 hover:bg-blue-500/20'
-                    : 'text-gray-600 cursor-not-allowed opacity-50'
-                }`}
-                title={canShare ? '分享助理' : '需要先遷移到 Turso 才能分享'}
-                aria-label={canShare ? '分享助理' : '需要遷移到 Turso'}
+                onClick={() => onShare(selectedAssistant)}
+                className='flex w-11 h-11 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-blue-500/20 hover:text-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                title='分享助理'
+                aria-label='分享助理'
               >
                 <ShareGlyph className='w-4 h-4' />
               </button>
               {onExport && (
                 <button
                   onClick={() => onExport(selectedAssistant)}
-                  className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-emerald-400 hover:bg-emerald-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                  className='flex w-11 h-11 items-center justify-center rounded-lg text-gray-400 hover:text-emerald-400 hover:bg-emerald-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
                   title='匯出助理設定檔'
                   aria-label='匯出助理設定檔'
                 >
@@ -190,7 +180,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
               )}
               <button
                 onClick={() => onEdit(selectedAssistant)}
-                className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-cyan-400 hover:bg-cyan-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+                className='flex w-11 h-11 items-center justify-center rounded-lg text-gray-400 hover:text-cyan-400 hover:bg-cyan-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
                 title='編輯助理'
                 aria-label='編輯助理'
               >
@@ -198,7 +188,7 @@ export const AssistantList: React.FC<AssistantListProps> = ({
               </button>
               <button
                 onClick={() => onDelete(selectedAssistant.id)}
-                className='flex w-9 h-9 items-center justify-center rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60'
+                className='flex w-11 h-11 items-center justify-center rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60'
                 title='刪除助理'
                 aria-label='刪除助理'
               >
@@ -267,19 +257,10 @@ export const AssistantList: React.FC<AssistantListProps> = ({
         {selectedAssistant && (
           <>
             <button
-              onClick={() => {
-                if (canShare) {
-                  onShare(selectedAssistant);
-                }
-              }}
-              disabled={!canShare}
-              className={`p-1.5 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
-                canShare
-                  ? 'text-gray-400 hover:text-blue-400 hover:bg-blue-500/20 cursor-pointer'
-                  : 'text-gray-600 cursor-not-allowed opacity-50'
-              }`}
-              title={canShare ? '分享助理' : '需要先遷移到 Turso 才能分享'}
-              aria-label={canShare ? '分享助理' : '需要遷移到 Turso'}
+              onClick={() => onShare(selectedAssistant)}
+              className='p-1.5 rounded-md text-gray-400 transition-colors hover:bg-blue-500/20 hover:text-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60'
+              title='分享助理'
+              aria-label='分享助理'
             >
               <ShareGlyph className='w-4 h-4' />
             </button>

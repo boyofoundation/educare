@@ -315,11 +315,22 @@ describe('BundleRunner', () => {
     render(<Harness />);
     await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
 
+    // Opening the recovery UI must not depend on loading a failed provider chunk.
+    providers.initializeProviders.mockRejectedValue(new Error('provider chunk unavailable'));
+
     fireEvent.click(screen.getByRole('button', { name: '更換 AI 服務商' }));
     await waitFor(() => expect(screen.getByTestId('bundle-provider-setup')).toBeInTheDocument());
+    providers.initializeProviders.mockResolvedValue(undefined);
     fireEvent.click(screen.getByRole('button', { name: '完成 Provider 設定' }));
 
     await waitFor(() => expect(screen.getByTestId('bundle-chat')).toHaveTextContent('Entry tutor'));
+  });
+
+  it('opens provider recovery when a configured chunk fails during bundle loading', async () => {
+    providers.initializeProviders.mockRejectedValue(new Error('provider chunk unavailable'));
+    render(<Harness preview={bundle()} />);
+
+    expect(await screen.findByTestId('bundle-provider-setup')).toBeInTheDocument();
   });
 
   it('persists edits to an imported bundle without replacing its record identity', async () => {

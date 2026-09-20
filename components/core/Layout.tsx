@@ -103,8 +103,12 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<LocalSearchResult[]>([]);
   const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchRetryToken, setSearchRetryToken] = useState(0);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [sessionTitleDraft, setSessionTitleDraft] = useState('');
+  const [sessionActionError, setSessionActionError] = useState<string | null>(null);
+  const [retrySessionAction, setRetrySessionAction] = useState<(() => void) | null>(null);
 
   const orderedSessions = useMemo(
     () =>
@@ -121,8 +125,8 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
 
   const drawerInteractive = !isTouch || state.isSidebarOpen;
 
-  const requestNavigation = (viewMode: Parameters<typeof actions.navigate>[0]['viewMode']) => {
-    const result = actions.navigate({ viewMode });
+  const requestNavigation = (request: Parameters<typeof actions.navigate>[0]) => {
+    const result = actions.navigate(request);
     if (result.allowed) {
       closeDrawerIfMobile();
     }
@@ -131,19 +135,44 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
   const beginRenameSession = (session: ChatSession) => {
     setEditingSessionId(session.id);
     setSessionTitleDraft(session.title);
+    setSessionActionError(null);
   };
 
-  const commitRenameSession = async (sessionId: string) => {
+  const runSessionAction = (operation: () => Promise<void>, onSuccess?: () => void): void => {
+    const attempt = async () => {
+      try {
+        await operation();
+        setSessionActionError(null);
+        setRetrySessionAction(null);
+        onSuccess?.();
+      } catch (error) {
+        console.error('Failed to update chat metadata:', error);
+        setSessionActionError('聊天更新失敗，請重試。');
+        setRetrySessionAction(() => attempt);
+      }
+    };
+    void attempt();
+  };
+
+  const commitRenameSession = (sessionId: string) => {
     const nextTitle = sessionTitleDraft.trim();
     if (nextTitle) {
-      await actions.renameSession(sessionId, nextTitle);
+      runSessionAction(
+        () => actions.renameSession(sessionId, nextTitle),
+        () => {
+          setEditingSessionId(null);
+          setSessionTitleDraft('');
+        },
+      );
+      return;
     }
     setEditingSessionId(null);
     setSessionTitleDraft('');
   };
 
   const openSessionFromSidebar = (sessionId: string) => {
-    if (!actions.navigate({ viewMode: 'chat', sessionId }).allowed) {
+    const result = actions.navigate({ viewMode: 'chat', sessionId });
+    if (!result.allowed) {
       return;
     }
     void actions.openSession(sessionId);
@@ -155,10 +184,12 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
       if (isTouch && previouslyFocusedRef.current) {
         const previous = previouslyFocusedRef.current;
         window.setTimeout(() => {
-          if (previous.isConnected) {
-            previous.focus();
-          } else {
+          // The trigger unmounts while the drawer is open. Prefer its new
+          // instance rather than the body (focused when the old node vanished).
+          if (drawerTriggerRef.current) {
             drawerTriggerRef.current?.focus();
+          } else if (previous.isConnected && previous !== document.body) {
+            previous.focus();
           }
         }, 0);
         previouslyFocusedRef.current = null;
@@ -182,6 +213,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
       !query
     ) {
       setSearchResults([]);
+      setSearchError(null);
       setIsSearchLoading(false);
       return () => {
         active = false;
@@ -192,12 +224,14 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
     const loadSearchResults = async () => {
       try {
         const sessions = (
-          await Promise.all(state.assistants.map(assistant => db.getSessionsForAssistant(assistant.id)))
+          await Promise.all(
+            state.assistants.map(assistant => db.getSessionsForAssistant(assistant.id)),
+          )
         ).flat();
         const projects = (
           await Promise.all(
             state.assistants.map(assistant =>
-              htmlProjectStore.listProjectsByAssistant(assistant.id).catch(() => []),
+              htmlProjectStore.listProjectsByAssistant(assistant.id),
             ),
           )
         ).flat();
@@ -212,9 +246,11 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             projects,
           }),
         );
+        setSearchError(null);
       } catch {
         if (active) {
           setSearchResults([]);
+          setSearchError('搜尋本機內容失敗，請重試。');
         }
       } finally {
         if (active) {
@@ -234,6 +270,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
     state.bundleMode,
     state.isBundleImportRoute,
     state.isShared,
+    searchRetryToken,
   ]);
 
   // Escape closes the mobile/tablet drawer
@@ -473,6 +510,26 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
     </>
   );
 
+  const sessionActionFeedback = sessionActionError ? (
+    <div
+      role='alert'
+      className={`mb-2 flex items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-200 ${
+        collapsed ? 'mx-0 flex-col' : ''
+      }`}
+    >
+      <span>{sessionActionError}</span>
+      {retrySessionAction && (
+        <button
+          type='button'
+          onClick={retrySessionAction}
+          className='rounded border border-red-300/40 px-2 py-1 font-medium text-red-100 hover:bg-red-500/20'
+        >
+          重試
+        </button>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div className='relative flex min-h-[100svh] h-[100dvh] overflow-hidden bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 font-sans'>
       {/* Sidebar Overlay for Mobile and Tablet */}
@@ -565,21 +622,24 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           selectedAssistant={state.currentAssistant}
           onSelect={assistantId => {
             // 強制切換到聊天模式，無論當前是什麼模式
-            if (actions.navigate({ viewMode: 'chat' }).allowed) {
-              void actions.selectAssistant(assistantId, true);
+            const result = actions.navigate({ viewMode: 'chat', assistantId });
+            if (result.allowed) {
               closeDrawerIfMobile();
             }
           }}
           onEdit={assistant => {
-            if (actions.navigate({ viewMode: 'edit_assistant' }).allowed) {
-              void actions.selectAssistant(assistant.id, false);
+            const result = actions.navigate({
+              viewMode: 'edit_assistant',
+              assistantId: assistant.id,
+            });
+            if (result.allowed) {
               closeDrawerIfMobile();
             }
           }}
           onDelete={actions.deleteAssistant}
           onShare={actions.openShareModal}
           onCreateNew={() => {
-            requestNavigation('new_assistant');
+            requestNavigation({ viewMode: 'new_assistant' });
           }}
           onExport={assistant => {
             try {
@@ -590,17 +650,18 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           }}
           onImport={async file => {
             try {
-              if (!actions.navigate({ viewMode: 'chat' }).allowed) {
+              const result = actions.navigate({ viewMode: 'chat', file });
+              if (!result.allowed) {
                 return;
               }
-              await actions.importAssistantPackage(file);
+              await result.completion;
               closeDrawerIfMobile();
             } catch (error) {
               window.alert(`匯入助理設定檔失敗：${(error as Error).message}`);
             }
           }}
           onBuildBundle={() => {
-            requestNavigation('bundle_builder');
+            requestNavigation({ viewMode: 'bundle_builder' });
           }}
           canShare={canShare}
           collapsed={collapsed}
@@ -622,7 +683,12 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             aria-label='搜尋助理、聊天與素材'
             title='搜尋助理、聊天與素材'
           >
-            <svg className='h-4 w-4 flex-shrink-0' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+            <svg
+              className='h-4 w-4 flex-shrink-0'
+              fill='none'
+              stroke='currentColor'
+              viewBox='0 0 24 24'
+            >
               <path
                 strokeLinecap='round'
                 strokeLinejoin='round'
@@ -633,8 +699,13 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             {!collapsed && <span>搜尋助理、聊天與素材</span>}
           </button>
           {isSearchOpen && !collapsed && (
-            <div id='sidebar-local-search' className='mt-2 space-y-2'>
+            <div
+              id='sidebar-local-search'
+              data-testid='navigation-search-results'
+              className='mt-2 space-y-2'
+            >
               <input
+                type='search'
                 autoFocus
                 value={searchQuery}
                 onChange={event => setSearchQuery(event.target.value)}
@@ -642,10 +713,28 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                 className='w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
                 aria-label='搜尋本機內容'
               />
-              {isSearchLoading && <p className='px-2 text-xs text-gray-500'>搜尋中…</p>}
-              {!isSearchLoading && searchQuery.trim() && searchResults.length === 0 && (
-                <p className='px-2 text-xs text-gray-500'>找不到符合的本機內容。</p>
+              {searchError && (
+                <div
+                  role='alert'
+                  className='flex items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-200'
+                >
+                  <span>{searchError}</span>
+                  <button
+                    type='button'
+                    onClick={() => setSearchRetryToken(previous => previous + 1)}
+                    className='rounded border border-red-300/40 px-2 py-1 font-medium text-red-100 hover:bg-red-500/20'
+                  >
+                    重試
+                  </button>
+                </div>
               )}
+              {isSearchLoading && <p className='px-2 text-xs text-gray-500'>搜尋中…</p>}
+              {!isSearchLoading &&
+                !searchError &&
+                searchQuery.trim() &&
+                searchResults.length === 0 && (
+                  <p className='px-2 text-xs text-gray-500'>找不到符合的本機內容。</p>
+                )}
               {searchResults.length > 0 && (
                 <div className='max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700/60 bg-gray-950/50 p-1'>
                   {searchResults.map(result => (
@@ -683,7 +772,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           <button
             type='button'
             onClick={() => {
-              requestNavigation('bundle_import');
+              requestNavigation({ viewMode: 'bundle_import' });
             }}
             className={
               collapsed
@@ -737,6 +826,8 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             />
           )}
 
+        {sessionActionFeedback}
+
         {/* Session List */}
         {state.currentAssistant &&
           (collapsed ? (
@@ -759,8 +850,12 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
               </button>
               <button
                 onClick={() => {
-                  if (actions.navigate({ viewMode: 'chat' }).allowed) {
-                    void actions.createNewSession(state.currentAssistant!.id);
+                  if (
+                    actions.navigate({
+                      viewMode: 'chat',
+                      newSessionAssistantId: state.currentAssistant!.id,
+                    }).allowed
+                  ) {
                     closeDrawerIfMobile();
                   }
                 }}
@@ -834,8 +929,12 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
               </div>
               <button
                 onClick={() => {
-                  if (actions.navigate({ viewMode: 'chat' }).allowed) {
-                    void actions.createNewSession(state.currentAssistant!.id);
+                  if (
+                    actions.navigate({
+                      viewMode: 'chat',
+                      newSessionAssistantId: state.currentAssistant!.id,
+                    }).allowed
+                  ) {
                     closeDrawerIfMobile();
                   }
                 }}
@@ -910,7 +1009,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                         type='button'
                         onClick={event => {
                           event.stopPropagation();
-                          void actions.toggleSessionPinned(sess.id);
+                          runSessionAction(() => actions.toggleSessionPinned(sess.id));
                         }}
                         className={`flex-shrink-0 rounded p-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
                           sess.isPinned ? 'text-amber-300' : 'text-gray-600 hover:text-gray-300'
@@ -939,16 +1038,19 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
                         value={sess.category ?? ''}
                         onChange={event => {
                           event.stopPropagation();
-                          void actions.setSessionCategory(sess.id, event.target.value);
+                          runSessionAction(() =>
+                            actions.setSessionCategory(sess.id, event.target.value),
+                          );
                         }}
                         onClick={event => event.stopPropagation()}
                         className='max-w-[4.5rem] rounded border border-gray-700/60 bg-gray-900/70 px-1 py-1 text-[10px] text-gray-400 outline-none focus:border-cyan-500/60'
                         aria-label={`設定聊天分類 ${sess.title}`}
                       >
                         <option value=''>分類</option>
-                        {sess.category && !['課程', '研究', '工作', '其他'].includes(sess.category) && (
-                          <option value={sess.category}>{sess.category}</option>
-                        )}
+                        {sess.category &&
+                          !['課程', '研究', '工作', '其他'].includes(sess.category) && (
+                            <option value={sess.category}>{sess.category}</option>
+                          )}
                         <option value='課程'>課程</option>
                         <option value='研究'>研究</option>
                         <option value='工作'>工作</option>
@@ -986,7 +1088,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
           >
             <button
               onClick={() => {
-                requestNavigation('settings');
+                requestNavigation({ viewMode: 'settings' });
               }}
               className={
                 collapsed
@@ -1019,9 +1121,11 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
       {collapsed && isSearchOpen && (
         <div
           id='sidebar-local-search'
+          data-testid='navigation-search-results'
           className='fixed left-[5.5rem] top-4 z-[60] w-80 rounded-xl border border-gray-700/60 bg-gray-900 p-3 shadow-2xl shadow-black/50'
         >
           <input
+            type='search'
             autoFocus
             value={searchQuery}
             onChange={event => setSearchQuery(event.target.value)}
@@ -1029,8 +1133,23 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
             className='w-full rounded-lg border border-gray-600/50 bg-gray-800 px-3 py-2 text-sm text-white outline-none transition placeholder:text-gray-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20'
             aria-label='搜尋本機內容'
           />
+          {searchError && (
+            <div
+              role='alert'
+              className='mt-2 flex items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-200'
+            >
+              <span>{searchError}</span>
+              <button
+                type='button'
+                onClick={() => setSearchRetryToken(previous => previous + 1)}
+                className='rounded border border-red-300/40 px-2 py-1 font-medium text-red-100 hover:bg-red-500/20'
+              >
+                重試
+              </button>
+            </div>
+          )}
           {isSearchLoading && <p className='mt-2 px-2 text-xs text-gray-500'>搜尋中…</p>}
-          {!isSearchLoading && searchQuery.trim() && searchResults.length === 0 && (
+          {!isSearchLoading && !searchError && searchQuery.trim() && searchResults.length === 0 && (
             <p className='mt-2 px-2 text-xs text-gray-500'>找不到符合的本機內容。</p>
           )}
           {searchResults.length > 0 && (

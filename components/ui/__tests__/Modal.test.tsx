@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import Modal from '../Modal';
@@ -56,6 +56,23 @@ describe('Modal', () => {
     expect(screen.getByText('Second content')).toBeInTheDocument();
   });
 
+  it('keeps focus in the topmost modal when nested modals open in one commit', () => {
+    render(
+      <>
+        <Modal isOpen={true} onClose={vi.fn()} title='Outer dialog'>
+          <button type='button'>Outer action</button>
+        </Modal>
+        <Modal isOpen={true} onClose={vi.fn()} title='Inner dialog'>
+          <button type='button'>Inner action</button>
+        </Modal>
+      </>,
+    );
+
+    expect(
+      screen.getByRole('dialog', { name: 'Inner dialog' }).contains(document.activeElement),
+    ).toBe(true);
+  });
+
   it('uses an accessible label when no visible title is provided', () => {
     render(
       <Modal isOpen={true} onClose={vi.fn()} ariaLabel='Custom dialog'>
@@ -83,6 +100,167 @@ describe('Modal', () => {
     expect(background).not.toHaveAttribute('aria-hidden');
     expect(background.inert).toBe(false);
     background.remove();
+  });
+
+  it('preserves original background inert and aria-hidden states after close', () => {
+    const background = document.createElement('main');
+    background.inert = true;
+    background.setAttribute('aria-hidden', 'false');
+    document.body.appendChild(background);
+
+    const { unmount } = render(
+      <Modal isOpen={true} onClose={vi.fn()} title='Inert dialog'>
+        <div>Modal content</div>
+      </Modal>,
+    );
+
+    expect(background).toHaveAttribute('aria-hidden', 'true');
+    expect(background.inert).toBe(true);
+
+    unmount();
+
+    expect(background).toHaveAttribute('aria-hidden', 'false');
+    expect(background.inert).toBe(true);
+    background.remove();
+  });
+
+  it('keeps background inert and focus in the topmost modal when a lower modal closes first', () => {
+    const background = document.createElement('main');
+    document.body.appendChild(background);
+
+    const { rerender } = render(
+      <>
+        <Modal isOpen={true} onClose={vi.fn()} title='Outer dialog'>
+          <button type='button'>Outer action</button>
+        </Modal>
+        <Modal isOpen={true} onClose={vi.fn()} title='Inner dialog'>
+          <button type='button'>Inner action</button>
+        </Modal>
+      </>,
+    );
+
+    const innerAction = screen.getByRole('button', { name: 'Inner action' });
+    innerAction.focus();
+
+    rerender(
+      <>
+        <Modal isOpen={false} onClose={vi.fn()} title='Outer dialog'>
+          <button type='button'>Outer action</button>
+        </Modal>
+        <Modal isOpen={true} onClose={vi.fn()} title='Inner dialog'>
+          <button type='button'>Inner action</button>
+        </Modal>
+      </>,
+    );
+
+    expect(background).toHaveAttribute('aria-hidden', 'true');
+    expect(background.inert).toBe(true);
+    expect(document.activeElement).toBe(innerAction);
+
+    rerender(
+      <>
+        <Modal isOpen={false} onClose={vi.fn()} title='Outer dialog'>
+          <button type='button'>Outer action</button>
+        </Modal>
+        <Modal isOpen={false} onClose={vi.fn()} title='Inner dialog'>
+          <button type='button'>Inner action</button>
+        </Modal>
+      </>,
+    );
+    expect(background).not.toHaveAttribute('aria-hidden');
+    expect(background.inert).toBe(false);
+    background.remove();
+  });
+
+  it('keeps Escape scoped to the topmost modal when both open in one commit', () => {
+    const outerClose = vi.fn();
+    const innerClose = vi.fn();
+
+    render(
+      <>
+        <Modal isOpen={true} onClose={outerClose} title='Outer dialog'>
+          <div>Outer content</div>
+        </Modal>
+        <Modal isOpen={true} onClose={innerClose} title='Inner dialog'>
+          <div>Inner content</div>
+        </Modal>
+      </>,
+    );
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(innerClose).toHaveBeenCalledTimes(1);
+    expect(outerClose).not.toHaveBeenCalled();
+  });
+
+  it('does not focus a modal again after it has been cleaned up', async () => {
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.textContent = 'Trigger';
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { rerender } = render(
+      <Modal isOpen={true} onClose={vi.fn()} title='Async dialog'>
+        <button type='button'>Action</button>
+      </Modal>,
+    );
+
+    rerender(
+      <Modal isOpen={false} onClose={vi.fn()} title='Async dialog'>
+        <button type='button'>Action</button>
+      </Modal>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
+
+  it('does not restore focus to a trigger inside a hidden or inert ancestor', () => {
+    const { rerender } = render(
+      <>
+        <div data-testid='trigger-ancestor'>
+          <button type='button'>Trigger</button>
+        </div>
+        <Modal isOpen={false} onClose={vi.fn()} title='Focus dialog'>
+          <button type='button'>Action</button>
+        </Modal>
+      </>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Trigger' });
+    const ancestor = screen.getByTestId('trigger-ancestor');
+    trigger.focus();
+    ancestor.hidden = true;
+    ancestor.inert = true;
+
+    rerender(
+      <>
+        <div data-testid='trigger-ancestor'>
+          <button type='button'>Trigger</button>
+        </div>
+        <Modal isOpen={true} onClose={vi.fn()} title='Focus dialog'>
+          <button type='button'>Action</button>
+        </Modal>
+      </>,
+    );
+
+    rerender(
+      <>
+        <div data-testid='trigger-ancestor'>
+          <button type='button'>Trigger</button>
+        </div>
+        <Modal isOpen={false} onClose={vi.fn()} title='Focus dialog'>
+          <button type='button'>Action</button>
+        </Modal>
+      </>,
+    );
+
+    expect(document.activeElement).not.toBe(trigger);
   });
 
   it('calls onClose when backdrop, close button, or Escape is used', () => {
@@ -210,6 +388,45 @@ describe('Modal', () => {
       </Modal>,
     );
     expect(document.body.style.overflow).toBe('scroll');
+    document.body.style.overflow = '';
+  });
+
+  it('keeps body scroll locked when a lower modal closes before the topmost modal', () => {
+    document.body.style.overflow = 'auto';
+    const { rerender } = render(
+      <>
+        <Modal isOpen={true} onClose={vi.fn()} title='Outer'>
+          <div>Outer</div>
+        </Modal>
+        <Modal isOpen={true} onClose={vi.fn()} title='Inner'>
+          <div>Inner</div>
+        </Modal>
+      </>,
+    );
+
+    rerender(
+      <>
+        <Modal isOpen={false} onClose={vi.fn()} title='Outer'>
+          <div>Outer</div>
+        </Modal>
+        <Modal isOpen={true} onClose={vi.fn()} title='Inner'>
+          <div>Inner</div>
+        </Modal>
+      </>,
+    );
+    expect(document.body.style.overflow).toBe('hidden');
+
+    rerender(
+      <>
+        <Modal isOpen={false} onClose={vi.fn()} title='Outer'>
+          <div>Outer</div>
+        </Modal>
+        <Modal isOpen={false} onClose={vi.fn()} title='Inner'>
+          <div>Inner</div>
+        </Modal>
+      </>,
+    );
+    expect(document.body.style.overflow).toBe('auto');
     document.body.style.overflow = '';
   });
 

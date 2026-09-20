@@ -55,4 +55,20 @@ describe('Onboarding', () => {
       completionReason: 'browse',
     });
   });
+
+  it('completes the guide and shows a session-only warning when storage fails', () => {
+    vi.mocked(localStorage.setItem).mockImplementation(() => {
+      throw new Error('storage blocked');
+    });
+    const onBrowse = vi.fn();
+
+    render(<Onboarding onBrowse={onBrowse} />);
+    fireEvent.click(screen.getByRole('button', { name: /先瀏覽已保存內容/ }));
+
+    expect(onBrowse).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('onboarding-persistence-warning')).toHaveTextContent('本分頁');
+
+    vi.mocked(localStorage.setItem).mockImplementation(() => undefined);
+  });
 });

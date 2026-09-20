@@ -65,8 +65,9 @@ export default defineConfig(() => {
               return 'vendor';
             }
 
-            // React 核心
-            if (id.includes('react') || id.includes('react-dom')) {
+            // Match only core packages; broad "react" matching also captures
+            // react-markdown and react-virtuoso before their deferred rules below.
+            if (/\/node_modules\/(react|react-dom|scheduler)\//.test(id)) {
               return 'react-vendor';
             }
 
@@ -128,9 +129,16 @@ export default defineConfig(() => {
             if (
               id.includes('react-markdown') ||
               id.includes('remark-') ||
-              id.includes('rehype-')
+              id.includes('rehype-') ||
+              id.includes('node_modules/katex')
             ) {
               return 'markdown';
+            }
+
+            // The virtualized chat list is loaded with ChatContainer. Keep its runtime out of
+            // the entry vendor chunk so the first route does not preload it before chat opens.
+            if (id.includes('node_modules/react-virtuoso')) {
+              return 'chat-runtime';
             }
 
             // 代碼高亮

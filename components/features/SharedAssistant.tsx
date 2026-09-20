@@ -16,7 +16,12 @@ const SharedAssistant: React.FC<SharedAssistantProps> = ({ assistantId }) => {
   const loadedRef = useRef(false);
 
   const checkApiKey = useCallback(async () => {
-    await initializeProviders();
+    try {
+      await initializeProviders();
+    } catch (error) {
+      console.warn('Provider loading failed; opening shared assistant provider recovery:', error);
+      return false;
+    }
     const needed = !isLLMAvailable();
     // Don't dispatch here - let the caller handle the viewMode setting
     return !needed;

@@ -30,6 +30,11 @@ vi.mock('../../../services/onboardingPreferences', async importOriginal => {
 // Mock ErrorBoundary separately to test error handling
 vi.mock('../ErrorBoundary', () => {
   const MockErrorBoundary = vi.fn(({ children }: { children: React.ReactNode }) => {
+    // Real route boundaries add no wrapper DOM on success; preserve the flex
+    // layout structure while retaining the outer-shell boundary assertion.
+    if (React.isValidElement(children) && children.type === React.Suspense) {
+      return children;
+    }
     return React.createElement('div', { 'data-testid': 'error-boundary' }, children);
   });
 
@@ -471,7 +476,7 @@ describe('AppShell', () => {
     it('should render within ErrorBoundary and AppProvider', async () => {
       render(<AppShell />);
 
-      expect(screen.getByTestId('error-boundary')).toBeInTheDocument();
+      expect(screen.getAllByTestId('error-boundary')[0]).toBeInTheDocument();
 
       // Wait for initial loading to complete
       await waitFor(
@@ -901,7 +906,7 @@ describe('AppShell', () => {
         chat.scrollTop = 240;
         canvas.scrollTop = 120;
 
-        expect(canvasTab).toHaveAttribute('aria-selected', 'true');
+        await waitFor(() => expect(canvasTab).toHaveAttribute('aria-selected', 'true'));
         expect(canvas).toBeVisible();
         expect(chat).not.toBeVisible();
 
@@ -988,8 +993,9 @@ describe('AppShell', () => {
         htmlProjectStoreMock.htmlProjectStore.deleteProjectsByAssistant,
       ).not.toHaveBeenCalled();
 
+      const managerButton = await screen.findByRole('button', { name: 'HTML Projects' });
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'HTML Projects' }));
+        fireEvent.click(managerButton);
       });
 
       await waitFor(() => {
@@ -1015,7 +1021,6 @@ describe('AppShell', () => {
     });
 
     it('should delete the active HTML project, close the workspace, and keep the manager entry point available', async () => {
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
       const projectSession = {
         ...TEST_SESSIONS.withMessages,
         activeProjectId: 'project-42',
@@ -1082,10 +1087,14 @@ describe('AppShell', () => {
           }),
         );
         expect(screen.queryByTestId('html-project-workspace')).not.toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'HTML Projects' })).toBeInTheDocument();
       });
 
-      confirmSpy.mockRestore();
+      // The manager stays open after deletion; its background trigger remains
+      // inert until the dialog closes, then can open the manager again.
+      fireEvent.keyDown(screen.getByRole('dialog', { name: 'HTML Canvas projects' }), {
+        key: 'Escape',
+      });
+      expect(await screen.findByRole('button', { name: 'HTML Projects' })).toBeInTheDocument();
     });
 
     it('should sync the workspace to each session active project when switching sessions', async () => {
@@ -1131,6 +1140,11 @@ describe('AppShell', () => {
 
     it('should delete an assistant and clear its HTML projects', async () => {
       const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      // Keep the selected assistant deterministic, independent of fixture creation timing.
+      vi.mocked(dbMock.getAllAssistants).mockResolvedValue([
+        { ...TEST_ASSISTANTS.basic, createdAt: 2000 },
+        { ...TEST_ASSISTANTS.withRag, createdAt: 1000 },
+      ]);
       vi.mocked(dbMock.getAssistant).mockImplementation(async assistantId => {
         if (assistantId === TEST_ASSISTANTS.basic.id) {
           return TEST_ASSISTANTS.basic;
@@ -1527,14 +1541,14 @@ describe('AppShell', () => {
     it('should wrap content in ErrorBoundary', () => {
       render(<AppShell />);
 
-      expect(screen.getByTestId('error-boundary')).toBeInTheDocument();
+      expect(screen.getAllByTestId('error-boundary')[0]).toBeInTheDocument();
     });
 
     it('should handle component errors gracefully', async () => {
       // This test verifies that ErrorBoundary is used
       render(<AppShell />);
 
-      expect(screen.getByTestId('error-boundary')).toBeInTheDocument();
+      expect(screen.getAllByTestId('error-boundary')[0]).toBeInTheDocument();
     });
   });
 

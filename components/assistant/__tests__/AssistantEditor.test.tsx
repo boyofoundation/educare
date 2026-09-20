@@ -133,6 +133,29 @@ describe('AssistantEditor', () => {
     );
   });
 
+  it('preserves local assistant metadata when saving an existing assistant', () => {
+    const assistantWithMetadata: Assistant = {
+      ...TEST_ASSISTANTS.basic,
+      isPinned: true,
+      category: '教學',
+      lastOpenedAt: 123456789,
+      isShared: true,
+    };
+    render(<AssistantEditor {...props} assistant={assistantWithMetadata} />);
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: 'Updated Name' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存助理' }));
+
+    expect(props.onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isPinned: true,
+        category: '教學',
+        lastOpenedAt: 123456789,
+        isShared: true,
+      }),
+    );
+  });
+
   it('calls onCancel when cancel is clicked', () => {
     render(<AssistantEditor {...props} />);
 
@@ -306,6 +329,21 @@ describe('AssistantEditor', () => {
       expect(testEnvironment.confirmSpy).toHaveBeenCalledWith('尚有未保存的變更，確定要離開嗎？'),
     );
     expect(props.onCancel).not.toHaveBeenCalled();
+  });
+
+  it('clears the dirty state when cancel successfully leaves a dirty draft', async () => {
+    const onDirtyChange = vi.fn();
+    render(<AssistantEditor {...props} onDirtyChange={onDirtyChange} />);
+    onDirtyChange.mockClear();
+
+    fireEvent.change(screen.getByLabelText('助理名稱'), { target: { value: '未保存助理' } });
+    await waitFor(() => expect(onDirtyChange).toHaveBeenCalledWith(true));
+
+    testEnvironment.confirmSpy.mockReturnValue(true);
+    fireEvent.click(screen.getByTestId('cancel-button'));
+
+    await waitFor(() => expect(props.onCancel).toHaveBeenCalledTimes(1));
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
   });
 
   it('shows a retryable save error without dropping the draft', async () => {

@@ -18,6 +18,12 @@ export interface OnboardingPreferences {
   completedAt?: number;
 }
 
+export interface OnboardingPersistenceResult extends OnboardingPreferences {
+  preferences: OnboardingPreferences;
+  /** True only when the latest update reached browser storage. */
+  persisted: boolean;
+}
+
 const DEFAULT_PREFERENCES: OnboardingPreferences = {
   completed: false,
   dismissed: false,
@@ -92,26 +98,29 @@ export const getOnboardingPreferences = (): OnboardingPreferences => {
 export const loadOnboardingPreferences = getOnboardingPreferences;
 
 /**
- * Persist a partial update and return the resulting in-memory value.
- * Storage errors are intentionally swallowed so first-run UI never blocks the
- * user; the caller can still continue in the current tab.
+ * Persist a partial update and return both the resulting in-memory value and
+ * whether browser storage accepted it. Storage errors remain non-blocking so
+ * the caller can still continue in the current tab, but are no longer hidden
+ * from the UI.
  */
 export const saveOnboardingPreferences = (
   update: Partial<OnboardingPreferences>,
-): OnboardingPreferences => {
+): OnboardingPersistenceResult => {
   const next = normalize({ ...getOnboardingPreferences(), ...update });
   memoryPreferences = next;
   const storage = getStorage();
+  let persisted = false;
 
   if (storage) {
     try {
       storage.setItem(ONBOARDING_PREFERENCES_KEY, JSON.stringify(next));
+      persisted = true;
     } catch {
       // Private browsing and quota restrictions should not make onboarding unusable.
     }
   }
 
-  return next;
+  return { ...next, preferences: { ...next }, persisted };
 };
 
 /** Alias kept for callers that prefer a setter-oriented name. */
@@ -120,7 +129,7 @@ export const setOnboardingPreferences = saveOnboardingPreferences;
 export const completeOnboarding = (
   reason: OnboardingCompletionReason,
   selectedTemplateId?: string,
-): OnboardingPreferences =>
+): OnboardingPersistenceResult =>
   saveOnboardingPreferences({
     completed: true,
     dismissed: reason === 'skip',

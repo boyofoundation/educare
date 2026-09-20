@@ -13,7 +13,7 @@ import {
   type ProviderType,
 } from '../../../services/llmAdapter';
 
-const { providerManagerMock, providerMock } = vi.hoisted(() => ({
+const { providerManagerMock, providerMock, initializeProvidersMock } = vi.hoisted(() => ({
   providerManagerMock: {
     getSettings: vi.fn(),
     getProvider: vi.fn(),
@@ -21,6 +21,7 @@ const { providerManagerMock, providerMock } = vi.hoisted(() => ({
     updateProviderConfig: vi.fn(),
     setActiveProvider: vi.fn(),
   },
+  initializeProvidersMock: vi.fn(),
   providerMock: {
     name: 'gemini',
     displayName: 'Google Gemini',
@@ -35,6 +36,7 @@ const { providerManagerMock, providerMock } = vi.hoisted(() => ({
 
 vi.mock('../../../services/providerRegistry', () => ({
   providerManager: providerManagerMock,
+  initializeProviders: initializeProvidersMock,
 }));
 
 vi.mock('../ProviderSettingsShareModal', () => ({
@@ -68,6 +70,7 @@ describe('ProviderSettings', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    initializeProvidersMock.mockResolvedValue(undefined);
     settings = cloneSettings();
     providerManagerMock.getSettings.mockImplementation(() => ({
       activeProvider: settings.activeProvider,
@@ -151,5 +154,45 @@ describe('ProviderSettings', () => {
     await user.click(screen.getByRole('button', { name: '關閉' }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes provider status after initialization resolves while mounted', async () => {
+    let resolveInitialization: (() => void) | undefined;
+    initializeProvidersMock.mockReturnValueOnce(
+      new Promise<void>(resolve => {
+        resolveInitialization = resolve;
+      }),
+    );
+    providerManagerMock.getProvider.mockReturnValue(null);
+
+    renderSettings();
+
+    expect(await screen.findByText('正在載入服務商設定…')).toBeInTheDocument();
+    expect(screen.getAllByText('未找到').length).toBeGreaterThan(0);
+
+    providerManagerMock.getProvider.mockReturnValue(providerMock);
+    resolveInitialization?.();
+
+    await waitFor(() => {
+      expect(screen.queryByText('未找到')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('已設定，尚未測試')).toBeInTheDocument();
+  });
+
+  it('shows initialization errors and retries provider loading from settings', async () => {
+    initializeProvidersMock
+      .mockRejectedValueOnce(new Error('provider chunk failed'))
+      .mockResolvedValueOnce(undefined);
+
+    renderSettings();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('provider chunk failed');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '重試載入' }));
+
+    await waitFor(() => expect(initializeProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
   });
 });

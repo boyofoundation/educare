@@ -181,7 +181,13 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
       dispatch({ type: 'SET_CURRENT_SESSION', payload: session });
 
       if (credentialAccess !== 'bundle') {
-        await initializeProviders();
+        try {
+          await initializeProviders();
+        } catch (error) {
+          console.warn('Provider loading failed; opening bundle provider recovery:', error);
+          setIsProviderSetupOpen(true);
+          return;
+        }
       }
       dispatch({ type: 'SET_VIEW_MODE', payload: isLLMAvailable() ? 'chat' : 'provider_settings' });
     } catch (error) {
@@ -251,7 +257,7 @@ const BundleRunner: React.FC<BundleRunnerProps> = ({ bundleId, bundle: previewBu
     clearCredentialState();
     await clearBundleOverride();
     loadedBundleIdRef.current = null;
-    await initializeProviders();
+    // ProviderSettings owns loading/error/retry; opening it must work even when a chunk fails.
     setCredentialAccess('own');
     setIsProviderSetupOpen(true);
   }, [clearBundleOverride, clearCredentialState]);

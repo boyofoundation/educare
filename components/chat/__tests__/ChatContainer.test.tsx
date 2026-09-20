@@ -28,6 +28,7 @@ const {
   mockGetProject,
   mockVirtuosoMount,
   mockVirtuosoUnmount,
+  mockVirtuosoProps,
 } = vi.hoisted(() => ({
   mockCreateNewSession: vi.fn().mockResolvedValue(undefined),
   mockUpdateSession: vi.fn().mockResolvedValue(undefined),
@@ -48,6 +49,7 @@ const {
   mockGetProject: vi.fn().mockResolvedValue(undefined),
   mockVirtuosoMount: vi.fn(),
   mockVirtuosoUnmount: vi.fn(),
+  mockVirtuosoProps: vi.fn(),
 }));
 
 vi.mock('../../core/useAppContext', async () => {
@@ -115,11 +117,14 @@ vi.mock('react-virtuoso', () => ({
   Virtuoso: ({
     data = [],
     itemContent,
+    ...props
   }: {
     data?: unknown[];
     itemContent: (index: number, item: unknown) => unknown;
+    [key: string]: unknown;
   }) => {
     const React = require('react');
+    mockVirtuosoProps(props);
     React.useEffect(() => {
       mockVirtuosoMount();
       return () => mockVirtuosoUnmount();
@@ -316,6 +321,92 @@ describe('ChatContainer', () => {
     expect(screen.getByRole('main', { name: '聊天對話' })).toBeInTheDocument();
   });
 
+  it('restores a tab-local draft after unmount when browser storage is unavailable', async () => {
+    const storage = window.localStorage;
+    vi.mocked(storage.getItem).mockImplementation(() => {
+      throw new Error('storage blocked');
+    });
+    vi.mocked(storage.setItem).mockImplementation(() => {
+      throw new Error('storage blocked');
+    });
+
+    const draftProps = {
+      ...defaultProps,
+      session: createMockChatSession({ id: 'draft-storage-failure-session' }),
+    };
+    const first = render(<ChatContainer {...draftProps} />);
+    await userEvent
+      .setup()
+      .type(screen.getByRole('textbox', { name: '輸入訊息' }), 'Keep this draft');
+    first.unmount();
+
+    render(<ChatContainer {...draftProps} />);
+
+    expect(screen.getByRole('textbox', { name: '輸入訊息' })).toHaveValue('Keep this draft');
+    expect(screen.getByTestId('chat-draft-persistence-warning')).toHaveTextContent('本分頁');
+
+    vi.mocked(storage.getItem).mockImplementation(() => null);
+    vi.mocked(storage.setItem).mockImplementation(() => undefined);
+    vi.mocked(storage.removeItem).mockImplementation(() => undefined);
+  });
+
+  it('prefers a newer failed-write draft over an older durable draft after remount', async () => {
+    const storage = window.localStorage;
+    const draftKey = 'test-assistant-1:newer-failed-write-session';
+    const durableDraft = JSON.stringify({ [draftKey]: 'Older durable draft' });
+    vi.mocked(storage.getItem).mockImplementation(() => durableDraft);
+    vi.mocked(storage.setItem).mockImplementation(() => {
+      throw new Error('quota exceeded');
+    });
+
+    const draftProps = {
+      ...defaultProps,
+      session: createMockChatSession({ id: 'newer-failed-write-session' }),
+    };
+    const first = render(<ChatContainer {...draftProps} />);
+    const textbox = screen.getByRole('textbox', { name: '輸入訊息' });
+    expect(textbox).toHaveValue('Older durable draft');
+    await userEvent.setup().clear(textbox);
+    await userEvent.setup().type(textbox, 'Newer session draft');
+    first.unmount();
+
+    const second = render(<ChatContainer {...draftProps} />);
+    expect(screen.getByRole('textbox', { name: '輸入訊息' })).toHaveValue('Newer session draft');
+
+    vi.mocked(storage.setItem).mockImplementation(() => undefined);
+    vi.mocked(storage.removeItem).mockImplementation(() => undefined);
+    fireEvent.change(screen.getByRole('textbox', { name: '輸入訊息' }), {
+      target: { value: '' },
+    });
+    second.unmount();
+  });
+
+  it('does not resurrect a durable draft when clearing fails', async () => {
+    const storage = window.localStorage;
+    const draftKey = 'test-assistant-1:failed-clear-session';
+    const durableDraft = JSON.stringify({ [draftKey]: 'Draft to clear' });
+    vi.mocked(storage.getItem).mockImplementation(() => durableDraft);
+    vi.mocked(storage.removeItem).mockImplementation(() => {
+      throw new Error('storage blocked');
+    });
+
+    const draftProps = {
+      ...defaultProps,
+      session: createMockChatSession({ id: 'failed-clear-session' }),
+    };
+    const first = render(<ChatContainer {...draftProps} />);
+    const textbox = screen.getByRole('textbox', { name: '輸入訊息' });
+    expect(textbox).toHaveValue('Draft to clear');
+    fireEvent.change(textbox, { target: { value: '' } });
+    first.unmount();
+
+    const second = render(<ChatContainer {...draftProps} />);
+    expect(screen.getByRole('textbox', { name: '輸入訊息' })).toHaveValue('');
+
+    vi.mocked(storage.removeItem).mockImplementation(() => undefined);
+    second.unmount();
+  });
+
   it('resets to the top when switching from history to a fresh session welcome', async () => {
     const { rerender } = render(
       <ChatContainer
@@ -358,13 +449,37 @@ describe('ChatContainer', () => {
     expect(screen.getByText('Fresh first message')).toBeInTheDocument();
   });
 
-  it('remounts the virtualizer when the message count changes within the same session', () => {
+  it('keeps the virtualizer mounted as messages are appended within the same session', async () => {
     const session = createMockChatSession({
       id: 'stable-session',
-      messages: [{ role: 'user', content: 'First message' }],
+      messages: [],
     });
     const { rerender } = render(<ChatContainer {...defaultProps} session={session} />);
 
+    await waitFor(() => expect(mockVirtuosoProps).toHaveBeenCalled());
+    const initialVirtuosoProps = mockVirtuosoProps.mock.calls.at(-1)?.[0] as {
+      customScrollParent?: HTMLElement;
+      initialItemCount?: number;
+    };
+    expect(initialVirtuosoProps.customScrollParent).toBe(
+      screen.getByRole('main', { name: '聊天對話' }),
+    );
+    expect(initialVirtuosoProps.initialItemCount).toBeUndefined();
+    expect(mockVirtuosoMount).toHaveBeenCalledTimes(1);
+    expect(mockVirtuosoUnmount).not.toHaveBeenCalled();
+
+    const firstMessage = { role: 'user' as const, content: 'First message' };
+    rerender(
+      <ChatContainer
+        {...defaultProps}
+        session={{
+          ...session,
+          messages: [firstMessage],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('First message')).toBeInTheDocument());
     expect(mockVirtuosoMount).toHaveBeenCalledTimes(1);
     expect(mockVirtuosoUnmount).not.toHaveBeenCalled();
 
@@ -373,14 +488,14 @@ describe('ChatContainer', () => {
         {...defaultProps}
         session={{
           ...session,
-          messages: [...session.messages, { role: 'model', content: 'Second message' }],
+          messages: [firstMessage, { role: 'model', content: 'Second message' }],
         }}
       />,
     );
 
-    expect(mockVirtuosoMount).toHaveBeenCalledTimes(2);
-    expect(mockVirtuosoUnmount).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('Second message')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Second message')).toBeInTheDocument());
+    expect(mockVirtuosoMount).toHaveBeenCalledTimes(1);
+    expect(mockVirtuosoUnmount).not.toHaveBeenCalled();
   });
 
   it('keeps a long sandbox welcome render scrollable within the chat container', () => {

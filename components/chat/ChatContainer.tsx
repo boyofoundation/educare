@@ -1,4 +1,12 @@
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { ChatContainerProps } from './types';
 import { AppContext } from '../core/useAppContext';
 import MessageBubble from './MessageBubble';
@@ -60,6 +68,25 @@ const CHAT_DRAFTS_STORAGE_KEY = 'educare.chat-drafts.v1';
 const CHAT_DRAFT_SAVE_DELAY_MS = 500;
 
 type StoredChatDrafts = Record<string, string>;
+type MemoryChatDrafts = Record<string, string | null>;
+
+type DraftPersistenceMode = 'persistent' | 'session';
+
+interface ChatDraftReadResult {
+  value: string;
+  mode: DraftPersistenceMode;
+}
+
+interface ChatDraftStorage {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+  removeItem: (key: string) => void;
+}
+
+// localStorage can be unavailable in private browsing, embedded previews, or after a
+// quota/security failure. Keep only the current tab's unsent drafts in memory as a
+// scoped fallback; callers still gate all draft persistence with draftPersistenceEnabled.
+const memoryChatDrafts: MemoryChatDrafts = {};
 
 interface ProviderReadiness {
   ready: boolean;
@@ -70,52 +97,110 @@ interface ProviderReadiness {
 const buildChatDraftKey = (assistantId: string, sessionId: string): string =>
   `${assistantId}:${sessionId}`;
 
-const readChatDrafts = (): StoredChatDrafts => {
-  if (typeof localStorage === 'undefined') {
-    return {};
+const getChatDraftStorage = (): ChatDraftStorage | null => {
+  if (typeof window === 'undefined') {
+    return null;
   }
 
   try {
-    const raw = localStorage.getItem(CHAT_DRAFTS_STORAGE_KEY);
+    const storage = window.localStorage;
+    if (
+      storage &&
+      typeof storage.getItem === 'function' &&
+      typeof storage.setItem === 'function' &&
+      typeof storage.removeItem === 'function'
+    ) {
+      return storage;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+};
+
+const readChatDrafts = (): { drafts: StoredChatDrafts; mode: DraftPersistenceMode } => {
+  const storage = getChatDraftStorage();
+  if (!storage) {
+    return { drafts: {}, mode: 'session' };
+  }
+
+  try {
+    const raw = storage.getItem(CHAT_DRAFTS_STORAGE_KEY);
     if (!raw) {
-      return {};
+      return { drafts: {}, mode: 'persistent' };
     }
 
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
+      return { drafts: {}, mode: 'session' };
     }
 
-    return Object.fromEntries(
-      Object.entries(parsed).filter(([, value]) => typeof value === 'string'),
-    ) as StoredChatDrafts;
+    return {
+      drafts: Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => typeof value === 'string'),
+      ) as StoredChatDrafts,
+      mode: 'persistent',
+    };
   } catch {
-    return {};
+    return { drafts: {}, mode: 'session' };
   }
 };
 
-const readChatDraft = (draftKey: string): string => readChatDrafts()[draftKey] ?? '';
+const readChatDraft = (draftKey: string): ChatDraftReadResult => {
+  if (Object.prototype.hasOwnProperty.call(memoryChatDrafts, draftKey)) {
+    return {
+      value: memoryChatDrafts[draftKey] ?? '',
+      mode: 'session',
+    };
+  }
 
-const persistChatDraft = (draftKey: string, value: string): void => {
-  if (typeof localStorage === 'undefined') {
-    return;
+  const stored = readChatDrafts();
+  const storedValue = stored.drafts[draftKey];
+  if (storedValue !== undefined) {
+    return { value: storedValue, mode: stored.mode };
+  }
+
+  return { value: '', mode: stored.mode };
+};
+
+const persistChatDraft = (draftKey: string, value: string): DraftPersistenceMode => {
+  const hasDraft = Boolean(value.trim());
+  if (!hasDraft) {
+    // Keep a tombstone until storage confirms the removal, otherwise an old durable
+    // value could reappear after a failed clear.
+    memoryChatDrafts[draftKey] = null;
+  }
+
+  const storage = getChatDraftStorage();
+  if (!storage) {
+    if (hasDraft) {
+      memoryChatDrafts[draftKey] = value;
+    }
+    return 'session';
   }
 
   try {
-    const drafts = readChatDrafts();
-    if (value.trim()) {
+    const drafts = readChatDrafts().drafts;
+    if (hasDraft) {
       drafts[draftKey] = value;
     } else {
       delete drafts[draftKey];
     }
 
     if (Object.keys(drafts).length === 0) {
-      localStorage.removeItem(CHAT_DRAFTS_STORAGE_KEY);
+      storage.removeItem(CHAT_DRAFTS_STORAGE_KEY);
     } else {
-      localStorage.setItem(CHAT_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+      storage.setItem(CHAT_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
     }
+
+    delete memoryChatDrafts[draftKey];
+    return 'persistent';
   } catch {
-    // Draft persistence is best effort; never block typing or provider setup.
+    if (hasDraft) {
+      memoryChatDrafts[draftKey] = value;
+    }
+    return 'session';
   }
 };
 
@@ -222,9 +307,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     () => buildChatDraftKey(assistantId, session.id),
     [assistantId, session.id],
   );
-  const initialDraft = draftPersistenceEnabled ? readChatDraft(draftKey) : '';
+  const initialDraftResult = draftPersistenceEnabled
+    ? readChatDraft(draftKey)
+    : { value: '', mode: 'persistent' as DraftPersistenceMode };
+  const initialDraft = initialDraftResult.value;
   const setAgentRunState = actions?.setAgentRunState;
   const [input, setInput] = useState(initialDraft);
+  const [draftPersistenceMode, setDraftPersistenceMode] = useState<DraftPersistenceMode>(
+    initialDraftResult.mode,
+  );
   const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [imageInputSupported, setImageInputSupported] = useState(() =>
@@ -265,6 +356,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   const handoffKickoffSessionIdRef = useRef<string | null>(null);
   const activeRunSessionRef = useRef<ChatSession | null>(null);
   const runOwnershipSessionIdRef = useRef<string | null>(null);
+  const [chatScrollParent, setChatScrollParent] = useState<HTMLDivElement | null>(null);
   const {
     containerRef,
     isAtBottom,
@@ -273,6 +365,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     resetScrollToTop,
     updatePinnedState,
   } = useStickToBottom(STICKY_SCROLL_THRESHOLD_PX);
+
+  useLayoutEffect(() => {
+    if (containerRef.current !== chatScrollParent) {
+      setChatScrollParent(containerRef.current);
+    }
+  }, [chatScrollParent, containerRef]);
 
   const setInputValue = useCallback((value: string) => {
     inputRef.current = value;
@@ -297,11 +395,17 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
 
     if (draftPersistenceEnabled) {
-      persistChatDraft(draftKeyRef.current, inputRef.current);
+      setDraftPersistenceMode(persistChatDraft(draftKeyRef.current, inputRef.current));
+    } else {
+      setDraftPersistenceMode('persistent');
     }
 
     draftKeyRef.current = draftKey;
-    const restoredDraft = draftPersistenceEnabled ? readChatDraft(draftKey) : '';
+    const restoredDraftResult = draftPersistenceEnabled
+      ? readChatDraft(draftKey)
+      : { value: '', mode: 'persistent' as DraftPersistenceMode };
+    const restoredDraft = restoredDraftResult.value;
+    setDraftPersistenceMode(restoredDraftResult.mode);
     inputRef.current = restoredDraft;
     setInputValue(restoredDraft);
   }, [draftKey, draftPersistenceEnabled, setInputValue]);
@@ -312,7 +416,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     }
 
     const timeoutId = window.setTimeout(() => {
-      persistChatDraft(draftKeyRef.current, inputRef.current);
+      setDraftPersistenceMode(persistChatDraft(draftKeyRef.current, inputRef.current));
     }, CHAT_DRAFT_SAVE_DELAY_MS);
 
     return () => window.clearTimeout(timeoutId);
@@ -365,10 +469,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       if (refreshTimer !== null) {
         window.clearTimeout(refreshTimer);
       }
-      window.removeEventListener(
-        PROVIDER_SETTINGS_CHANGED_EVENT,
-        handleProviderSettingsChanged,
-      );
+      window.removeEventListener(PROVIDER_SETTINGS_CHANGED_EVENT, handleProviderSettingsChanged);
     };
   }, [hasRuntimeContext]);
 
@@ -407,7 +508,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
 
   const handleRequestProviderSetup = () => {
     if (draftPersistenceEnabled) {
-      persistChatDraft(draftKeyRef.current, inputRef.current);
+      setDraftPersistenceMode(persistChatDraft(draftKeyRef.current, inputRef.current));
     }
 
     if (onRequestProviderSetup) {
@@ -1323,7 +1424,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     const userMessage = input.trim();
     setInputValue('');
     if (draftPersistenceEnabled) {
-      persistChatDraft(draftKeyRef.current, '');
+      setDraftPersistenceMode(persistChatDraft(draftKeyRef.current, ''));
     }
     setPendingAttachments([]);
     setAttachmentError(null);
@@ -1619,36 +1720,35 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
             )}
 
           <div role='log' aria-label='訊息列表' aria-live='polite' aria-relevant='additions text'>
-            {/* A stable key can leave react-virtuoso with an empty measurement after the
-                initial zero-item render; remount when persisted message count changes. */}
-            <Virtuoso
-              ref={virtuosoRef}
-              key={`${currentSession.id}:${currentSession.messages.length}`}
-              data={currentSession.messages}
-              customScrollParent={containerRef.current ?? undefined}
-              followOutput={isAtBottom ? 'auto' : false}
-              atBottomStateChange={() => {
-                updatePinnedState();
-              }}
-              initialItemCount={currentSession.messages.length}
-              itemContent={(index: number, msg: ChatMessage) => {
-                if (!msg) {
-                  return null;
-                }
-                return (
-                  <div className='mb-6' data-message-index={index}>
-                    <MessageBubble
-                      message={msg}
-                      index={index}
-                      assistantName={assistantName}
-                      citationContentsById={citationContentsById}
-                      onAcceptRouteProposal={onAcceptRouteProposal}
-                      onDeclineRouteProposal={onDeclineRouteProposal}
-                    />
-                  </div>
-                );
-              }}
-            />
+            {chatScrollParent && (
+              <Virtuoso
+                ref={virtuosoRef}
+                data={currentSession.messages}
+                customScrollParent={chatScrollParent}
+                computeItemKey={(index: number) => `${currentSession.id}:${index}`}
+                followOutput={isAtBottom ? 'auto' : false}
+                atBottomStateChange={() => {
+                  updatePinnedState();
+                }}
+                itemContent={(index: number, msg: ChatMessage) => {
+                  if (!msg) {
+                    return null;
+                  }
+                  return (
+                    <div className='mb-6' data-message-index={index}>
+                      <MessageBubble
+                        message={msg}
+                        index={index}
+                        assistantName={assistantName}
+                        citationContentsById={citationContentsById}
+                        onAcceptRouteProposal={onAcceptRouteProposal}
+                        onDeclineRouteProposal={onDeclineRouteProposal}
+                      />
+                    </div>
+                  );
+                }}
+              />
+            )}
 
             {isThinking && !streamingResponse && !hasLiveActivity && (
               <ThinkingIndicator assistantName={assistantName} statusText={statusText} />
@@ -1696,6 +1796,16 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           role='alert'
         >
           {attachmentError}
+        </div>
+      )}
+
+      {draftPersistenceEnabled && draftPersistenceMode === 'session' && (
+        <div
+          className='border-t border-amber-500/20 bg-amber-500/10 px-4 py-2 text-sm text-amber-100 md:px-6'
+          role='status'
+          data-testid='chat-draft-persistence-warning'
+        >
+          瀏覽器儲存空間目前無法使用；草稿只會保留在本分頁，關閉分頁後可能遺失。
         </div>
       )}
 

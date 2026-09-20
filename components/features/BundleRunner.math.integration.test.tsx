@@ -26,6 +26,11 @@ const {
     initializeProviders: vi.fn(),
     isLLMAvailable: vi.fn(),
     providerManager: {
+      getActiveProvider: vi.fn(() => ({
+        isAvailable: () => true,
+        displayName: 'Mock bundle provider',
+        supportsLocalMode: false,
+      })),
       setBundleProviderConfig: vi.fn(),
       clearBundleProviderConfig: vi.fn(),
     },

@@ -37,6 +37,18 @@ export interface NavigationRequest {
   assistantId?: string;
   sessionId?: string;
   projectId?: string;
+  /** Exact message to focus after entering the target session. */
+  messageIndex?: number;
+  /** Assistant package file to import after any dirty-editor confirmation. */
+  file?: File;
+  /** Create a fresh chat for this assistant after any dirty-editor confirmation. */
+  newSessionAssistantId?: string;
+}
+
+export interface NavigationResult {
+  allowed: boolean;
+  /** Resolves when an allowed intent has finished its asynchronous work. */
+  completion?: Promise<void>;
 }
 
 export interface AppState {
@@ -137,7 +149,7 @@ export interface AppContextValue {
     updateSession: (session: ChatSession) => Promise<void>;
     setViewMode: (mode: ViewMode) => void;
     setEditorDirty: (dirty: boolean) => void;
-    navigate: (request: NavigationRequest) => { allowed: boolean };
+    navigate: (request: NavigationRequest) => NavigationResult;
     confirmPendingNavigation: () => void;
     cancelPendingNavigation: () => void;
     openProviderSettings: (returnTo?: ViewMode) => void;

@@ -47,7 +47,6 @@ export const RAGFileUpload: React.FC<RAGFileUploadProps> = ({
         return;
       }
 
-      setLastFiles(files);
       setParseState({ type: 'idle' });
       setProcessingStatus('開始處理檔案…');
       const successfulChunks: RagChunk[] = [];
@@ -84,9 +83,20 @@ export const RAGFileUpload: React.FC<RAGFileUploadProps> = ({
 
       if (successfulChunks.length > 0) {
         onRagChunksChange([...ragChunks, ...successfulChunks]);
-        setParseState({ type: 'parsed', count: successfulChunks.length });
+        if (failedFiles.length > 0) {
+          setLastFiles(failedFiles);
+          setParseState({
+            type: 'error',
+            message: `部分檔案已解析，但以下檔案失敗：${failureMessages.join('；')}`,
+            files: failedFiles,
+          });
+        } else {
+          setLastFiles([]);
+          setParseState({ type: 'parsed', count: successfulChunks.length });
+        }
       } else if (failedFiles.length > 0) {
         // Preserve the current draft when parsing fails. The caller can retry.
+        setLastFiles(failedFiles);
         if (!hasParseFailure) {
           // Keep the legacy callback contract for an unsupported-only selection
           // while leaving parse failures untouched for an explicit retry.
@@ -98,6 +108,7 @@ export const RAGFileUpload: React.FC<RAGFileUploadProps> = ({
           files: failedFiles,
         });
       } else {
+        setLastFiles([]);
         onRagChunksChange(ragChunks);
         setParseState({ type: 'idle' });
       }

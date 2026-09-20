@@ -1,17 +1,12 @@
 import React from 'react';
-import { AppProvider, useAppContext, ErrorBoundary, Layout, ModelLoadingOverlay } from './index';
-import { AssistantEditor, ShareModal } from '../assistant';
-import { ChatContainer } from '../chat';
-import { HtmlProjectWorkspace } from '../canvas';
-import { ChatSession } from '../../types';
+import { AppProvider } from './AppContext';
+import { useAppContext } from './useAppContext';
+import { ErrorBoundary } from './ErrorBoundary';
+import { LazyBoundary } from './LazyBoundary';
+import { Layout } from './Layout';
+import { ModelLoadingOverlay } from './ModelLoadingOverlay';
+import type { ChatSession } from '../../types';
 import type { ChatTokenInfo } from '../chat/types';
-import BundleRunner from '../features/BundleRunner';
-import SharedAssistant from '../features/SharedAssistant';
-import BundleImportPage from '../bundle/BundleImportPage';
-import BundleBuilder from '../bundle/BundleBuilder';
-import BundleProviderSetup from '../bundle/BundleProviderSetup';
-import ProviderSettings from '../settings/ProviderSettings';
-import AppearanceSettings from '../settings/AppearanceSettings';
 import ProviderSettingsImportModal from '../settings/ProviderSettingsImportModal';
 import { Onboarding } from './Onboarding';
 import Modal from '../ui/Modal';
@@ -20,6 +15,34 @@ import { providerManager } from '../../services/providerRegistry';
 import { ChatCompactorService } from '../../services/chatCompactorService';
 import { countConversationRounds, groupMessagesByRounds } from '../../services/conversationUtils';
 import { getBundleMetrics } from '../../services/bundleMetricsService';
+
+const LazyAssistantEditor = React.lazy(async () => {
+  const module = await import('../assistant');
+  return { default: module.AssistantEditor };
+});
+
+const LazyShareModal = React.lazy(async () => {
+  const module = await import('../assistant');
+  return { default: module.ShareModal };
+});
+
+const LazyChatContainer = React.lazy(async () => {
+  const module = await import('../chat');
+  return { default: module.ChatContainer };
+});
+
+const LazyHtmlProjectWorkspace = React.lazy(async () => {
+  const module = await import('../canvas');
+  return { default: module.HtmlProjectWorkspace };
+});
+
+const LazyBundleRunner = React.lazy(() => import('../features/BundleRunner'));
+const LazySharedAssistant = React.lazy(() => import('../features/SharedAssistant'));
+const LazyBundleImportPage = React.lazy(() => import('../bundle/BundleImportPage'));
+const LazyBundleBuilder = React.lazy(() => import('../bundle/BundleBuilder'));
+const LazyBundleProviderSetup = React.lazy(() => import('../bundle/BundleProviderSetup'));
+const LazyProviderSettings = React.lazy(() => import('../settings/ProviderSettings'));
+const LazyAppearanceSettings = React.lazy(() => import('../settings/AppearanceSettings'));
 
 function AppContent(): React.JSX.Element {
   const { state, actions } = useAppContext();
@@ -245,10 +268,14 @@ function AppContent(): React.JSX.Element {
   if (state.bundleMode) {
     return (
       <Layout>
-        <BundleRunner bundleId={state.bundleMode.bundleId} bundle={state.bundleMode.bundle} />
+        <LazyBoundary>
+          <LazyBundleRunner bundleId={state.bundleMode.bundleId} bundle={state.bundleMode.bundle} />
+        </LazyBoundary>
         {state.viewMode === 'provider_settings' && (
           <div className='absolute inset-0 overflow-y-auto bg-gray-900 p-4 md:p-8'>
-            <BundleProviderSetup onReady={() => actions.setViewMode('chat')} />
+            <LazyBoundary>
+              <LazyBundleProviderSetup onReady={() => actions.setViewMode('chat')} />
+            </LazyBoundary>
           </div>
         )}
         <ProviderSettingsImportModal onApplied={() => actions.setViewMode('chat')} />
@@ -260,14 +287,16 @@ function AppContent(): React.JSX.Element {
   if (state.isBundleImportRoute) {
     return (
       <Layout>
-        <BundleImportPage
-          onClose={() => {
-            const url = new URL(window.location.href);
-            url.searchParams.delete('import');
-            window.location.href = url.toString();
-          }}
-          onOpenBundle={() => undefined}
-        />
+        <LazyBoundary>
+          <LazyBundleImportPage
+            onClose={() => {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('import');
+              window.location.href = url.toString();
+            }}
+            onOpenBundle={() => undefined}
+          />
+        </LazyBoundary>
       </Layout>
     );
   }
@@ -277,30 +306,36 @@ function AppContent(): React.JSX.Element {
     // SharedAssistant component handles loading the shared assistant and setting up state
     return (
       <Layout>
-        <SharedAssistant assistantId={state.sharedAssistantId} />
+        <LazyBoundary>
+          <LazySharedAssistant assistantId={state.sharedAssistantId} />
+        </LazyBoundary>
 
         {/* Render content based on current view mode, just like normal mode */}
         {(state.viewMode === 'provider_settings' || state.viewMode === 'api_setup') && (
           <div className='absolute inset-0 overflow-y-auto bg-gray-900'>
-            <ProviderSettings onClose={() => actions.setViewMode('chat')} />
+            <LazyBoundary>
+              <LazyProviderSettings onClose={() => actions.setViewMode('chat')} />
+            </LazyBoundary>
           </div>
         )}
 
         {state.viewMode === 'chat' && state.currentAssistant && state.currentSession && (
-          <ChatContainer
-            session={state.currentSession}
-            assistantName={state.currentAssistant.name}
-            systemPrompt={state.currentAssistant.systemPrompt}
-            assistantId={state.currentAssistant.id}
-            ragChunks={state.currentAssistant.ragChunks ?? []}
-            onNewMessage={handleNewMessage}
-            sharedMode={!!state.isShared}
-            assistantDescription={state.currentAssistant.description}
-            starterPrompts={state.currentAssistant.starterPrompts ?? []}
-            subagentDelegationEnabled={state.currentAssistant.subagentDelegationEnabled ?? false}
-            mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
-            webSpeechToolsEnabled={state.currentAssistant.webSpeechToolsEnabled ?? false}
-          />
+          <LazyBoundary>
+            <LazyChatContainer
+              session={state.currentSession}
+              assistantName={state.currentAssistant.name}
+              systemPrompt={state.currentAssistant.systemPrompt}
+              assistantId={state.currentAssistant.id}
+              ragChunks={state.currentAssistant.ragChunks ?? []}
+              onNewMessage={handleNewMessage}
+              sharedMode={!!state.isShared}
+              assistantDescription={state.currentAssistant.description}
+              starterPrompts={state.currentAssistant.starterPrompts ?? []}
+              subagentDelegationEnabled={state.currentAssistant.subagentDelegationEnabled ?? false}
+              mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
+              webSpeechToolsEnabled={state.currentAssistant.webSpeechToolsEnabled ?? false}
+            />
+          </LazyBoundary>
         )}
 
         {/* Loading Screen */}
@@ -454,34 +489,38 @@ function AppContent(): React.JSX.Element {
       </Modal>
       {/* View Mode Content */}
       {state.viewMode === 'new_assistant' && !onboardingOpen && (
-        <AssistantEditor
-          assistant={null}
-          initialTemplateId={initialTemplateId}
-          onDirtyChange={actions.setEditorDirty}
-          onSave={async assistant => {
-            await actions.saveAssistant(assistant);
-            setInitialTemplateId(undefined);
-          }}
-          onCancel={() => {
-            setInitialTemplateId(undefined);
-            if (state.assistants.length > 0) {
-              actions.setViewMode('chat');
-            } else {
-              actions.setViewMode('new_assistant');
-            }
-          }}
-          onShare={actions.openShareModal}
-        />
+        <LazyBoundary>
+          <LazyAssistantEditor
+            assistant={null}
+            initialTemplateId={initialTemplateId}
+            onDirtyChange={actions.setEditorDirty}
+            onSave={async assistant => {
+              await actions.saveAssistant(assistant);
+              setInitialTemplateId(undefined);
+            }}
+            onCancel={() => {
+              setInitialTemplateId(undefined);
+              if (state.assistants.length > 0) {
+                actions.setViewMode('chat');
+              } else {
+                actions.setViewMode('new_assistant');
+              }
+            }}
+            onShare={actions.openShareModal}
+          />
+        </LazyBoundary>
       )}
 
       {state.viewMode === 'edit_assistant' && state.currentAssistant && (
-        <AssistantEditor
-          assistant={state.currentAssistant}
-          onSave={actions.saveAssistant}
-          onDirtyChange={actions.setEditorDirty}
-          onCancel={() => actions.setViewMode('chat')}
-          onShare={actions.openShareModal}
-        />
+        <LazyBoundary>
+          <LazyAssistantEditor
+            assistant={state.currentAssistant}
+            onSave={actions.saveAssistant}
+            onDirtyChange={actions.setEditorDirty}
+            onCancel={() => actions.setViewMode('chat')}
+            onShare={actions.openShareModal}
+          />
+        </LazyBoundary>
       )}
 
       {state.viewMode === 'chat' && state.currentAssistant && state.currentSession && (
@@ -523,56 +562,60 @@ function AppContent(): React.JSX.Element {
             className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${htmlProjectAccessEnabled && state.isProjectWorkspaceOpen && state.activeProjectId ? 'lg:w-[55%]' : 'w-full'}`}
           >
             <div className='min-h-0 flex-1'>
-              <ChatContainer
-                session={state.currentSession}
-                assistantName={state.currentAssistant.name}
-                systemPrompt={state.currentAssistant.systemPrompt}
-                assistantId={state.currentAssistant.id}
-                ragChunks={state.currentAssistant.ragChunks ?? []}
-                onNewMessage={handleNewMessage}
-                onRequestProviderSetup={() => actions.openProviderSettings('chat')}
-                sharedMode={!!state.isShared}
-                assistantDescription={state.currentAssistant.description}
-                starterPrompts={state.currentAssistant.starterPrompts ?? []}
-                subagentDelegationEnabled={
-                  state.currentAssistant.subagentDelegationEnabled ?? false
-                }
-                mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
-                webSpeechToolsEnabled={state.currentAssistant.webSpeechToolsEnabled ?? false}
-                hideHeader={state.isMobile || state.isTablet}
-                isWorkspaceOpen={Boolean(
-                  htmlProjectAccessEnabled && state.isProjectWorkspaceOpen && state.activeProjectId,
-                )}
-                headerActions={
-                  state.isMobile || state.isTablet ? undefined : htmlProjectAccessEnabled &&
-                    !state.isProjectWorkspaceOpen &&
-                    state.activeProjectId ? (
-                    <button
-                      type='button'
-                      onClick={() => actions.setProjectWorkspaceOpen(true)}
-                      aria-label='顯示 HTML Canvas'
-                      title='顯示 HTML Canvas'
-                      className='inline-flex items-center gap-1.5 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1.5 text-xs font-medium text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-white md:px-3 md:text-sm'
-                    >
-                      <svg
-                        className='h-3.5 w-3.5 md:h-4 md:w-4'
-                        fill='none'
-                        stroke='currentColor'
-                        viewBox='0 0 24 24'
-                        aria-hidden='true'
+              <LazyBoundary>
+                <LazyChatContainer
+                  session={state.currentSession}
+                  assistantName={state.currentAssistant.name}
+                  systemPrompt={state.currentAssistant.systemPrompt}
+                  assistantId={state.currentAssistant.id}
+                  ragChunks={state.currentAssistant.ragChunks ?? []}
+                  onNewMessage={handleNewMessage}
+                  onRequestProviderSetup={() => actions.openProviderSettings('chat')}
+                  sharedMode={!!state.isShared}
+                  assistantDescription={state.currentAssistant.description}
+                  starterPrompts={state.currentAssistant.starterPrompts ?? []}
+                  subagentDelegationEnabled={
+                    state.currentAssistant.subagentDelegationEnabled ?? false
+                  }
+                  mathToolsEnabled={state.currentAssistant.mathToolsEnabled ?? false}
+                  webSpeechToolsEnabled={state.currentAssistant.webSpeechToolsEnabled ?? false}
+                  hideHeader={state.isMobile || state.isTablet}
+                  isWorkspaceOpen={Boolean(
+                    htmlProjectAccessEnabled &&
+                      state.isProjectWorkspaceOpen &&
+                      state.activeProjectId,
+                  )}
+                  headerActions={
+                    state.isMobile || state.isTablet ? undefined : htmlProjectAccessEnabled &&
+                      !state.isProjectWorkspaceOpen &&
+                      state.activeProjectId ? (
+                      <button
+                        type='button'
+                        onClick={() => actions.setProjectWorkspaceOpen(true)}
+                        aria-label='顯示 HTML Canvas'
+                        title='顯示 HTML Canvas'
+                        className='inline-flex items-center gap-1.5 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1.5 text-xs font-medium text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-white md:px-3 md:text-sm'
                       >
-                        <path
-                          strokeLinecap='round'
-                          strokeLinejoin='round'
-                          strokeWidth={2}
-                          d='M13 5l7 7-7 7M5 5v14'
-                        />
-                      </svg>
-                      <span className='hidden sm:inline'>顯示 HTML Canvas</span>
-                    </button>
-                  ) : undefined
-                }
-              />
+                        <svg
+                          className='h-3.5 w-3.5 md:h-4 md:w-4'
+                          fill='none'
+                          stroke='currentColor'
+                          viewBox='0 0 24 24'
+                          aria-hidden='true'
+                        >
+                          <path
+                            strokeLinecap='round'
+                            strokeLinejoin='round'
+                            strokeWidth={2}
+                            d='M13 5l7 7-7 7M5 5v14'
+                          />
+                        </svg>
+                        <span className='hidden sm:inline'>顯示 HTML Canvas</span>
+                      </button>
+                    ) : undefined
+                  }
+                />
+              </LazyBoundary>
             </div>
           </div>
           {hasWorkspace && state.activeProjectId && (
@@ -587,14 +630,18 @@ function AppContent(): React.JSX.Element {
               }
               className='min-h-0 min-w-0 flex-1 overflow-hidden border-t border-gray-800 lg:h-full lg:flex-none lg:w-[45%] lg:min-w-[360px] lg:max-w-[48%] lg:border-l lg:border-t-0'
             >
-              {workspaceVisible && <HtmlProjectWorkspace projectId={state.activeProjectId} />}
+              {workspaceVisible && (
+                <LazyBoundary>
+                  <LazyHtmlProjectWorkspace projectId={state.activeProjectId} />
+                </LazyBoundary>
+              )}
             </div>
           )}
         </div>
       )}
 
       {state.viewMode === 'settings' && (
-        <div className='h-full overflow-y-auto bg-gray-900'>
+        <div className='ui-surface h-full overflow-y-auto' data-testid='settings-page'>
           <div className='max-w-3xl mx-auto p-6 md:p-8'>
             {/* Header */}
             <div className='mb-6'>
@@ -607,7 +654,7 @@ function AppContent(): React.JSX.Element {
               const providerCount = providerManager.getAvailableProviders().length;
               const ready = providerCount > 0;
               return (
-                <div className='mb-6 rounded-2xl border border-gray-700/40 bg-gray-800/40 p-5'>
+                <div className='ui-panel mb-6 rounded-2xl p-5'>
                   <h3 className='text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3'>
                     服務狀態
                   </h3>
@@ -623,7 +670,7 @@ function AppContent(): React.JSX.Element {
                       <p className='text-white font-medium'>
                         {ready ? `已設定 ${providerCount} 個 AI 服務商` : '尚未配置 AI 服務商'}
                       </p>
-                      <p className={`text-sm ${ready ? 'text-green-300' : 'text-yellow-300'}`}>
+                      <p className='ui-muted text-sm'>
                         {ready
                           ? '設定已保存；這不代表已通過即時連線測試。'
                           : '請至下方完成 AI 服務商設定'}
@@ -639,20 +686,19 @@ function AppContent(): React.JSX.Element {
                 : '目前沒有網路連線。仍可讀取這台裝置的資料；雲端 AI 需要恢復連線。'}{' '}
               瀏覽器資料不會自動同步到其他裝置，請匯出檔案另存備份。
             </p>
-            <AppearanceSettings className='mb-6' />
+            <LazyBoundary>
+              <LazyAppearanceSettings className='mb-6' />
+            </LazyBoundary>
             <button
               type='button'
               onClick={() => setOnboardingMode('open')}
-              className='mb-6 min-h-11 rounded-lg border border-gray-500 px-4 py-2 text-gray-200'
+              className='ui-control mb-6 min-h-11 rounded-lg px-4 py-2'
             >
               重新開啟開始引導
             </button>
 
-            <section
-              className='mb-6 rounded-2xl border border-fuchsia-500/20 bg-fuchsia-500/5 p-5'
-              aria-label='協作包本機統計'
-            >
-              <h3 className='text-xs font-semibold uppercase tracking-wide text-fuchsia-200'>
+            <section className='ui-panel mb-6 rounded-2xl p-5' aria-label='協作包本機統計'>
+              <h3 className='ui-text text-xs font-semibold uppercase tracking-wide'>
                 協作包本機統計
               </h3>
               <p className='mt-1 text-xs text-gray-400'>只儲存在此瀏覽器，不會傳送到伺服器。</p>
@@ -685,7 +731,7 @@ function AppContent(): React.JSX.Element {
             <div className='grid grid-cols-1 sm:grid-cols-2 gap-4'>
               <button
                 onClick={() => actions.openProviderSettings('settings')}
-                className='group text-left p-5 rounded-2xl border border-gray-700/40 bg-gray-800/40 hover:border-cyan-500/50 hover:bg-gray-800/70 transition-all sm:col-span-2'
+                className='ui-panel group text-left p-5 rounded-2xl hover:border-cyan-500/50 transition-all sm:col-span-2'
               >
                 <div className='flex items-center gap-3 mb-2'>
                   <div className='flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500/30 to-fuchsia-500/20 text-xl'>
@@ -717,25 +763,31 @@ function AppContent(): React.JSX.Element {
 
       {(state.viewMode === 'provider_settings' || state.viewMode === 'api_setup') && (
         <div className='absolute inset-0 overflow-y-auto bg-gray-900'>
-          <ProviderSettings onClose={actions.closeProviderSettings} />
+          <LazyBoundary>
+            <LazyProviderSettings onClose={actions.closeProviderSettings} />
+          </LazyBoundary>
         </div>
       )}
 
       {state.viewMode === 'bundle_import' && (
-        <BundleImportPage
-          onClose={() => actions.setViewMode(state.currentAssistant ? 'chat' : 'new_assistant')}
-          onOpenBundle={() => undefined}
-        />
+        <LazyBoundary>
+          <LazyBundleImportPage
+            onClose={() => actions.setViewMode(state.currentAssistant ? 'chat' : 'new_assistant')}
+            onOpenBundle={() => undefined}
+          />
+        </LazyBoundary>
       )}
 
       {state.viewMode === 'bundle_builder' && (
-        <BundleBuilder
-          assistants={state.assistants}
-          onClose={() => actions.setViewMode(state.currentAssistant ? 'chat' : 'new_assistant')}
-          onPreviewBundle={bundle => {
-            actions.setBundleMode({ bundleId: `preview-${Date.now()}`, bundle });
-          }}
-        />
+        <LazyBoundary>
+          <LazyBundleBuilder
+            assistants={state.assistants}
+            onClose={() => actions.setViewMode(state.currentAssistant ? 'chat' : 'new_assistant')}
+            onPreviewBundle={bundle => {
+              actions.setBundleMode({ bundleId: `preview-${Date.now()}`, bundle });
+            }}
+          />
+        </LazyBoundary>
       )}
 
       {/* Loading Screen */}
@@ -826,11 +878,13 @@ function AppContent(): React.JSX.Element {
 
       {/* Share Modal */}
       {state.assistantToShare && (
-        <ShareModal
-          isOpen={state.isShareModalOpen}
-          onClose={actions.closeShareModal}
-          assistant={state.assistantToShare}
-        />
+        <LazyBoundary>
+          <LazyShareModal
+            isOpen={state.isShareModalOpen}
+            onClose={actions.closeShareModal}
+            assistant={state.assistantToShare}
+          />
+        </LazyBoundary>
       )}
 
       <ProviderSettingsImportModal

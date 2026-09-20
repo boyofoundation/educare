@@ -1,6 +1,10 @@
-import React, { useState } from 'react';
-import { providerManager } from '../../services/providerRegistry';
-import { ProviderType, ProviderSettings as IProviderSettings } from '../../services/llmAdapter';
+import React, { useEffect, useState } from 'react';
+import { initializeProviders, providerManager } from '../../services/providerRegistry';
+import {
+  PROVIDER_SETTINGS_CHANGED_EVENT,
+  ProviderType,
+  ProviderSettings as IProviderSettings,
+} from '../../services/llmAdapter';
 import ProviderSettingsShareModal from './ProviderSettingsShareModal';
 
 interface ProviderSettingsProps {
@@ -54,6 +58,52 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
     Partial<Record<ProviderType, ProviderFieldErrors>>
   >({});
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [initializationAttempt, setInitializationAttempt] = useState(0);
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [initializationError, setInitializationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncSettings = () => {
+      if (isMounted) {
+        setSettings(providerManager.getSettings());
+      }
+    };
+
+    const loadProviders = async () => {
+      setIsInitializing(true);
+      setInitializationError(null);
+
+      try {
+        await initializeProviders();
+        syncSettings();
+      } catch (error) {
+        if (isMounted) {
+          syncSettings();
+          setInitializationError(
+            error instanceof Error ? error.message : '無法載入服務商設定，請稍後重試。',
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsInitializing(false);
+        }
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener(PROVIDER_SETTINGS_CHANGED_EVENT, syncSettings);
+    }
+    void loadProviders();
+
+    return () => {
+      isMounted = false;
+      if (typeof window !== 'undefined') {
+        window.removeEventListener(PROVIDER_SETTINGS_CHANGED_EVENT, syncSettings);
+      }
+    };
+  }, [initializationAttempt]);
 
   const providerInfo: Record<ProviderType, ProviderInfo> = {
     gemini: {
@@ -347,6 +397,34 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ onClose }) => {
           </button>
         )}
       </div>
+
+      {isInitializing && (
+        <div
+          className='mb-6 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100'
+          role='status'
+          aria-live='polite'
+        >
+          正在載入服務商設定…
+        </div>
+      )}
+
+      {initializationError && (
+        <div
+          className='mb-6 flex flex-col gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100 sm:flex-row sm:items-center sm:justify-between'
+          role='alert'
+          aria-live='assertive'
+        >
+          <span>{initializationError}</span>
+          <button
+            type='button'
+            onClick={() => setInitializationAttempt(previous => previous + 1)}
+            disabled={isInitializing}
+            className='shrink-0 rounded-lg border border-red-300/40 px-3 py-1.5 font-medium text-red-50 transition hover:border-red-200 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60'
+          >
+            重試載入
+          </button>
+        </div>
+      )}
 
       {/* 目前使用中的服務商 */}
       <div className='mb-6 rounded-2xl border border-cyan-500/30 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 p-5'>

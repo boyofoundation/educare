@@ -95,6 +95,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
 
   const draftAssistant = useMemo<Assistant>(
     () => ({
+      ...assistant,
       id: assistant?.id ?? '',
       name: name.trim(),
       description: description.trim(),
@@ -108,8 +109,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
       routableAssistantIds,
     }),
     [
-      assistant?.createdAt,
-      assistant?.id,
+      assistant,
       description,
       mathToolsEnabled,
       name,
@@ -279,6 +279,7 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
         return;
       }
     }
+    onDirtyChange?.(false);
     onCancel();
   };
 
@@ -330,13 +331,14 @@ export const AssistantEditor: React.FC<AssistantEditorProps> = ({
     try {
       const assistantId = assistant?.id || `asst_${Date.now()}`;
       const newAssistant: Assistant = {
+        ...assistant,
         id: assistantId,
         name: name.trim(),
         description: description.trim(),
         systemPrompt: systemPrompt.trim(),
         ragChunks,
         starterPrompts: finalStarterPrompts,
-        createdAt: assistant?.createdAt || Date.now(),
+        createdAt: assistant?.createdAt ?? Date.now(),
         subagentDelegationEnabled,
         mathToolsEnabled,
         webSpeechToolsEnabled,

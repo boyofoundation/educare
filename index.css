@@ -124,6 +124,13 @@ body {
   color: var(--appearance-text);
 }
 
+/* Modal portals sit outside #root. Apply the matching surface to the dialog
+ * itself so light-theme text never lands on a retained dark utility background. */
+.ui-modal {
+  background: var(--appearance-surface);
+  color: var(--appearance-text);
+}
+
 .ui-panel {
   border: 1px solid var(--appearance-border);
   background: var(--appearance-surface-raised);

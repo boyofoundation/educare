@@ -85,6 +85,27 @@ const getDispatchedSession = (dispatch: ReturnType<typeof vi.fn>): ChatSession =
 };
 
 describe('SharedAssistant', () => {
+  it('keeps a loaded assistant and opens settings recovery when provider loading fails', async () => {
+    mockProviderRegistry.initializeProviders.mockRejectedValue(
+      new Error('provider chunk unavailable'),
+    );
+    const { dispatch } = setup('assistant-a');
+
+    await waitFor(() =>
+      expect(dispatch).toHaveBeenCalledWith({
+        type: 'SET_VIEW_MODE',
+        payload: 'provider_settings',
+      }),
+    );
+    expect(getDispatchedSession(dispatch).assistantId).toBe('assistant-a');
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'SET_ERROR',
+        payload: expect.any(String),
+      }),
+    );
+  });
+
   describe('pending handoff session adoption', () => {
     it('adopts the pending handoff session when its assistantId matches and clears it', async () => {
       const pending = createPendingHandoffSession('assistant-a');

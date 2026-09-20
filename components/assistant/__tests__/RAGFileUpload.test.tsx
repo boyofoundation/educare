@@ -150,6 +150,49 @@ describe('RAGFileUpload', () => {
     expect(mockProps.onRagChunksChange).not.toHaveBeenCalled();
   });
 
+  it('lists failed files and retries only failed files after partial success', async () => {
+    const successfulFile = createMockFile('good.pdf', 'application/pdf');
+    const failedFile = createMockFile('broken.pdf', 'application/pdf');
+    parseDocumentMock
+      .mockResolvedValueOnce({ content: 'Good content', metadata: {} })
+      .mockRejectedValueOnce(new Error('parse failed'))
+      .mockResolvedValueOnce({ content: 'Recovered content', metadata: {} });
+    chunkTextMock.mockImplementation((content: string) => ({ chunks: [content] }));
+
+    const view = render(<RAGFileUpload {...mockProps} />);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [successfulFile, failedFile] } });
+
+    await waitFor(() => {
+      expect(mockProps.onRagChunksChange).toHaveBeenCalledWith([
+        { fileName: 'good.pdf', content: 'Good content' },
+      ]);
+    });
+    expect(screen.getByTestId('rag-persistence-status')).toHaveTextContent(
+      'broken.pdf 處理失敗: parse failed',
+    );
+    expect(screen.getByRole('button', { name: '重試解析' })).toBeInTheDocument();
+    expect(parseDocumentMock).toHaveBeenCalledTimes(2);
+
+    view.rerender(
+      <RAGFileUpload
+        {...mockProps}
+        ragChunks={[{ fileName: 'good.pdf', content: 'Good content' }]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '重試解析' }));
+
+    await waitFor(() => {
+      expect(mockProps.onRagChunksChange).toHaveBeenLastCalledWith([
+        { fileName: 'good.pdf', content: 'Good content' },
+        { fileName: 'broken.pdf', content: 'Recovered content' },
+      ]);
+    });
+    expect(parseDocumentMock).toHaveBeenLastCalledWith(failedFile);
+    expect(parseDocumentMock).toHaveBeenCalledTimes(3);
+    expect(screen.queryByRole('button', { name: '重試解析' })).not.toBeInTheDocument();
+  });
+
   it('renders uploaded file names and removes a document by filename', () => {
     const ragChunks = [
       { fileName: 'alpha.pdf', content: 'A' },

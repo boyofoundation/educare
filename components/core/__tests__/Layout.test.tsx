@@ -206,6 +206,7 @@ vi.mock('../../hooks/useTursoAssistantStatus', () => ({
 
 import { Layout, formatRelativeTime } from '../Layout';
 import { AppProvider } from '../AppContext';
+import { useAppContext } from '../useAppContext';
 import {
   setupCoreTestEnvironment,
   TEST_ASSISTANTS,
@@ -221,6 +222,14 @@ function TestLayoutContent() {
       <p>This is test content inside the layout</p>
     </div>
   );
+}
+
+function SearchStateSeed() {
+  const { dispatch } = useAppContext();
+  React.useEffect(() => {
+    dispatch({ type: 'SET_ASSISTANTS', payload: [TEST_ASSISTANTS.basic, TEST_ASSISTANTS.withRag] });
+  }, [dispatch]);
+  return null;
 }
 
 // Wrapper component to provide app context
@@ -573,6 +582,22 @@ describe('Layout', () => {
         ) as HTMLElement;
         expect(closeButton).toBeInTheDocument();
       });
+    });
+
+    it('returns focus to the remounted mobile trigger after Escape', async () => {
+      Object.defineProperty(window, 'innerWidth', { value: 390, writable: true });
+      render(
+        <TestLayoutWrapper>
+          <TestLayoutContent />
+        </TestLayoutWrapper>,
+      );
+      const trigger = await screen.findByRole('button', { name: '開啟選單' });
+      trigger.focus();
+      fireEvent.click(trigger);
+      const close = await screen.findByRole('button', { name: '關閉選單' });
+      await waitFor(() => expect(close).toHaveFocus());
+      fireEvent.keyDown(close, { key: 'Escape' });
+      await waitFor(() => expect(screen.getByRole('button', { name: '開啟選單' })).toHaveFocus());
     });
 
     it('should close sidebar when close button is clicked', async () => {
@@ -1076,6 +1101,39 @@ describe('Layout', () => {
 
       // Should switch to new assistant mode
       // Note: This would be tested in integration with the full app context
+    });
+
+    it('shows a retryable error when local search loading fails', async () => {
+      const db = await import('../../../services/db');
+      const mockGetSessions = vi.mocked(db.getSessionsForAssistant);
+
+      render(
+        <AppProvider>
+          <SearchStateSeed />
+          <Layout>
+            <TestLayoutContent />
+          </Layout>
+        </AppProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('assistant-list')).toBeInTheDocument();
+      });
+
+      mockGetSessions.mockRejectedValue(new Error('local session store unavailable'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('sidebar-search-toggle'));
+      });
+      const searchInput = await screen.findByLabelText('搜尋本機內容');
+      await act(async () => {
+        fireEvent.change(searchInput, { target: { value: 'course' } });
+      });
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toHaveTextContent('搜尋本機內容失敗，請重試。');
+        expect(screen.getByRole('button', { name: '重試' })).toBeInTheDocument();
+        expect(screen.queryByText('找不到符合的本機內容。')).not.toBeInTheDocument();
+      });
     });
   });
 

@@ -32,6 +32,7 @@ import type {
   AppAction,
   AppContextValue,
   NavigationRequest,
+  NavigationResult,
 } from './AppContext.types';
 
 // Load embedding config from localStorage
@@ -291,7 +292,14 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       const assistant = await db.getAssistant(assistantId);
       if (assistant) {
         const nextAssistant = { ...assistant, lastOpenedAt: Date.now() };
-        await db.saveAssistant(nextAssistant);
+        try {
+          // Opening an assistant should still work when the optional
+          // last-opened timestamp cannot be persisted (for example in a
+          // read-only/quota-exhausted store).
+          await db.saveAssistant(nextAssistant);
+        } catch (error) {
+          console.warn('Failed to persist assistant last-opened time:', error);
+        }
         dispatch({ type: 'SET_CURRENT_ASSISTANT', payload: nextAssistant });
         const assistantSessions = await db.getSessionsForAssistant(assistant.id);
         const sortedSessions = sortSessionsForNavigation(assistantSessions);
@@ -358,11 +366,19 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
 
   const loadSharedAssistant = useCallback(
     async (assistantId: string) => {
-      // Initialize providers first to establish a baseline
-      await initializeProviders();
-
       dispatch({ type: 'SET_LOADING', payload: true });
       try {
+        // Loading shared content must remain possible while settings retries a failed chunk.
+        const providersReady = await initializeProviders().then(
+          () => true,
+          error => {
+            console.warn(
+              'Provider loading failed; opening shared assistant provider recovery:',
+              error,
+            );
+            return false;
+          },
+        );
         const assistant = await getAssistantFromTurso(assistantId);
         if (assistant) {
           await db.saveAssistant(assistant);
@@ -381,7 +397,10 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
             await createNewSession(assistant.id);
           }
 
-          dispatch({ type: 'SET_VIEW_MODE', payload: 'chat' });
+          dispatch({
+            type: 'SET_VIEW_MODE',
+            payload: providersReady ? 'chat' : 'provider_settings',
+          });
         } else {
           dispatch({ type: 'SET_ERROR', payload: '找不到分享的助理。' });
         }
@@ -399,8 +418,6 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   const saveAssistant = useCallback(
     async (assistant: Assistant) => {
       await db.saveAssistant(assistant);
-      // Only clear the editor guard after IndexedDB confirms the durable write.
-      dispatch({ type: 'SET_EDITOR_DIRTY', payload: false });
       const storedAssistants = await db.getAllAssistants();
       dispatch({
         type: 'SET_ASSISTANTS',
@@ -415,6 +432,10 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         // and stay in the current view mode (e.g., 'edit_assistant').
         dispatch({ type: 'SET_CURRENT_ASSISTANT', payload: { ...assistant } });
       }
+
+      // Clear the editor guard only after the durable save and all follow-up
+      // assistant/session loading have completed successfully.
+      dispatch({ type: 'SET_EDITOR_DIRTY', payload: false });
     },
     [selectAssistant, state.viewMode],
   );
@@ -506,43 +527,217 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
     dispatch({ type: 'UPDATE_SESSION', payload: session });
   }, []);
 
-  // Set view mode
-  const setViewMode = useCallback(
-    (mode: ViewMode) => {
-      if (state.editorDirty && mode !== state.viewMode) {
-        dispatch({ type: 'SET_PENDING_NAVIGATION', payload: { viewMode: mode } });
-        return;
-      }
-      dispatch({ type: 'SET_VIEW_MODE', payload: mode });
-    },
-    [state.editorDirty, state.viewMode],
-  );
-
   const setEditorDirty = useCallback((dirty: boolean) => {
     dispatch({ type: 'SET_EDITOR_DIRTY', payload: dirty });
   }, []);
 
-  const navigate = useCallback(
-    (request: NavigationRequest): { allowed: boolean } => {
+  const reportNavigationError = useCallback((error: unknown) => {
+    const message = error instanceof Error && error.message ? error.message : '無法完成導覽。';
+    console.error('Failed to apply navigation intent:', error);
+    dispatch({ type: 'SET_ERROR', payload: message });
+  }, []);
+
+  /**
+   * Apply every part of a navigation intent in one place. Keeping this separate
+   * from the dirty-editor guard means the same full request is used both when
+   * navigation is immediately allowed and when it is confirmed later.
+   */
+  const applyNavigation = useCallback(
+    async (request: NavigationRequest): Promise<void> => {
+      const restrictedIntent = Boolean(
+        request.assistantId ||
+          request.sessionId ||
+          request.projectId ||
+          request.file ||
+          request.newSessionAssistantId ||
+          request.messageIndex !== undefined,
+      );
+      if (restrictedIntent && (state.isShared || state.bundleMode || state.isBundleImportRoute)) {
+        return;
+      }
+
+      // A file is an import action carried by the intent. It must remain in the
+      // pending request until confirmation instead of being lost in Layout.
+      if (request.file) {
+        await importAssistantPackage(request.file);
+        return;
+      }
+
+      const requestedAssistantId = request.assistantId ?? request.newSessionAssistantId;
+      let targetAssistantId = state.currentAssistant?.id;
+      let targetSessions = state.sessions;
+      let targetSession: ChatSession | undefined;
+
+      if (request.assistantId && request.newSessionAssistantId) {
+        if (request.assistantId !== request.newSessionAssistantId) {
+          throw new Error('導覽目標助理不一致。');
+        }
+      }
+
+      if (requestedAssistantId) {
+        const targetAssistant = state.assistants.find(
+          assistant => assistant.id === requestedAssistantId,
+        );
+        if (!targetAssistant) {
+          throw new Error('找不到指定的助理。');
+        }
+
+        targetAssistantId = requestedAssistantId;
+        if (requestedAssistantId !== state.currentAssistant?.id) {
+          await selectAssistant(requestedAssistantId, false);
+          targetSessions = sortSessionsForNavigation(
+            await db.getSessionsForAssistant(requestedAssistantId),
+          );
+        }
+      }
+
+      const findTargetSession = async (sessionId: string): Promise<ChatSession | undefined> => {
+        let session = targetSessions.find(candidate => candidate.id === sessionId);
+        if (!session && targetAssistantId) {
+          targetSessions = sortSessionsForNavigation(
+            await db.getSessionsForAssistant(targetAssistantId),
+          );
+          session = targetSessions.find(candidate => candidate.id === sessionId);
+        }
+        return session;
+      };
+
+      let targetProject: Awaited<
+        ReturnType<typeof htmlProjectStore.assertProjectOwnership>
+      > | null = null;
+      if (request.projectId) {
+        if (!targetAssistantId) {
+          throw new Error('開啟 HTML 專案前必須先選擇助理。');
+        }
+        targetProject = await htmlProjectStore.assertProjectOwnership(
+          request.projectId,
+          targetAssistantId,
+        );
+        if (targetProject.assistantId !== targetAssistantId) {
+          throw new Error('HTML 專案不屬於目前助理。');
+        }
+      }
+
+      if (request.sessionId) {
+        targetSession = await findTargetSession(request.sessionId);
+        if (!targetSession) {
+          throw new Error('找不到指定的聊天。');
+        }
+        if (targetAssistantId && targetSession.assistantId !== targetAssistantId) {
+          throw new Error('聊天不屬於指定助理。');
+        }
+      } else if (targetProject?.sessionId) {
+        targetSession = await findTargetSession(targetProject.sessionId);
+      }
+
+      if (targetProject?.sessionId) {
+        if (!targetSession || targetProject.sessionId !== targetSession.id) {
+          throw new Error('HTML 專案不屬於指定聊天。');
+        }
+      }
+
+      if (request.newSessionAssistantId) {
+        await createNewSession(request.newSessionAssistantId);
+        targetSession = undefined;
+      } else if (targetSession) {
+        if (targetProject) {
+          // Project search results intentionally switch the session's active
+          // project. Keep that intent on the session object so the existing
+          // workspace-sync effect does not immediately clear the project
+          // while the session change is settling.
+          targetSession = {
+            ...targetSession,
+            activeProjectId: targetProject.id,
+          };
+          dispatch({ type: 'UPDATE_SESSION', payload: targetSession });
+        }
+        dispatch({ type: 'SET_CURRENT_SESSION', payload: targetSession });
+      }
+
+      if (request.projectId && targetProject) {
+        const preview = await htmlPreviewService.resolveProjectForPreview(targetProject.id);
+        dispatch({ type: 'SET_ACTIVE_PROJECT', payload: targetProject.id });
+        dispatch({ type: 'SET_PROJECT_WORKSPACE_OPEN', payload: true });
+        dispatch({ type: 'SET_PROJECT_PREVIEW', payload: preview });
+      }
+
       if (
-        state.editorDirty &&
-        (request.viewMode !== state.viewMode || request.sessionId !== state.currentSession?.id)
+        request.messageIndex !== undefined &&
+        request.sessionId &&
+        targetSession &&
+        request.messageIndex >= 0 &&
+        request.messageIndex < targetSession.messages.length
       ) {
+        dispatch({
+          type: 'SET_FOCUSED_MESSAGE_TARGET',
+          payload: {
+            sessionId: targetSession.id,
+            messageIndex: request.messageIndex,
+            requestId: `${targetSession.id}:${request.messageIndex}:${Date.now()}`,
+          },
+        });
+      }
+
+      dispatch({ type: 'SET_PENDING_NAVIGATION', payload: null });
+      dispatch({ type: 'SET_VIEW_MODE', payload: request.viewMode });
+    },
+    [
+      createNewSession,
+      importAssistantPackage,
+      state.assistants,
+      state.bundleMode,
+      state.currentAssistant?.id,
+      state.isBundleImportRoute,
+      state.isShared,
+      state.sessions,
+      selectAssistant,
+    ],
+  );
+
+  const navigate = useCallback(
+    (request: NavigationRequest): NavigationResult => {
+      const restrictedIntent = Boolean(
+        request.assistantId ||
+          request.sessionId ||
+          request.projectId ||
+          request.file ||
+          request.newSessionAssistantId ||
+          request.messageIndex !== undefined,
+      );
+      if (restrictedIntent && (state.isShared || state.bundleMode || state.isBundleImportRoute)) {
+        return { allowed: false };
+      }
+
+      const targetChanged = Boolean(
+        request.viewMode !== state.viewMode ||
+          request.assistantId !== state.currentAssistant?.id ||
+          request.sessionId !== state.currentSession?.id ||
+          request.projectId !== state.activeProjectId ||
+          request.file ||
+          request.newSessionAssistantId ||
+          request.messageIndex !== undefined,
+      );
+      if (state.editorDirty && targetChanged) {
         dispatch({ type: 'SET_PENDING_NAVIGATION', payload: request });
         return { allowed: false };
       }
 
-      if (request.sessionId) {
-        const targetSession = state.sessions.find(session => session.id === request.sessionId);
-        if (targetSession) {
-          dispatch({ type: 'SET_CURRENT_SESSION', payload: targetSession });
-        }
-      }
-      dispatch({ type: 'SET_PENDING_NAVIGATION', payload: null });
-      dispatch({ type: 'SET_VIEW_MODE', payload: request.viewMode });
-      return { allowed: true };
+      const completion = applyNavigation(request);
+      void completion.catch(reportNavigationError);
+      return { allowed: true, completion };
     },
-    [state.currentSession?.id, state.editorDirty, state.sessions, state.viewMode],
+    [
+      applyNavigation,
+      reportNavigationError,
+      state.activeProjectId,
+      state.bundleMode,
+      state.currentAssistant?.id,
+      state.currentSession?.id,
+      state.editorDirty,
+      state.isBundleImportRoute,
+      state.isShared,
+      state.viewMode,
+    ],
   );
 
   const confirmPendingNavigation = useCallback(() => {
@@ -553,18 +748,21 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
 
     dispatch({ type: 'SET_EDITOR_DIRTY', payload: false });
     dispatch({ type: 'SET_PENDING_NAVIGATION', payload: null });
-    if (request.sessionId) {
-      const targetSession = state.sessions.find(session => session.id === request.sessionId);
-      if (targetSession) {
-        dispatch({ type: 'SET_CURRENT_SESSION', payload: targetSession });
-      }
-    }
-    dispatch({ type: 'SET_VIEW_MODE', payload: request.viewMode });
-  }, [state.pendingNavigation, state.sessions]);
+    const completion = applyNavigation(request);
+    void completion.catch(reportNavigationError);
+  }, [applyNavigation, reportNavigationError, state.pendingNavigation]);
 
   const cancelPendingNavigation = useCallback(() => {
     dispatch({ type: 'SET_PENDING_NAVIGATION', payload: null });
   }, []);
+
+  // Set view mode through the same dirty-editor guard as richer navigation.
+  const setViewMode = useCallback(
+    (mode: ViewMode) => {
+      navigate({ viewMode: mode });
+    },
+    [navigate],
+  );
 
   const openProviderSettings = useCallback(
     (returnTo: ViewMode = 'chat') => {
@@ -581,7 +779,10 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
   }, [state.providerReturnView]);
 
   const updateSessionMetadata = useCallback(
-    async (sessionId: string, patch: Partial<Pick<ChatSession, 'title' | 'isPinned' | 'category'>>) => {
+    async (
+      sessionId: string,
+      patch: Partial<Pick<ChatSession, 'title' | 'isPinned' | 'category'>>,
+    ) => {
       const session = state.sessions.find(item => item.id === sessionId);
       if (!session) {
         return;
@@ -605,7 +806,13 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         return;
       }
 
-      if (!navigate({ viewMode: 'chat', sessionId }).allowed) {
+      const navigation = navigate({ viewMode: 'chat', sessionId });
+      if (!navigation.allowed) {
+        return;
+      }
+      try {
+        await navigation.completion;
+      } catch {
         return;
       }
 
@@ -696,49 +903,23 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         return;
       }
 
-      if (!navigate({ viewMode: 'chat' }).allowed) {
+      const navigation = navigate({
+        viewMode: 'chat',
+        assistantId: result.assistantId,
+        sessionId: result.sessionId,
+        projectId: result.kind === 'project' ? result.projectId : undefined,
+        messageIndex: result.kind === 'message' ? result.messageIndex : undefined,
+      });
+      if (!navigation.allowed) {
         return;
       }
-
-      if (result.assistantId && result.assistantId !== state.currentAssistant?.id) {
-        await selectAssistant(result.assistantId, true);
-      }
-
-      if (result.sessionId) {
-        const sessions = result.assistantId
-          ? await db.getSessionsForAssistant(result.assistantId)
-          : state.sessions;
-        const targetSession = sessions.find(session => session.id === result.sessionId);
-        if (targetSession) {
-          dispatch({ type: 'SET_CURRENT_SESSION', payload: targetSession });
-        }
-      }
-
-      if (result.kind === 'message' && result.sessionId && result.messageIndex !== undefined) {
-        dispatch({
-          type: 'SET_FOCUSED_MESSAGE_TARGET',
-          payload: {
-            sessionId: result.sessionId,
-            messageIndex: result.messageIndex,
-            requestId: `${result.id}:${Date.now()}`,
-          },
-        });
-      }
-
-      if (result.kind === 'project' && result.projectId) {
-        dispatch({ type: 'SET_ACTIVE_PROJECT', payload: result.projectId });
-        dispatch({ type: 'SET_PROJECT_WORKSPACE_OPEN', payload: true });
+      try {
+        await navigation.completion;
+      } catch {
+        return;
       }
     },
-    [
-      navigate,
-      selectAssistant,
-      state.bundleMode,
-      state.currentAssistant?.id,
-      state.isBundleImportRoute,
-      state.isShared,
-      state.sessions,
-    ],
+    [navigate, state.bundleMode, state.isBundleImportRoute, state.isShared],
   );
 
   const clearFocusedMessage = useCallback(() => {

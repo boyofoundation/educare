@@ -15,6 +15,7 @@ interface InertElementState {
 
 const modalStack: ModalStackEntry[] = [];
 let bodyOverflowBeforeModal: string | null = null;
+let backgroundStateBeforeModal: Map<HTMLElement, InertElementState> | null = null;
 
 const isTopmostModal = (id: string): boolean => modalStack.at(-1)?.id === id;
 
@@ -45,21 +46,22 @@ const focusElement = (element: HTMLElement | null): void => {
   element.focus({ preventScroll: true });
 };
 
-const lockBodyScroll = (): void => {
-  // The extra null check keeps the lock recoverable if a React concurrent
-  // commit briefly overlaps an effect cleanup and setup.
-  if (modalStack.length === 0 || bodyOverflowBeforeModal === null) {
-    bodyOverflowBeforeModal = document.body.style.overflow;
+const isHiddenOrInert = (element: HTMLElement): boolean => {
+  let current: HTMLElement | null = element;
+  while (current) {
+    const style = window.getComputedStyle(current);
+    if (
+      current.hidden ||
+      current.inert ||
+      current.getAttribute('aria-hidden') === 'true' ||
+      style.display === 'none' ||
+      style.visibility === 'hidden'
+    ) {
+      return true;
+    }
+    current = current.parentElement;
   }
-  document.body.style.overflow = 'hidden';
-};
-
-const unlockBodyScroll = (): void => {
-  if (modalStack.length > 0) {
-    return;
-  }
-  document.body.style.overflow = bodyOverflowBeforeModal ?? '';
-  bodyOverflowBeforeModal = null;
+  return false;
 };
 
 const inertBackground = (portal: HTMLDivElement | null): Map<HTMLElement, InertElementState> => {
@@ -101,6 +103,30 @@ const restoreBackground = (previousState: Map<HTMLElement, InertElementState>): 
   });
 };
 
+const lockModalResources = (portal: HTMLDivElement | null): void => {
+  // The extra null check keeps the lock recoverable if a React concurrent
+  // commit briefly overlaps an effect cleanup and setup.
+  if (modalStack.length === 0 || bodyOverflowBeforeModal === null) {
+    bodyOverflowBeforeModal = document.body.style.overflow;
+  }
+  if (modalStack.length === 0) {
+    backgroundStateBeforeModal = inertBackground(portal);
+  }
+  document.body.style.overflow = 'hidden';
+};
+
+const unlockModalResources = (): void => {
+  if (modalStack.length > 0) {
+    return;
+  }
+  document.body.style.overflow = bodyOverflowBeforeModal ?? '';
+  bodyOverflowBeforeModal = null;
+  if (backgroundStateBeforeModal) {
+    restoreBackground(backgroundStateBeforeModal);
+    backgroundStateBeforeModal = null;
+  }
+};
+
 const Modal: React.FC<ModalProps> = ({
   isOpen,
   onClose,
@@ -134,11 +160,19 @@ const Modal: React.FC<ModalProps> = ({
       onClose: () => onCloseRef.current(),
       dialog: dialogRef.current,
     };
+    const wasEmpty = modalStack.length === 0;
+    if (wasEmpty) {
+      lockModalResources(portalRef.current);
+    } else {
+      document.body.style.overflow = 'hidden';
+    }
     modalStack.push(entry);
-    lockBodyScroll();
-    const previousBackgroundState = inertBackground(portalRef.current);
+    let isActive = true;
 
     const focusInitialElement = () => {
+      if (!isActive || !isTopmostModal(modalId)) {
+        return;
+      }
       entry.dialog = dialogRef.current;
       const dialog = entry.dialog;
       if (!dialog) {
@@ -197,16 +231,17 @@ const Modal: React.FC<ModalProps> = ({
     document.addEventListener('keydown', handleKeyDown);
 
     return () => {
+      isActive = false;
       document.removeEventListener('keydown', handleKeyDown);
       const stackIndex = modalStack.findIndex(item => item.id === modalId);
+      const wasTopmost = stackIndex !== -1 && stackIndex === modalStack.length - 1;
       if (stackIndex !== -1) {
         modalStack.splice(stackIndex, 1);
       }
-      unlockBodyScroll();
-      restoreBackground(previousBackgroundState);
+      unlockModalResources();
 
       const previous = previousActiveElementRef.current;
-      if (previous?.isConnected) {
+      if (wasTopmost && previous?.isConnected && !isHiddenOrInert(previous)) {
         focusElement(previous);
       }
     };
@@ -243,7 +278,7 @@ const Modal: React.FC<ModalProps> = ({
       {/* Modal */}
       <div
         ref={dialogRef}
-        className={`relative flex w-full flex-col overflow-hidden rounded-2xl bg-gray-800 shadow-2xl ${sizeClassName} ${className}`}
+        className={`ui-modal relative flex w-full flex-col overflow-hidden rounded-2xl bg-gray-800 shadow-2xl ${sizeClassName} ${className}`}
         role='dialog'
         aria-modal='true'
         aria-labelledby={title ? titleId : undefined}
@@ -259,7 +294,7 @@ const Modal: React.FC<ModalProps> = ({
             <button
               type='button'
               onClick={() => onCloseRef.current()}
-              className='rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-700/50 hover:text-white'
+              className='ui-muted flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg p-2 transition-colors hover:bg-gray-700/50'
               aria-label={closeButtonLabel}
             >
               <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
