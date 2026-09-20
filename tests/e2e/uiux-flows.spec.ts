@@ -10,7 +10,7 @@ type SeedAssistant = {
   name: string;
   description: string;
   systemPrompt: string;
-  ragChunks: string[];
+  ragChunks: Array<{ fileName: string; content: string }>;
   starterPrompts: string[];
   createdAt: number;
 };
@@ -352,6 +352,50 @@ const makeThousandMessageSession = (): SeedSession => {
 };
 
 test.describe('UIUX production flows @flows', () => {
+  test('opens the exact material chunk when a file has multiple search matches', async ({
+    page,
+  }) => {
+    await page.route('**/*', async route => {
+      if (new URL(route.request().url()).origin === APP_ORIGIN) {
+        await route.continue();
+      } else {
+        await route.fulfill({ status: 503, body: '' });
+      }
+    });
+    const duplicateKeyErrors: string[] = [];
+    page.on('console', message => {
+      if (message.text().includes('Encountered two children with the same key')) {
+        duplicateKeyErrors.push(message.text());
+      }
+    });
+    const firstChunk = '教材定位 common-material：第一段風俗介紹。';
+    const selectedChunk = '教材定位 common-material：第二段獨有的教學活動。';
+    await seedDatabase(page, {
+      assistants: [
+        makeAssistant({
+          ragChunks: [
+            { fileName: '民俗教案.txt', content: firstChunk },
+            { fileName: '民俗教案.txt', content: selectedChunk },
+          ],
+        }),
+      ],
+      sessions: [makeSession()],
+    });
+    await page.getByTestId('sidebar-search-toggle').click();
+    await page.getByRole('searchbox').fill('common-material');
+    const results = page.getByTestId('navigation-search-results');
+    await expect(results.getByRole('button')).toHaveCount(2);
+    await results.getByRole('button').filter({ hasText: selectedChunk }).click();
+    const material = page.getByRole('dialog').filter({ hasText: '民俗教案.txt' });
+    await expect(material).toBeVisible();
+    await expect(material).toContainText(selectedChunk);
+    await expect(material).not.toContainText(firstChunk);
+    await material.getByRole('button', { name: '關閉對話框' }).click();
+    await expect(material).toBeHidden();
+    await expect(page.getByRole('main', { name: '聊天對話' })).toBeVisible();
+    expect(duplicateKeyErrors).toEqual([]);
+  });
+
   test('gets from a template to a first mocked chat response in three setup actions', async ({
     page,
   }) => {

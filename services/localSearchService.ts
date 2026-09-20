@@ -12,6 +12,8 @@ export interface LocalSearchResult {
   assistantId: string;
   sessionId?: string;
   messageIndex?: number;
+  /** Zero-based RAG chunk index for material results. */
+  chunkIndex?: number;
   projectId?: string;
   score: number;
   updatedAt: number;
@@ -102,7 +104,7 @@ const addAssistantResults = (
       });
     }
 
-    for (const chunk of assistant.ragChunks ?? []) {
+    for (const [chunkIndex, chunk] of (assistant.ragChunks ?? []).entries()) {
       const chunkScore = scoreFields(query, [
         { value: chunk.fileName, weight: 1.1 },
         { value: chunk.content, weight: 0.65 },
@@ -111,12 +113,15 @@ const addAssistantResults = (
         continue;
       }
       results.push({
-        id: `${assistant.id}:material:${chunk.fileName}`,
+        // File names are user-controlled and may repeat; include the source
+        // chunk index so every result remains a stable, clickable target.
+        id: `${assistant.id}:material:${chunk.fileName}:${chunkIndex}`,
         kind: 'material',
         title: chunk.fileName,
         subtitle: `${assistant.name} · 素材`,
         snippet: compact(chunk.content),
         assistantId: assistant.id,
+        chunkIndex,
         score: chunkScore,
         updatedAt: assistant.lastOpenedAt ?? assistant.createdAt,
       });

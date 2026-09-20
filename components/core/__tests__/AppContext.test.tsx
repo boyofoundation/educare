@@ -153,6 +153,7 @@ function TestConsumer() {
       <div data-testid='current-session'>{state.currentSession?.title || 'none'}</div>
       <div data-testid='current-session-id'>{state.currentSession?.id || 'none'}</div>
       <div data-testid='is-loading'>{String(state.isLoading)}</div>
+      <div data-testid='is-shared'>{String(state.isShared)}</div>
       <div data-testid='error'>{state.error || 'none'}</div>
       <div data-testid='is-sidebar-open'>{String(state.isSidebarOpen)}</div>
       <div data-testid='is-mobile'>{String(state.isMobile)}</div>
@@ -165,9 +166,19 @@ function TestConsumer() {
           ? `${state.focusedMessageTarget.sessionId}:${state.focusedMessageTarget.messageIndex}`
           : 'none'}
       </div>
+      <div data-testid='focused-material-target'>
+        {state.focusedMaterialTarget
+          ? `${state.focusedMaterialTarget.assistantId}:${state.focusedMaterialTarget.chunkIndex}`
+          : 'none'}
+      </div>
       <div data-testid='pending-navigation'>
         {state.pendingNavigation
           ? `${state.pendingNavigation.viewMode}:${state.pendingNavigation.assistantId || ''}:${state.pendingNavigation.sessionId || ''}:${state.pendingNavigation.projectId || ''}`
+          : 'none'}
+      </div>
+      <div data-testid='pending-material-target'>
+        {state.pendingNavigation?.material
+          ? `${state.pendingNavigation.material.assistantId}:${state.pendingNavigation.material.chunkIndex}`
           : 'none'}
       </div>
       <div data-testid='project-preview-id'>{state.projectPreview?.projectId || 'none'}</div>
@@ -260,6 +271,17 @@ function TestConsumer() {
         }
       >
         Navigate Target
+      </button>
+      <button
+        data-testid='navigate-material'
+        onClick={() =>
+          actions.navigate({
+            viewMode: 'chat',
+            material: { assistantId: 'test-assistant-2', chunkIndex: 1 },
+          })
+        }
+      >
+        Navigate Material
       </button>
       <button
         data-testid='navigate-import'
@@ -1387,6 +1409,104 @@ describe('AppContext', () => {
         targetProject.id,
         targetAssistant.id,
       );
+    });
+
+    it('opens the exact selected material chunk after navigation', async () => {
+      const targetAssistant = {
+        ...TEST_ASSISTANTS.withRag,
+        id: 'test-assistant-2',
+        name: 'Material Assistant',
+      };
+      mockDb.getAllAssistants.mockResolvedValue([TEST_ASSISTANTS.basic, targetAssistant]);
+      mockDb.getAssistant.mockImplementation(async assistantId =>
+        assistantId === targetAssistant.id ? targetAssistant : TEST_ASSISTANTS.basic,
+      );
+      mockDb.getSessionsForAssistant.mockResolvedValue([TEST_SESSIONS.withMessages]);
+
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('current-assistant-id')).toHaveTextContent(
+          TEST_ASSISTANTS.basic.id,
+        );
+      });
+
+      await act(async () => {
+        screen.getByTestId('navigate-material').click();
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('current-assistant-id')).toHaveTextContent(targetAssistant.id);
+        expect(screen.getByTestId('focused-material-target')).toHaveTextContent(
+          `${targetAssistant.id}:1`,
+        );
+      });
+    });
+
+    it('keeps a material target pending on dirty cancel and blocks it in shared mode', async () => {
+      const targetAssistant = {
+        ...TEST_ASSISTANTS.withRag,
+        id: 'test-assistant-2',
+      };
+      mockDb.getAllAssistants.mockResolvedValue([TEST_ASSISTANTS.basic, targetAssistant]);
+      mockDb.getAssistant.mockImplementation(async assistantId =>
+        assistantId === targetAssistant.id ? targetAssistant : TEST_ASSISTANTS.basic,
+      );
+      mockDb.getSessionsForAssistant.mockResolvedValue([TEST_SESSIONS.withMessages]);
+
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('current-assistant-id')).toHaveTextContent(
+          TEST_ASSISTANTS.basic.id,
+        );
+      });
+      await act(async () => {
+        screen.getByTestId('set-editor-dirty').click();
+      });
+      await waitFor(() => expect(screen.getByTestId('editor-dirty')).toHaveTextContent('true'));
+      await act(async () => {
+        screen.getByTestId('navigate-material').click();
+      });
+
+      expect(screen.getByTestId('pending-material-target')).toHaveTextContent(
+        `${targetAssistant.id}:1`,
+      );
+      expect(screen.getByTestId('focused-material-target')).toHaveTextContent('none');
+      expect(screen.getByTestId('editor-dirty')).toHaveTextContent('true');
+
+      await act(async () => {
+        screen.getByTestId('cancel-pending-navigation').click();
+      });
+      expect(screen.getByTestId('pending-material-target')).toHaveTextContent('none');
+      expect(screen.getByTestId('focused-material-target')).toHaveTextContent('none');
+      expect(screen.getByTestId('editor-dirty')).toHaveTextContent('true');
+
+      mockURLSearchParams.mockImplementation(_search => ({
+        has: vi.fn().mockImplementation((key: string) => key === 'share'),
+        get: vi.fn().mockImplementation((key: string) => (key === 'share' ? 'shared' : null)),
+      }));
+      // A new provider instance observes shared mode and must not expose local material targets.
+      render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>,
+      );
+      await waitFor(() => {
+        expect(screen.getAllByTestId('is-shared').at(-1)).toHaveTextContent('true');
+      });
+      await act(async () => {
+        screen.getAllByTestId('navigate-material').at(-1)?.click();
+      });
+      expect(screen.getAllByTestId('focused-material-target').at(-1)).toHaveTextContent('none');
     });
 
     it('continues a deferred assistant import after dirty navigation is confirmed', async () => {

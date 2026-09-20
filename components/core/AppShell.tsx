@@ -75,6 +75,15 @@ function AppContent(): React.JSX.Element {
   const hasWorkspace = htmlProjectAccessEnabled && Boolean(state.activeProjectId);
   const workspaceVisible = hasWorkspace && state.isProjectWorkspaceOpen;
   const showPaneTabs = compactLayout && hasWorkspace;
+  const focusedMaterial = state.focusedMaterialTarget;
+  const focusedMaterialAssistant = focusedMaterial
+    ? state.currentAssistant?.id === focusedMaterial.assistantId
+      ? state.currentAssistant
+      : (state.assistants.find(assistant => assistant.id === focusedMaterial.assistantId) ?? null)
+    : null;
+  const focusedMaterialChunk = focusedMaterial
+    ? focusedMaterialAssistant?.ragChunks?.[focusedMaterial.chunkIndex]
+    : undefined;
 
   React.useEffect(() => {
     if (
@@ -486,6 +495,20 @@ function AppContent(): React.JSX.Element {
             捨棄修改並離開
           </button>
         </div>
+      </Modal>
+      <Modal
+        isOpen={Boolean(focusedMaterial && focusedMaterialChunk)}
+        onClose={actions.clearFocusedMaterial}
+        title='檢視素材'
+      >
+        {focusedMaterialChunk && (
+          <article data-testid='focused-material-content' className='space-y-3 text-gray-200'>
+            <h2 className='text-base font-semibold text-white'>{focusedMaterialChunk.fileName}</h2>
+            <p className='whitespace-pre-wrap break-words text-sm leading-6'>
+              {focusedMaterialChunk.content}
+            </p>
+          </article>
+        )}
       </Modal>
       {/* View Mode Content */}
       {state.viewMode === 'new_assistant' && !onboardingOpen && (

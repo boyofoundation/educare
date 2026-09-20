@@ -94,6 +94,7 @@ const initialState: AppState = {
   pendingHandoffSession: null,
   providerReturnView: null,
   focusedMessageTarget: null,
+  focusedMaterialTarget: null,
   editorDirty: false,
   pendingNavigation: null,
 };
@@ -245,6 +246,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, providerReturnView: action.payload };
     case 'SET_FOCUSED_MESSAGE_TARGET':
       return { ...state, focusedMessageTarget: action.payload };
+    case 'SET_FOCUSED_MATERIAL_TARGET':
+      return { ...state, focusedMaterialTarget: action.payload };
     case 'SET_EDITOR_DIRTY':
       return { ...state, editorDirty: action.payload };
     case 'SET_PENDING_NAVIGATION':
@@ -550,7 +553,8 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
           request.projectId ||
           request.file ||
           request.newSessionAssistantId ||
-          request.messageIndex !== undefined,
+          request.messageIndex !== undefined ||
+          request.material,
       );
       if (restrictedIntent && (state.isShared || state.bundleMode || state.isBundleImportRoute)) {
         return;
@@ -563,8 +567,10 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         return;
       }
 
-      const requestedAssistantId = request.assistantId ?? request.newSessionAssistantId;
+      const requestedAssistantId =
+        request.assistantId ?? request.newSessionAssistantId ?? request.material?.assistantId;
       let targetAssistantId = state.currentAssistant?.id;
+      let targetAssistant: Assistant | undefined = state.currentAssistant ?? undefined;
       let targetSessions = state.sessions;
       let targetSession: ChatSession | undefined;
 
@@ -573,11 +579,18 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
           throw new Error('導覽目標助理不一致。');
         }
       }
+      if (request.assistantId && request.material) {
+        if (request.assistantId !== request.material.assistantId) {
+          throw new Error('素材不屬於指定助理。');
+        }
+      }
 
       if (requestedAssistantId) {
-        const targetAssistant = state.assistants.find(
-          assistant => assistant.id === requestedAssistantId,
-        );
+        targetAssistant =
+          state.assistants.find(assistant => assistant.id === requestedAssistantId) ??
+          (state.currentAssistant?.id === requestedAssistantId
+            ? state.currentAssistant
+            : undefined);
         if (!targetAssistant) {
           throw new Error('找不到指定的助理。');
         }
@@ -588,6 +601,19 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
           targetSessions = sortSessionsForNavigation(
             await db.getSessionsForAssistant(requestedAssistantId),
           );
+        }
+      }
+
+      if (request.material) {
+        if (!targetAssistantId || request.material.assistantId !== targetAssistantId) {
+          throw new Error('素材不屬於目前助理。');
+        }
+        if (
+          !Number.isInteger(request.material.chunkIndex) ||
+          request.material.chunkIndex < 0 ||
+          request.material.chunkIndex >= (targetAssistant?.ragChunks?.length ?? 0)
+        ) {
+          throw new Error('找不到指定的素材。');
         }
       }
 
@@ -678,6 +704,16 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         });
       }
 
+      dispatch({
+        type: 'SET_FOCUSED_MATERIAL_TARGET',
+        payload: request.material
+          ? {
+              ...request.material,
+              requestId: `${request.material.assistantId}:${request.material.chunkIndex}:${Date.now()}`,
+            }
+          : null,
+      });
+
       dispatch({ type: 'SET_PENDING_NAVIGATION', payload: null });
       dispatch({ type: 'SET_VIEW_MODE', payload: request.viewMode });
     },
@@ -686,7 +722,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       importAssistantPackage,
       state.assistants,
       state.bundleMode,
-      state.currentAssistant?.id,
+      state.currentAssistant,
       state.isBundleImportRoute,
       state.isShared,
       state.sessions,
@@ -702,7 +738,8 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
           request.projectId ||
           request.file ||
           request.newSessionAssistantId ||
-          request.messageIndex !== undefined,
+          request.messageIndex !== undefined ||
+          request.material,
       );
       if (restrictedIntent && (state.isShared || state.bundleMode || state.isBundleImportRoute)) {
         return { allowed: false };
@@ -909,6 +946,10 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
         sessionId: result.sessionId,
         projectId: result.kind === 'project' ? result.projectId : undefined,
         messageIndex: result.kind === 'message' ? result.messageIndex : undefined,
+        material:
+          result.kind === 'material' && result.chunkIndex !== undefined
+            ? { assistantId: result.assistantId, chunkIndex: result.chunkIndex }
+            : undefined,
       });
       if (!navigation.allowed) {
         return;
@@ -924,6 +965,10 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
 
   const clearFocusedMessage = useCallback(() => {
     dispatch({ type: 'SET_FOCUSED_MESSAGE_TARGET', payload: null });
+  }, []);
+
+  const clearFocusedMaterial = useCallback(() => {
+    dispatch({ type: 'SET_FOCUSED_MATERIAL_TARGET', payload: null });
   }, []);
 
   // Set bundle sandbox mode. An optional in-memory bundle enters creator preview
@@ -1479,6 +1524,7 @@ export function AppProvider({ children }: AppProviderProps): React.JSX.Element {
       setAssistantCategory,
       openSearchResult,
       clearFocusedMessage,
+      clearFocusedMaterial,
       setBundleMode,
       toggleSidebar,
       setSidebarOpen,

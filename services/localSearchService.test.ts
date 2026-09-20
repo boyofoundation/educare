@@ -83,4 +83,24 @@ describe('searchLocalWorkspace', () => {
       ]),
     );
   });
+
+  it('keeps duplicate material file names addressable by chunk index', () => {
+    const duplicateFileAssistant: Assistant = {
+      ...assistant,
+      ragChunks: [
+        { fileName: 'common.md', content: '第一段共同素材' },
+        { fileName: 'common.md', content: '第二段共同素材' },
+      ],
+    };
+
+    const materialResults = searchLocalWorkspace({
+      query: '共同素材',
+      assistants: [duplicateFileAssistant],
+      sessions: [],
+    }).filter(result => result.kind === 'material');
+
+    expect(materialResults).toHaveLength(2);
+    expect(new Set(materialResults.map(result => result.id)).size).toBe(2);
+    expect(materialResults.map(result => result.chunkIndex).sort()).toEqual([0, 1]);
+  });
 });

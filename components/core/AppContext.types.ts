@@ -32,6 +32,15 @@ export interface FocusedMessageTarget {
   requestId: string;
 }
 
+export interface MaterialNavigationTarget {
+  assistantId: string;
+  chunkIndex: number;
+}
+
+export interface FocusedMaterialTarget extends MaterialNavigationTarget {
+  requestId: string;
+}
+
 export interface NavigationRequest {
   viewMode: ViewMode;
   assistantId?: string;
@@ -39,6 +48,8 @@ export interface NavigationRequest {
   projectId?: string;
   /** Exact message to focus after entering the target session. */
   messageIndex?: number;
+  /** Exact local RAG chunk to show after selecting its assistant. */
+  material?: MaterialNavigationTarget;
   /** Assistant package file to import after any dirty-editor confirmation. */
   file?: File;
   /** Create a fresh chat for this assistant after any dirty-editor confirmation. */
@@ -89,6 +100,8 @@ export interface AppState {
   providerReturnView?: ViewMode | null;
   /** Message selected from local search and consumed by ChatContainer. */
   focusedMessageTarget?: FocusedMessageTarget | null;
+  /** Local material selected from search and shown in a read-only modal. */
+  focusedMaterialTarget?: FocusedMaterialTarget | null;
   /** Unsaved assistant-editor state used by navigation guards. */
   editorDirty?: boolean;
   pendingNavigation?: NavigationRequest | null;
@@ -129,6 +142,7 @@ export type AppAction =
   | { type: 'SET_PENDING_HANDOFF_SESSION'; payload: ChatSession | null }
   | { type: 'SET_PROVIDER_RETURN_VIEW'; payload: ViewMode | null }
   | { type: 'SET_FOCUSED_MESSAGE_TARGET'; payload: FocusedMessageTarget | null }
+  | { type: 'SET_FOCUSED_MATERIAL_TARGET'; payload: FocusedMaterialTarget | null }
   | { type: 'SET_EDITOR_DIRTY'; payload: boolean }
   | { type: 'SET_PENDING_NAVIGATION'; payload: NavigationRequest | null };
 
@@ -162,6 +176,7 @@ export interface AppContextValue {
     setAssistantCategory: (assistantId: string, category: string) => Promise<void>;
     openSearchResult: (result: LocalSearchResult) => Promise<void>;
     clearFocusedMessage: () => void;
+    clearFocusedMaterial: () => void;
     setBundleMode: (payload: { bundleId: string; bundle?: AgentBundle } | null) => void;
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
