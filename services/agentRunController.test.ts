@@ -306,6 +306,50 @@ describe('AgentRunController', () => {
     expect(result.state.snapshotVersion).toBe(7);
   });
 
+  it('forwards onClarifyRequest to streamChat and commits clarifyRecords to the model turn', async () => {
+    const onClarifyRequest = vi.fn().mockResolvedValue({ kind: 'option', label: '暗色' });
+    const rawRecord = {
+      id: 'askUser-1-1',
+      request: {
+        question: '要使用哪種主題？',
+        options: [{ label: '亮色' }, { label: '暗色' }],
+        allowCustomAnswer: true,
+      },
+      answer: { kind: 'option' as const, label: '暗色' },
+    };
+    mockStreamChat.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      expect(params.onClarifyRequest).toBe(onClarifyRequest);
+      (params.onComplete as (meta: unknown, fullText: string) => void)(
+        {
+          promptTokenCount: 10,
+          candidatesTokenCount: 5,
+          provider: 'gemini',
+          model: 'gemini-2.5-flash',
+          finishReason: 'complete',
+          projectSummary: completeProjectSummary,
+          toolSequence: ['askUser'],
+          selectedPackSet: ['inspect'],
+          clarifyRecords: [rawRecord],
+        },
+        'turn-text',
+      );
+    });
+
+    const baseOptions = buildOptions();
+    const controller = new AgentRunController({
+      ...baseOptions,
+      callbacks: { ...baseOptions.callbacks, onClarifyRequest },
+    });
+
+    const result = await controller.run();
+
+    const expectedRecord = { ...rawRecord, id: 'clarify-0-0' };
+    expect(result.state.status).toBe('complete');
+    expect(result.clarifyRecords).toEqual([expectedRecord]);
+    const committedModelTurn = result.historyDelta.find(message => message.role === 'model');
+    expect(committedModelTurn?.clarifyRecords).toEqual([expectedRecord]);
+  });
+
   it('continues the run and reports a run-start snapshot failure', async () => {
     const snapshotError = new Error('snapshot unavailable');
     mockCreateSnapshot.mockRejectedValueOnce(snapshotError);

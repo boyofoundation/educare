@@ -21,7 +21,9 @@ import {
   type TokenUsageTotals,
   type ToolCallRecord,
   type RouteProposal,
+  type ClarifyRecord,
 } from '../types';
+import type { ClarifyRequest, ClarifyUserAnswer } from './clarifyToolService';
 import type { RoutableTarget } from './assistantRoutingService';
 import type { ProviderUsageMetadata } from './llmAdapter';
 import { buildSyntheticMessage, serializeAgentTurnLog } from './conversationUtils';
@@ -125,6 +127,14 @@ export interface AgentRunControllerCallbacks {
     document: SpeechUtteranceDoc;
   }) => void;
   onRouteProposal?: (proposal: RouteProposal) => void;
+  /**
+   * askUser 澄清工具的 UI 通道:由 ChatContainer 提供以曝光工具,
+   * 回傳使用者的選項/自訂回答,null 代表略過或中止。
+   */
+  onClarifyRequest?: (
+    request: ClarifyRequest,
+    context: { toolCallId: string },
+  ) => Promise<ClarifyUserAnswer | null>;
   onTurnStart?: (turnIndex: number, maxTurns: number) => void;
   onTurnComplete?: (turnIndex: number, summary: AgentRunTurnSummary) => void;
   onStateChange?: (state: AgentRunState) => void;
@@ -225,6 +235,7 @@ export interface AgentRunResult {
   citations?: MessageCitation[];
   geometryBoards?: GeometryBoardRecord[];
   speechUtterances?: SpeechUtteranceRecord[];
+  clarifyRecords?: ClarifyRecord[];
   images?: MessageImage[];
   tokenInfo: {
     promptTokenCount: number;
@@ -451,6 +462,7 @@ export class AgentRunController {
     let finalSubagentUsageTotals: TokenUsageTotals | undefined;
     const geometryBoards: GeometryBoardRecord[] = [];
     const speechUtterances: SpeechUtteranceRecord[] = [];
+    const clarifyRecords: ClarifyRecord[] = [];
     const images: MessageImage[] = [];
     let firstTurnPackSet = resumeFrom?.firstTurnPackSet
       ? [...resumeFrom.firstTurnPackSet]
@@ -801,6 +813,7 @@ export class AgentRunController {
           subagentUsageTotals?: TokenUsageTotals;
           geometryBoards?: GeometryBoardRecord[];
           speechUtterances?: SpeechUtteranceRecord[];
+          clarifyRecords?: ClarifyRecord[];
           images?: MessageImage[];
         } = {
           finishReason: 'complete',
@@ -945,6 +958,7 @@ export class AgentRunController {
             onSubagentActivity: callbacks.onSubagentActivity,
             onGeometryBoardPreview: callbacks.onGeometryBoardPreview,
             onSpeechUtterancePreview: callbacks.onSpeechUtterancePreview,
+            onClarifyRequest: callbacks.onClarifyRequest,
             onToolCallActivity: record => {
               // Live tool-trace:回合中的 function-call loop 內,每個工具首次 'running'
               // 時立即累積並 emit state,讓 canvas AgentRunPanel 即時看到工具軌跡與活動
@@ -1058,6 +1072,10 @@ export class AgentRunController {
                 id: `speech-${state.turnIndex}-${index}`,
                 title: utterance.title,
                 doc: utterance,
+              }));
+              turn.clarifyRecords = meta.clarifyRecords?.map((record, index) => ({
+                ...record,
+                id: `clarify-${state.turnIndex}-${index}`,
               }));
               turn.images = meta.images;
               totalPromptTokens += meta.promptTokenCount;
@@ -1319,6 +1337,7 @@ export class AgentRunController {
           subagentRuns: turn.subagentRuns,
           geometryBoards: turn.geometryBoards,
           speechUtterances: turn.speechUtterances,
+          clarifyRecords: turn.clarifyRecords,
           images: turn.images,
         };
         if (turn.geometryBoards) {
@@ -1326,6 +1345,9 @@ export class AgentRunController {
         }
         if (turn.speechUtterances) {
           speechUtterances.push(...turn.speechUtterances);
+        }
+        if (turn.clarifyRecords) {
+          clarifyRecords.push(...turn.clarifyRecords);
         }
         if (turn.images) {
           for (const image of turn.images) {
@@ -1422,6 +1444,7 @@ export class AgentRunController {
       citations: gatheredContext?.citations,
       geometryBoards: geometryBoards.length > 0 ? geometryBoards : undefined,
       speechUtterances: speechUtterances.length > 0 ? speechUtterances : undefined,
+      clarifyRecords: clarifyRecords.length > 0 ? clarifyRecords : undefined,
       images: images.length > 0 ? images : undefined,
       tokenInfo: {
         promptTokenCount: totalPromptTokens,
