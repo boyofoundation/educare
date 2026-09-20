@@ -111,6 +111,7 @@ Multi-turn agent orchestration with checkpointing and recovery:
 - **Subagent delegation** - Spawn batched subagent runs for parallel tasks; activities surface in `AgentActivityTimeline`
 - **Intent-based tool policy** - Dynamically generates prompts and tool sets based on `new_build`/`resume_project`/`inspect_only`/`targeted_edit`/`finalize` intents
 - **Abort signals** - Forwarded from UI → controller → LLM adapter → upstream provider
+- **askUser clarify tool** - Default-exposed picker tool: the model asks one option-based question, the chat renders clickable choices (plus custom free-text input or skip); the answer returns to the tool loop and persists on the message as `clarifyRecords`
 
 ### 💬 Chat UI Overhaul _(5 phases)_
 
@@ -154,7 +155,7 @@ Multi-turn agent orchestration with checkpointing and recovery:
 
 - **Assistant** — id, name, description, systemPrompt, ragChunks, starterPrompts, subagentDelegationEnabled?, routableAssistantIds?
 - **ChatSession** — id, assistantId, messages, tokenUsage, activeProjectId?, compactContext?, handoffContext?
-- **ChatMessage** — role, content, timestamp?, isError?, agentTurnLog?, toolCallLog?, subagentRuns?, citations?, routeProposal?
+- **ChatMessage** — role, content, timestamp?, isError?, agentTurnLog?, toolCallLog?, subagentRuns?, citations?, clarifyRecords?, routeProposal?
 - **HtmlProject** — id, assistantId, sessionId?, name, entryFile, status, previewVersion, files, todos, snapshots, runtimeDiagnostics
 - **AgentRunCheckpoint** — Persisted across reloads; schemaVersion 1
 - **RouteProposal** — Pending/accepted/declined/failed assistant handoff
@@ -178,8 +179,8 @@ Multi-turn agent orchestration with checkpointing and recovery:
 | `pnpm run test:watch`            | Vitest watch mode                                       |
 | `pnpm run test:ui`               | Vitest UI                                               |
 | `pnpm run test:coverage`         | Vitest coverage report                                  |
-| `pnpm run test:e2e`              | Headless Playwright E2E (JSON reporter; default)         |
-| `pnpm run test:e2e:ui`           | Optional GUI debugging only; not routine E2E             |
+| `pnpm run test:e2e`              | Headless Playwright E2E (JSON reporter; default)        |
+| `pnpm run test:e2e:ui`           | Optional GUI debugging only; not routine E2E            |
 | `pnpm run test:model-comparison` | Model-comparison Playwright spec                        |
 | `pnpm run quality`               | typecheck + lint + format:check + test                  |
 | `pnpm run init-turso`            | Initialize Turso DB                                     |

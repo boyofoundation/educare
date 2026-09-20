@@ -89,6 +89,7 @@ EduCare 是專為財團法人博幼社會福利基金會及其服務的偏鄉兒
 - **子代理委派** - 批次派出子代理平行執行任務；活動會顯示在 `AgentActivityTimeline` 中
 - **意圖式工具策略** - 根據 `new_build` / `resume_project` / `inspect_only` / `targeted_edit` / `finalize` 意圖動態產生提示與工具集合
 - **中止訊號** - 從 UI → controller → LLM adapter → 上游供應商一路傳遞
+- **askUser 澄清工具** - 預設提供的選單式提問工具:模型提出一個附選項的問題,聊天介面渲染可點選的選項(亦支援自訂輸入或略過);回答會回傳給工具迴圈,並以 `clarifyRecords` 保存在訊息上
 
 ### 💬 Chat UI 五階段重構
 
@@ -132,7 +133,7 @@ EduCare 是專為財團法人博幼社會福利基金會及其服務的偏鄉兒
 
 - **Assistant** —id, name, description, systemPrompt, ragChunks, starterPrompts, subagentDelegationEnabled?, routableAssistantIds?
 - **ChatSession** —id, assistantId, messages, tokenUsage, activeProjectId?, compactContext?, handoffContext?
-- **ChatMessage** —role, content, timestamp?, isError?, agentTurnLog?, toolCallLog?, subagentRuns?, citations?, routeProposal?
+- **ChatMessage** —role, content, timestamp?, isError?, agentTurnLog?, toolCallLog?, subagentRuns?, citations?, clarifyRecords?, routeProposal?
 - **HtmlProject** —id, assistantId, sessionId?, name, entryFile, status, previewVersion, files, todos, snapshots, runtimeDiagnostics
 - **AgentRunCheckpoint** —跨重新載入儲存；schemaVersion 1
 - **RouteProposal** —pending / accepted / declined / failed 助理交接
@@ -156,8 +157,8 @@ EduCare 是專為財團法人博幼社會福利基金會及其服務的偏鄉兒
 | `pnpm run test:watch`            | Vitest watch 模式                                  |
 | `pnpm run test:ui`               | Vitest UI                                          |
 | `pnpm run test:coverage`         | Vitest 覆蓋率報告                                  |
-| `pnpm run test:e2e`              | Headless Playwright E2E（JSON 報告；預設）          |
-| `pnpm run test:e2e:ui`           | 僅供必要的 GUI 除錯，不用於一般 E2E                 |
+| `pnpm run test:e2e`              | Headless Playwright E2E（JSON 報告；預設）         |
+| `pnpm run test:e2e:ui`           | 僅供必要的 GUI 除錯，不用於一般 E2E                |
 | `pnpm run test:model-comparison` | 模型比較 Playwright 規格                           |
 | `pnpm run quality`               | typecheck + lint + format:check + test             |
 | `pnpm run init-turso`            | 初始化 Turso 資料庫                                |
