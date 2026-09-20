@@ -5,7 +5,7 @@
 空白或「待測」不代表通過；自動化結果另見 [UI/UX 驗證紀錄](./2026-09-20-uiux-validation.md)
 與 [F1–F6 功能驗證](./2026-09-20-functionality-validation.md)。
 
-測試版本：合併後的 `main`（開始測試時填入 commit：＿＿＿＿）
+測試版本：合併後的 `main`（`13cadbea4535077a39606fe368ba9025ce67ce92`；開始測試時仍請記錄實際 checkout 的 commit）
 
 ## 每筆問題的回報格式
 

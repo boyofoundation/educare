@@ -2,7 +2,7 @@
 
 日期：2026-09-20。對應[功能計畫](./2026-09-20-functionality-plan.md)。本紀錄只宣稱實際執行的 Agent 檢查；真人試用、教師標註、iOS／Android 實機與 VoiceOver 留在[改善回報](./2026-09-20-uiux-feedback.md)。
 
-狀態：F1–F6 的 Agent 可執行實作與自動驗證已完成，可進行本機 main 合併。真人與實機驗收仍待後續補充，不視為已通過。
+狀態：F1–F6 的 Agent 可執行實作與自動驗證已完成，已合併至本機 `main`（`13cadbea4535077a39606fe368ba9025ce67ce92`）。真人與實機驗收仍待後續補充，不視為已通過。
 
 ## 驗證環境與範圍
 
@@ -52,7 +52,7 @@ pnpm exec playwright test -c playwright.uiux.config.ts
 
 ## Team、AGY 與清理
 
-`educare-functionality-78f2747a` 的 19 項 task 已終止；18 completed，歷史 task 7 的失敗由 task 8 接替並明確保留。四位 worker 的內容先整合，再封存 source／Team 狀態及 Git stash，才正常 shutdown；沒有由 shutdown 自動產生或合併 commit。四個 worker worktrees／panes 已移除，主分支原有未提交檔案未覆蓋。
+`educare-functionality-78f2747a` 的 19 項 task 已終止；18 completed，歷史 task 7 的失敗由 task 8 接替並明確保留。四位 worker 的內容先整合，再封存 source／Team 狀態及 Git stash，才正常 shutdown；沒有由 shutdown 自動產生或合併 commit。四個 worker worktrees／panes 已移除，交付用 feature／UIUX archive branches 亦在合併驗證後清理；主分支原有未提交檔案未覆蓋。未合併且追蹤其他產品線的 `worktree-teacher-centered-ui-ux-redesign` 不屬於本次交付，保留以避免誤刪。
 
 AGY 嚴格使用 Gemini 3.8 Flash。F1 review 因 Git／Xcode 環境 exit 2 未完成；F3 review 因缺少規定結果／detached sentinel 而 exit 90。均未當成通過、未重試；改由 Codex 獨立審查及本機測試補足。Team／AGY 執行成功與產品驗收是不同證據。
 
@@ -62,6 +62,6 @@ AGY 嚴格使用 Gemini 3.8 Flash。F1 review 因 Git／Xcode 環境 exit 2 未�
 - Vitest：126 個 test files、1,722 個 tests 全部通過。
 - Production headless E2E：功能 18、真實 Service Worker 離線 14、UI/UX 29，共 61 項通過，沒有 skipped、flaky 或 failed。
 - 提交依共享持久化、教材搜尋、檔案／供應商邊界、練習、代理恢復、備份、UI、驗收分組；另保留前置離線網站及助理匯入預覽提交。不含 Team runtime 或原始測試 JSON。
-- 本機合併與清理只處理本次 feature／AGY worktrees；主分支原有 `.gitignore`、`AGENTS.md` 及兩份開發報告另行備份，不納入功能提交。備份位於主工作區 `.omx/backups/`，恢復方式見各目錄 `RECOVERY.md`；實際合併版本以 Git history 為準。
+- 本機合併與清理只處理本次 feature／AGY worktrees 及已合併的交付分支；主分支原有 `.gitignore`、`AGENTS.md` 及兩份開發報告另行備份，不納入功能提交。備份位於主工作區 `.omx/backups/`，恢復方式見各目錄 `RECOVERY.md`；實際合併版本以 Git history 為準。
 
 後續只保留真人／實機驗收、教師標註與選用真實 provider smoke；請使用[改善回報](./2026-09-20-uiux-feedback.md)記錄版本、步驟、預期／實際結果與附件。上述 parser 取消／裝置效能限制仍適用，不以自動化結果替代真人證據。
