@@ -216,9 +216,9 @@ function ProjectCard({
         isActive
           ? 'border-cyan-500/40 bg-cyan-950/10'
           : 'border-gray-800 bg-gray-950/80 hover:border-cyan-500/40'
-      } ${disabled ? '' : 'cursor-pointer'}`}
+      } ${disabled ? '' : 'cursor-pointer'} ${isMenuOpen || isConfirmingDelete ? 'z-20' : ''}`}
     >
-      <div className='flex items-start justify-between gap-3'>
+      <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
         <div className='min-w-0 flex-1'>
           {isEditing ? (
             <div className='flex items-center gap-1.5'>
@@ -244,7 +244,7 @@ function ProjectCard({
                 type='button'
                 onClick={submitRename}
                 aria-label='確認重新命名'
-                className='flex-shrink-0 rounded-lg p-1.5 text-cyan-300 transition hover:bg-cyan-500/15 hover:text-cyan-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-500'
+                className='flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg text-cyan-300 transition hover:bg-cyan-500/15 hover:text-cyan-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-500'
               >
                 <Icon path={ICON_PATHS.check} />
               </button>
@@ -252,7 +252,7 @@ function ProjectCard({
                 type='button'
                 onClick={cancelRename}
                 aria-label='取消重新命名'
-                className='flex-shrink-0 rounded-lg p-1.5 text-gray-400 transition hover:bg-gray-800 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-500'
+                className='flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-800 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-500'
               >
                 <Icon path={ICON_PATHS.x} />
               </button>
@@ -263,7 +263,7 @@ function ProjectCard({
           <div className='mt-1 truncate font-mono text-xs text-gray-500'>{project.entryFile}</div>
         </div>
 
-        <div className='flex flex-shrink-0 items-center gap-1.5'>
+        <div className='flex max-w-full flex-wrap items-center gap-1.5 sm:justify-end'>
           {isActive && (
             <span className='rounded-full border border-cyan-500/40 bg-cyan-500/15 px-2.5 py-1 text-[11px] font-medium text-cyan-100'>
               目前使用中
@@ -273,7 +273,7 @@ function ProjectCard({
             v{project.previewVersion}
           </span>
 
-          <div className='relative' ref={menuRef}>
+          <div className='relative flex flex-col items-end' ref={menuRef}>
             <button
               type='button'
               aria-label='專案動作選單'
@@ -281,7 +281,7 @@ function ProjectCard({
               aria-expanded={isMenuOpen}
               disabled={disabled}
               onClick={() => setIsMenuOpen(open => !open)}
-              className='rounded-lg p-1.5 text-gray-400 transition hover:bg-gray-800 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-500 disabled:cursor-not-allowed disabled:opacity-50'
+              className='flex min-h-11 min-w-11 items-center justify-center rounded-lg p-1.5 text-gray-400 transition hover:bg-gray-800 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-500 disabled:cursor-not-allowed disabled:opacity-50'
             >
               <svg className='h-5 w-5' viewBox='0 0 24 24' fill='currentColor' aria-hidden='true'>
                 <circle cx='12' cy='5' r='1.6' />
@@ -294,7 +294,7 @@ function ProjectCard({
               <div
                 role='menu'
                 aria-label='專案動作'
-                className='absolute right-0 top-full z-30 mt-1 w-48 overflow-hidden rounded-xl border border-gray-700 bg-gray-900 py-1 shadow-xl shadow-black/50'
+                className='mt-2 w-52 max-w-full overflow-hidden rounded-xl border border-gray-700 bg-gray-900 py-1 shadow-xl shadow-black/50'
               >
                 {menuItems.map(item => (
                   <button
@@ -305,7 +305,7 @@ function ProjectCard({
                       setIsMenuOpen(false);
                       item.onSelect();
                     }}
-                    className='flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-gray-200 transition hover:bg-gray-800 hover:text-white focus-visible:bg-gray-800 focus-visible:outline-none'
+                    className='flex min-h-11 w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-gray-200 transition hover:bg-gray-800 hover:text-white focus-visible:bg-gray-800 focus-visible:outline-none'
                   >
                     <Icon path={item.iconPath} className='h-4 w-4 flex-shrink-0 text-gray-400' />
                     {item.label}
@@ -319,7 +319,7 @@ function ProjectCard({
                     setIsMenuOpen(false);
                     setIsConfirmingDelete(true);
                   }}
-                  className='flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-rose-300 transition hover:bg-rose-500/10 hover:text-rose-200 focus-visible:bg-rose-500/10 focus-visible:outline-none'
+                  className='flex min-h-11 w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-rose-300 transition hover:bg-rose-500/10 hover:text-rose-200 focus-visible:bg-rose-500/10 focus-visible:outline-none'
                 >
                   <Icon path={ICON_PATHS.trash} className='h-4 w-4 flex-shrink-0' />
                   Delete project
@@ -340,7 +340,7 @@ function ProjectCard({
           type='button'
           onClick={onOpen}
           disabled={disabled}
-          className='rounded-lg bg-cyan-600 px-4 py-1.5 text-xs font-semibold text-white shadow-sm shadow-cyan-950/50 transition hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-60'
+          className='min-h-11 rounded-lg bg-cyan-600 px-4 py-2 text-xs font-semibold text-white shadow-sm shadow-cyan-950/50 transition hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-60'
         >
           開啟
         </button>
@@ -357,7 +357,7 @@ function ProjectCard({
             <button
               type='button'
               onClick={() => setIsConfirmingDelete(false)}
-              className='rounded-lg border border-gray-700 px-4 py-1.5 text-xs font-medium text-gray-300 transition hover:border-gray-500 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-500'
+              className='min-h-11 rounded-lg border border-gray-700 px-4 py-2 text-xs font-medium text-gray-300 transition hover:border-gray-500 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-500'
             >
               取消
             </button>
@@ -367,7 +367,7 @@ function ProjectCard({
                 setIsConfirmingDelete(false);
                 onDelete();
               }}
-              className='rounded-lg bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-400'
+              className='min-h-11 rounded-lg bg-rose-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-rose-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-400'
             >
               永久刪除
             </button>
@@ -696,7 +696,7 @@ export function ProjectPicker({
                   type='button'
                   onClick={() => importZipInputRef.current?.click()}
                   disabled={isImportingZip || isCreatingProject}
-                  className='inline-flex items-center gap-2 self-start whitespace-nowrap rounded-xl border border-gray-600/60 bg-gray-900/60 px-5 py-2.5 text-sm font-medium text-gray-200 transition hover:border-cyan-500/40 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-500 disabled:cursor-not-allowed disabled:opacity-60'
+                  className='inline-flex min-h-11 items-center gap-2 self-start whitespace-nowrap rounded-xl border border-gray-600/60 bg-gray-900/60 px-5 py-2.5 text-sm font-medium text-gray-200 transition hover:border-cyan-500/40 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-500 disabled:cursor-not-allowed disabled:opacity-60'
                 >
                   {isImportingZip ? (
                     <Spinner />
@@ -710,7 +710,7 @@ export function ProjectPicker({
                   onClick={handleCreateProject}
                   loading={isCreatingProject}
                   size='sm'
-                  className='self-start whitespace-nowrap px-5 py-2.5 text-sm'
+                  className='min-h-11 self-start whitespace-nowrap px-5 py-2.5 text-sm'
                 >
                   {!isCreatingProject && <Icon path={ICON_PATHS.plus} className='mr-2 h-4 w-4' />}
                   Start new project
@@ -738,7 +738,7 @@ export function ProjectPicker({
                     onChange={event => setSearchQuery(event.target.value)}
                     placeholder='搜尋專案名稱或描述'
                     aria-label='搜尋專案'
-                    className='w-full rounded-xl border border-gray-700 bg-gray-950/80 py-2 pl-9 pr-3 text-sm text-white placeholder-gray-500 outline-none transition focus:border-cyan-500/60 focus:ring-1 focus:ring-cyan-500/40'
+                    className='min-h-11 w-full rounded-xl border border-gray-700 bg-gray-950/80 py-2 pl-9 pr-3 text-sm text-white placeholder-gray-500 outline-none transition focus:border-cyan-500/60 focus:ring-1 focus:ring-cyan-500/40'
                   />
                 </div>
               )}

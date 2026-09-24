@@ -284,7 +284,7 @@ export function AgentRunPanel({ projectId, runState }: AgentRunPanelProps): Reac
 
       {/* Version history section (git log + commit + revert) */}
       <div className='rounded-xl border border-gray-800 bg-gray-950/40 p-3'>
-        <div className='mb-2 flex flex-wrap items-center gap-2'>
+        <div className='mb-3 flex flex-wrap items-center gap-2'>
           <span className='text-[10px] uppercase tracking-wider text-gray-500'>版本歷史</span>
           {hasDirtyChanges ? (
             <span
@@ -298,25 +298,27 @@ export function AgentRunPanel({ projectId, runState }: AgentRunPanelProps): Reac
               工作樹乾淨
             </span>
           )}
-          <button
-            type='button'
-            onClick={() => setCommitDraftOpen(open => !open)}
-            disabled={!hasDirtyChanges || isCommitting}
-            className='ml-auto rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-40'
-            aria-label='提交變更'
-            data-testid='commit-changes-button'
-          >
-            提交變更
-          </button>
-          <button
-            type='button'
-            onClick={refreshHistory}
-            disabled={isLoading}
-            className='rounded-full border border-gray-700 bg-gray-800/80 px-2 py-0.5 text-[10px] text-gray-300 transition hover:border-gray-600 hover:text-white disabled:opacity-50'
-            aria-label='重新載入歷史'
-          >
-            {isLoading ? '載入中…' : '重新載入'}
-          </button>
+          <div className='flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto'>
+            <button
+              type='button'
+              onClick={() => setCommitDraftOpen(open => !open)}
+              disabled={!hasDirtyChanges || isCommitting}
+              className='min-h-9 rounded-full border border-cyan-500/40 bg-cyan-500/10 px-3 py-1 text-[10px] text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-40'
+              aria-label='提交變更'
+              data-testid='commit-changes-button'
+            >
+              提交變更
+            </button>
+            <button
+              type='button'
+              onClick={refreshHistory}
+              disabled={isLoading}
+              className='min-h-9 rounded-full border border-gray-700 bg-gray-800/80 px-3 py-1 text-[10px] text-gray-300 transition hover:border-gray-600 hover:text-white disabled:opacity-50'
+              aria-label='重新載入歷史'
+            >
+              {isLoading ? '載入中…' : '重新載入'}
+            </button>
+          </div>
         </div>
 
         {commitDraftOpen && (
@@ -326,7 +328,7 @@ export function AgentRunPanel({ projectId, runState }: AgentRunPanelProps): Reac
               value={commitMessage}
               onChange={event => setCommitMessage(event.target.value)}
               placeholder='提交訊息 (例如:加入首頁導覽列)'
-              className='min-w-0 flex-1 rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-[11px] text-gray-100 placeholder:text-gray-600 focus:border-cyan-500 focus:outline-none'
+              className='min-h-10 min-w-0 flex-1 rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-[11px] text-gray-100 placeholder:text-gray-600 focus:border-cyan-500 focus:outline-none'
               data-testid='commit-message-input'
               disabled={isCommitting}
             />
@@ -334,7 +336,7 @@ export function AgentRunPanel({ projectId, runState }: AgentRunPanelProps): Reac
               type='button'
               onClick={handleCommit}
               disabled={!canCommit}
-              className='rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-100 transition hover:bg-emerald-500/20 disabled:opacity-40'
+              className='min-h-10 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[10px] text-emerald-100 transition hover:bg-emerald-500/20 disabled:opacity-40'
               data-testid='commit-confirm-button'
             >
               {isCommitting ? '提交中…' : '確認提交'}
@@ -346,7 +348,7 @@ export function AgentRunPanel({ projectId, runState }: AgentRunPanelProps): Reac
                 setCommitMessage('');
               }}
               disabled={isCommitting}
-              className='rounded-md border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200 disabled:opacity-40'
+              className='min-h-10 rounded-md border border-gray-700 px-3 py-1 text-[10px] text-gray-400 hover:text-gray-200 disabled:opacity-40'
             >
               取消
             </button>
@@ -387,7 +389,10 @@ export function AgentRunPanel({ projectId, runState }: AgentRunPanelProps): Reac
                       {commit.shortOid}
                     </span>
                     <span className='text-gray-500'>·</span>
-                    <span className='max-w-[12rem] truncate text-gray-200' title={commit.note}>
+                    <span
+                      className='min-w-0 max-w-[12rem] flex-1 truncate text-gray-200'
+                      title={commit.note}
+                    >
                       {commit.note || '(無訊息)'}
                     </span>
                     {commit.isSnapshot && (
@@ -404,7 +409,7 @@ export function AgentRunPanel({ projectId, runState }: AgentRunPanelProps): Reac
                         type='button'
                         onClick={() => handleRevert(commit.previewVersion as number)}
                         disabled={revertingVersion !== null}
-                        className='ml-auto rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50'
+                        className='ml-auto min-h-9 shrink-0 rounded-full border border-cyan-500/40 bg-cyan-500/10 px-3 py-1 text-[10px] text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50'
                         aria-label={`還原至版本 v${commit.previewVersion}`}
                         data-testid={`history-revert-${commit.shortOid}`}
                       >

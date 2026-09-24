@@ -144,8 +144,8 @@ export function HtmlProjectWorkspace({ projectId }: HtmlProjectWorkspaceProps): 
         onClose={() => actions.setProjectWorkspaceOpen(false)}
       />
 
-      <div className='border-b border-gray-800 px-4 py-3'>
-        <div className='inline-flex items-center gap-1 rounded-xl border border-gray-800 bg-gray-900/80 p-1'>
+      <div className='shrink-0 border-b border-gray-800 px-4 py-3'>
+        <div className='mx-auto grid w-full max-w-md grid-cols-3 gap-1 rounded-xl border border-gray-800 bg-gray-900/80 p-1'>
           {tabs.map(tab => {
             const isActive = activeTab === tab.id;
             return (
@@ -155,7 +155,7 @@ export function HtmlProjectWorkspace({ projectId }: HtmlProjectWorkspaceProps): 
                 onClick={() => setActiveTab(tab.id)}
                 aria-label={tab.label}
                 aria-pressed={isActive}
-                className={`inline-flex items-center rounded-lg px-3.5 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70 ${
+                className={`inline-flex min-h-11 shrink-0 items-center rounded-lg px-4 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70 ${
                   isActive
                     ? 'bg-cyan-500 text-gray-950 shadow-sm'
                     : 'text-gray-400 hover:bg-gray-800/70 hover:text-gray-100'

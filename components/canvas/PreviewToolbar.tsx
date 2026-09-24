@@ -14,7 +14,7 @@ interface PreviewToolbarProps {
 }
 
 const iconButtonClass =
-  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-800 hover:text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400';
+  'inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-800 hover:text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400';
 
 function Spinner(): React.JSX.Element {
   return (
@@ -40,17 +40,23 @@ export function PreviewToolbar({
   const isBusy = isRefreshing || isDownloadingZip || isUploadingFiles;
 
   return (
-    <div className='flex items-center justify-between gap-3 border-b border-gray-700/60 px-4 py-3'>
-      <div className='flex min-w-0 items-center gap-2'>
+    <div
+      className='flex shrink-0 flex-col gap-3 border-b border-gray-700/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'
+      data-testid='preview-toolbar'
+    >
+      <div className='flex min-w-0 flex-1 flex-wrap items-center gap-2'>
         <p className='shrink-0 text-sm font-semibold text-white'>HTML Preview</p>
         <span className='shrink-0 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-px text-[10px] font-medium tabular-nums text-cyan-300'>
           v{previewVersion}
         </span>
-        <span className='truncate font-mono text-[11px] text-gray-500' title={projectId}>
+        <span
+          className='min-w-0 max-w-full truncate font-mono text-[11px] text-gray-500 sm:flex-1'
+          title={projectId}
+        >
           {projectId}
         </span>
       </div>
-      <div className='flex items-center gap-1'>
+      <div className='flex w-full min-w-max flex-nowrap items-center justify-end gap-1 sm:w-auto'>
         <button
           type='button'
           onClick={() => onRefresh()}
@@ -82,6 +88,12 @@ export function PreviewToolbar({
             title='在新分頁開啟完整預覽'
             aria-label='Open tab'
             aria-disabled={isBusy || undefined}
+            tabIndex={isBusy ? -1 : undefined}
+            onClick={event => {
+              if (isBusy) {
+                event.preventDefault();
+              }
+            }}
             className={`${iconButtonClass} ${isBusy ? 'pointer-events-none opacity-40' : ''}`}
           >
             <svg

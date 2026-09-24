@@ -1916,11 +1916,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
     <div className='relative flex h-full min-h-0 flex-1 flex-col bg-gray-900'>
       {!hideHeader && (
         <div className='flex-shrink-0 border-b border-gray-700 bg-gray-800 px-4 py-3 md:px-6 md:py-4'>
-          <div className='flex items-center justify-between'>
-            <h2 className='mr-2 truncate text-lg font-semibold text-white md:text-xl'>
+          <div className='flex min-w-0 items-center justify-between gap-3'>
+            <h2 className='min-w-0 flex-1 truncate text-lg font-semibold text-white md:text-xl'>
               {assistantName}
             </h2>
-            <div className='flex items-center space-x-3'>
+            <div className='flex shrink-0 items-center gap-3'>
               {headerActions}
               {isSandboxMode && (
                 <button

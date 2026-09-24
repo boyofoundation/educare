@@ -140,6 +140,18 @@ const expectTouchTarget = async (locator: Locator): Promise<void> => {
   expect(bounds?.height).toBeGreaterThanOrEqual(44);
 };
 
+const expectCenterHitTarget = async (locator: Locator): Promise<void> => {
+  const receivesCenterClick = await locator.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    const target = document.elementFromPoint(
+      bounds.left + bounds.width / 2,
+      bounds.top + bounds.height / 2,
+    );
+    return target === element || element.contains(target);
+  });
+  expect(receivesCenterClick).toBe(true);
+};
+
 const expectNoHorizontalOverflow = async (page: Page): Promise<void> => {
   const dimensions = await page.evaluate(() => ({
     viewport: window.innerWidth,
@@ -211,6 +223,7 @@ test.describe('UIUX sidebar hierarchy and light theme @sidebar', () => {
     // 完全收起：側欄隱藏、只留浮動展開鈕，且展開鈕在淺色下對比足夠。
     const collapseToggle = navigation.getByRole('button', { name: '收折側邊欄' });
     await expectTouchTarget(collapseToggle);
+    await expectCenterHitTarget(collapseToggle);
     await collapseToggle.click();
 
     const expandToggle = page.getByTestId('sidebar-expand-toggle');

@@ -577,7 +577,7 @@ export function Layout({ children }: LayoutProps): React.JSX.Element {
       {/* Sidebar */}
       {/* Sidebar — 桌面收折時整個隱藏 (w-0)，只留 shell 層的浮動展開鈕。 */}
       <div
-        className={`app-sidebar ${state.isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 h-[100dvh] z-50 overflow-hidden ${
+        className={`app-sidebar ${state.isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 h-[100dvh] z-50 ${state.isMobile || state.isTablet ? 'overflow-hidden' : 'overflow-visible'} ${
           state.isMobile || state.isTablet ? 'w-80' : collapsed ? 'w-0' : 'w-72'
         } ${collapsed ? 'border-r-0' : 'border-r border-gray-700/50'} bg-gray-900/95 backdrop-blur-sm shadow-2xl transition-all duration-300 ease-in-out`}
         role='navigation'

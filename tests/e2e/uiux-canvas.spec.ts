@@ -3,6 +3,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 test.use({ video: 'off' });
 
 const DESKTOP_VIEWPORT = { width: 1280, height: 900 };
+const DESKTOP_SPLIT_VIEWPORT = { width: 1024, height: 900 };
 const RESPONSIVE_VIEWPORTS = [
   { width: 360, height: 800 },
   { width: 390, height: 844 },
@@ -368,6 +369,42 @@ const assertNoHorizontalOverflow = async (page: Page): Promise<void> => {
   );
 };
 
+const assertNoOverlappingControls = async (
+  controls: Locator[],
+  label: string,
+  minimumSize = 44,
+): Promise<void> => {
+  await Promise.all(
+    controls.map(control => expect(control, `${label} control should be visible`).toBeVisible()),
+  );
+  const renderedBounds = await Promise.all(controls.map(control => control.boundingBox()));
+  const boxes = renderedBounds.map((bounds, index) => {
+    expect(bounds, `${label} control should have a rendered box`).not.toBeNull();
+    if (!bounds) {
+      throw new Error(`${label} control ${index} has no rendered box`);
+    }
+    expect(bounds.width, `${label} control width`).toBeGreaterThanOrEqual(minimumSize);
+    expect(bounds.height, `${label} control height`).toBeGreaterThanOrEqual(minimumSize);
+    return bounds;
+  });
+
+  for (let leftIndex = 0; leftIndex < boxes.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < boxes.length; rightIndex += 1) {
+      const left = boxes[leftIndex];
+      const right = boxes[rightIndex];
+      const separated =
+        left.x + left.width <= right.x + 1 ||
+        right.x + right.width <= left.x + 1 ||
+        left.y + left.height <= right.y + 1 ||
+        right.y + right.height <= left.y + 1;
+      expect(
+        separated,
+        `${label} controls ${leftIndex} and ${rightIndex} overlap: ${JSON.stringify({ left, right })}`,
+      ).toBe(true);
+    }
+  }
+};
+
 test.describe('UIUX Canvas production flows @canvas @flows', () => {
   test('creates, edits, opens, closes, and reopens a real Canvas project', async ({ page }) => {
     await blockExternalRequests(page);
@@ -471,6 +508,42 @@ test.describe('UIUX Canvas production flows @canvas @flows', () => {
       .toBeLessThan(readingPosition + 24);
   });
 
+  test('keeps project actions in flow without covering the card open action', async ({ page }) => {
+    await blockExternalRequests(page);
+    const assistant = makeAssistant();
+    const session = makeSession({ activeProjectId: PROJECT_ID });
+    const project = makeProject();
+    await seedCanvasDatabase(page, {
+      assistant,
+      session,
+      project,
+      files: [makeProjectFile('/index.html', makeArtifactHtml(CURRENT_ARTIFACT_MARKER))],
+    });
+    await openFreshApp(page);
+
+    await page.getByRole('button', { name: 'Hide' }).click();
+    await expect(page.getByTestId('html-project-workspace')).toBeHidden();
+    await page.getByRole('button', { name: '工作區', exact: true }).click();
+    const workspaceDialog = page.getByRole('dialog', { name: '工作區' });
+    await workspaceDialog.getByRole('button', { name: 'HTML Projects' }).click();
+
+    const picker = page.getByRole('dialog', { name: 'HTML Canvas projects' });
+    const card = picker.getByTestId(`project-card-${PROJECT_ID}`);
+    await expect(card).toBeVisible();
+    await card.getByRole('button', { name: '專案動作選單' }).click();
+
+    const menu = card.getByRole('menu');
+    await expect(menu).toBeVisible();
+    const menuBounds = await menu.boundingBox();
+    const openBounds = await card.getByRole('button', { name: '開啟' }).boundingBox();
+    expect(menuBounds).not.toBeNull();
+    expect(openBounds).not.toBeNull();
+    expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(openBounds!.y + 1);
+    await expect
+      .poll(() => menu.evaluate(element => window.getComputedStyle(element).position))
+      .toBe('static');
+  });
+
   test('keeps Canvas state reachable and the document within the viewport at all target widths', async ({
     page,
   }) => {
@@ -510,6 +583,64 @@ test.describe('UIUX Canvas production flows @canvas @flows', () => {
           CURRENT_ARTIFACT_MARKER,
         );
       }
+    }
+  });
+
+  test('keeps workspace controls separated and touchable at compact widths', async ({ page }) => {
+    await blockExternalRequests(page);
+    const assistant = makeAssistant();
+    const session = makeSession({ activeProjectId: PROJECT_ID });
+    const project = makeProject();
+    await seedCanvasDatabase(page, {
+      assistant,
+      session,
+      project,
+      files: [makeProjectFile('/index.html', makeArtifactHtml(CURRENT_ARTIFACT_MARKER))],
+    });
+
+    for (const viewport of [
+      RESPONSIVE_VIEWPORTS[0],
+      RESPONSIVE_VIEWPORTS[1],
+      DESKTOP_SPLIT_VIEWPORT,
+      DESKTOP_VIEWPORT,
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.reload({ waitUntil: 'domcontentloaded' });
+
+      const workspace = page.getByTestId('html-project-workspace');
+      await expect(workspace).toBeVisible();
+      await expect(workspace.getByRole('button', { name: 'Files', exact: true })).toContainText(
+        '1',
+      );
+      const toolbar = workspace.getByTestId('preview-toolbar');
+      await assertNoOverlappingControls(
+        [
+          toolbar.getByRole('button', { name: 'Refresh' }),
+          toolbar.getByRole('link', { name: 'Open tab' }),
+          toolbar.getByRole('button', { name: 'Upload files' }),
+          toolbar.getByRole('button', { name: 'Download ZIP' }),
+          toolbar.getByRole('button', { name: 'Hide' }),
+        ],
+        `workspace toolbar at ${viewport.width}px`,
+      );
+
+      await assertNoOverlappingControls(
+        [
+          workspace.getByRole('button', { name: 'Preview', exact: true }),
+          workspace.getByRole('button', { name: 'Files', exact: true }),
+          workspace.getByRole('button', { name: 'Activity', exact: true }),
+        ],
+        `workspace tabs at ${viewport.width}px`,
+      );
+
+      await assertNoOverlappingControls(
+        [
+          workspace.getByRole('button', { name: 'Desktop' }),
+          workspace.getByRole('button', { name: 'Tablet' }),
+          workspace.getByRole('button', { name: 'Mobile' }),
+        ],
+        `preview viewport controls at ${viewport.width}px`,
+      );
     }
   });
 
