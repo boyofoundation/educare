@@ -11,7 +11,7 @@ const {
   mockExecuteCompute,
   mockExecuteDrawGeometry,
   mockNormalizeGeometryDoc,
-  mockDecideOpenJevIntent,
+  mockExecuteOpenJevDecisionTool,
 } = vi.hoisted(() => ({
   mockInitializeProviders: vi.fn(),
   mockGetActiveProvider: vi.fn(),
@@ -23,7 +23,7 @@ const {
   mockExecuteCompute: vi.fn(),
   mockExecuteDrawGeometry: vi.fn(),
   mockNormalizeGeometryDoc: vi.fn(),
-  mockDecideOpenJevIntent: vi.fn(),
+  mockExecuteOpenJevDecisionTool: vi.fn(),
 }));
 
 vi.mock('./providerRegistry', () => ({
@@ -59,8 +59,16 @@ vi.mock('./htmlProjectAgentTelemetry', () => ({
   recordHtmlProjectTelemetryEvent: mockRecordHtmlProjectTelemetryEvent,
 }));
 
-vi.mock('./openJevDecisionService', () => ({
-  decideOpenJevIntent: mockDecideOpenJevIntent,
+vi.mock('./openJevToolService', () => ({
+  executeOpenJevDecisionTool: mockExecuteOpenJevDecisionTool,
+  OPEN_JEV_DECISION_SYSTEM_PROMPT: 'OpenJev tool prompt',
+  OPEN_JEV_DECISION_TOOL_DEFINITION: {
+    name: 'openJevDecide',
+    description: 'OpenJev decision tool',
+    parameters: { type: 'object' },
+  },
+  OPEN_JEV_DECISION_TOOL_NAME: 'openJevDecide',
+  OPEN_JEV_MAX_TOOL_CALLS_PER_RUN: 2,
 }));
 
 vi.mock('./subagentService', () => ({
@@ -112,8 +120,30 @@ describe('streamChat', () => {
     mockExecuteDrawGeometry.mockReset();
     mockNormalizeGeometryDoc.mockReset();
     mockNormalizeGeometryDoc.mockImplementation(document => document);
-    mockDecideOpenJevIntent.mockReset();
-    mockDecideOpenJevIntent.mockResolvedValue(null);
+    mockExecuteOpenJevDecisionTool.mockReset();
+    mockExecuteOpenJevDecisionTool.mockResolvedValue({
+      ok: true,
+      model: 'kev-0.6b',
+      runtime: {
+        model: 'kev-0.6b',
+        family: 'kev',
+        device: 'webgpu',
+        dtype: 'q4f16',
+      },
+      stateTokenCount: 10,
+      confidenceThreshold: 0.65,
+      answers: {
+        route: {
+          type: 'choice',
+          choice: 'edit',
+          confidence: 0.9,
+          probabilities: { edit: 1 },
+          reliable: true,
+        },
+      },
+      unreliableQuestionIds: [],
+      summary: 'local judgment',
+    });
     mockInitializeProviders.mockResolvedValue(undefined);
     mockHasKnowledgeChunks.mockReturnValue(false);
     mockBuildKnowledgeSearchResponse.mockReturnValue({ matches: [] });
@@ -857,7 +887,7 @@ describe('streamChat', () => {
     );
   });
 
-  it('uses the opt-in open-jev decision as an advisory HTML pack route', async () => {
+  it('exposes the opt-in open-jev structured decision tool to the main agent', async () => {
     const observedChatParams: Array<Record<string, unknown>> = [];
     const provider = {
       name: 'gemini',
@@ -866,6 +896,28 @@ describe('streamChat', () => {
       isAvailable: () => true,
       streamChat: vi.fn(async function* (params) {
         observedChatParams.push(params as Record<string, unknown>);
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<unknown>;
+        const result = await executeTool({
+          name: 'openJevDecide',
+          args: {
+            state: 'A compact decision context.',
+            questions: [
+              {
+                id: 'route',
+                type: 'choice',
+                instructions: 'Choose the next action.',
+                options: ['edit', 'explain'],
+              },
+            ],
+          },
+        });
+        expect(result).toMatchObject({
+          ok: true,
+          summary: 'local judgment',
+        });
         yield {
           text: 'done',
           isComplete: true,
@@ -881,23 +933,6 @@ describe('streamChat', () => {
       }),
     };
     mockGetActiveProvider.mockReturnValue(provider);
-    mockDecideOpenJevIntent.mockResolvedValue({
-      decision: {
-        intent: 'inspect_only',
-        confidence: 'high',
-        selectedPackSet: ['inspect'],
-        reason: 'open-jev test decision',
-        requiresSummaryPreflight: true,
-      },
-      confidence: 0.9,
-      probabilities: {},
-      runtime: {
-        model: 'kev-0.6b',
-        family: 'kev',
-        device: 'webgpu',
-        dtype: 'q4f16',
-      },
-    });
 
     const { streamChat } = await import('./llmService');
 
@@ -913,18 +948,84 @@ describe('streamChat', () => {
       onComplete: vi.fn(),
     });
 
-    expect(mockDecideOpenJevIntent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: 'Please inspect this webpage project.',
-        activeProjectId: 'project-123',
+    expect(String(observedChatParams[0]?.systemPrompt)).toContain('OpenJev tool prompt');
+    expect(observedChatParams[0]?.tools).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'openJevDecide' })]),
+    );
+    expect(mockExecuteOpenJevDecisionTool).toHaveBeenCalledWith({
+      state: 'A compact decision context.',
+      questions: [
+        {
+          id: 'route',
+          type: 'choice',
+          instructions: 'Choose the next action.',
+          options: ['edit', 'explain'],
+        },
+      ],
+    });
+  });
+
+  it('limits open-jev tool calls per provider turn', async () => {
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        const executeTool = params.executeTool as (call: {
+          name: string;
+          args: Record<string, unknown>;
+        }) => Promise<unknown>;
+        const call = {
+          name: 'openJevDecide',
+          args: {
+            state: 'Compact context.',
+            questions: [
+              {
+                id: 'route',
+                type: 'choice',
+                instructions: 'Choose.',
+                options: ['a', 'b'],
+              },
+            ],
+          },
+        };
+        await executeTool(call);
+        await executeTool(call);
+        const thirdResult = await executeTool(call);
+        expect(thirdResult).toMatchObject({
+          ok: false,
+          recoverable: true,
+          code: 'open-jev-call-limit-reached',
+        });
+        yield {
+          text: 'done',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 1,
+            candidatesTokenCount: 1,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 3,
+            repeatedRecoverableErrors: [],
+          },
+        };
       }),
-    );
-    expect(String(observedChatParams[0]?.systemPrompt)).toContain(
-      'Current routing intent: inspect_only (high confidence).',
-    );
-    expect(String(observedChatParams[0]?.systemPrompt)).toContain(
-      'HTML tool packs recommended for this turn: inspect.',
-    );
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Make a compact decision.',
+      assistantId: 'assistant-1',
+      openJevExperimentEnabled: true,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    expect(mockExecuteOpenJevDecisionTool).toHaveBeenCalledTimes(2);
   });
 
   it('exposes no HTML project tools and skips intent classification when htmlProjectEnabled is false', async () => {

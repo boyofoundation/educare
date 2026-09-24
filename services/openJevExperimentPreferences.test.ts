@@ -31,7 +31,7 @@ describe('openJevExperimentPreferences', () => {
     __resetWorkspaceOperationServiceForTesting();
   });
 
-  it('defaults the experimental router to disabled', () => {
+  it('defaults the structured decision tool to disabled', () => {
     expect(loadOpenJevExperimentPreferences(null)).toEqual(DEFAULT_OPEN_JEV_EXPERIMENT_PREFERENCES);
   });
 

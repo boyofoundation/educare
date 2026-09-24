@@ -79,8 +79,8 @@ export default defineConfig(() => {
               return 'ai-libs';
             }
 
-            // The browser-local experimental router is dynamically imported after the
-            // opt-in setting is enabled. Keep its sizeable runtime out of the entry bundle.
+            // The browser-local structured decision tool is dynamically imported after
+            // the opt-in setting is enabled. Keep its sizeable runtime out of the entry bundle.
             if (
               id.includes('node_modules/open-jev') ||
               id.includes('node_modules/@huggingface/transformers') ||

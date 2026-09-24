@@ -110,6 +110,7 @@ Multi-turn agent orchestration with checkpointing and recovery:
 - **Loop detection (G12)** - Tightened to truly-consecutive turns to avoid false positives
 - **Subagent delegation** - Spawn batched subagent runs for parallel tasks; activities surface in `AgentActivityTimeline`
 - **Intent-based tool policy** - Dynamically generates prompts and tool sets based on `new_build`/`resume_project`/`inspect_only`/`targeted_edit`/`finalize` intents
+- **Optional local structured judgment tool** - When enabled, the main agent can call `openJevDecide` to batch up to six `choice`, `score`, or `noul` judgments through the browser-local `kev-0.6b` model; typed answers, probabilities, explicit low-confidence markers, and recoverable WebGPU/model failures reduce unnecessary provider-side deliberation without granting file access or mutation rights
 - **Abort signals** - Forwarded from UI → controller → LLM adapter → upstream provider
 - **askUser clarify tool** - Default-exposed picker tool: the model asks one option-based question, the chat renders clickable choices (plus custom free-text input or skip); the answer returns to the tool loop and persists on the message as `clarifyRecords`
 

@@ -88,7 +88,7 @@ const OpenJevExperimentSettings: React.FC<OpenJevExperimentSettingsProps> = ({ c
     setStatusMessage(
       persisted
         ? enabled
-          ? '實驗功能已啟用；符合條件的 agent 回合會使用本地 router。'
+          ? '實驗功能已啟用；主 agent 可在需要時呼叫 openJevDecide。'
           : '實驗功能已關閉，並已釋放本地模型。'
         : '設定已套用，但瀏覽器未允許保存偏好。',
     );
@@ -102,9 +102,9 @@ const OpenJevExperimentSettings: React.FC<OpenJevExperimentSettingsProps> = ({ c
     setStatusMessage('模型只會在本機瀏覽器執行；首次載入可能需要下載數百 MB。');
     try {
       await loadOpenJevModel();
-      setStatusMessage('模型已載入，之後符合條件的 agent 回合可使用實驗 router。');
+      setStatusMessage('模型已載入，之後主 agent 可呼叫 openJevDecide 進行結構化判斷。');
     } catch {
-      setStatusMessage('模型載入失敗；現有 agent 路由仍會安全回退。');
+      setStatusMessage('模型載入失敗；主 agent 仍會安全回退到原本的判斷流程。');
     }
   };
 
@@ -124,11 +124,12 @@ const OpenJevExperimentSettings: React.FC<OpenJevExperimentSettingsProps> = ({ c
         <div>
           <p className='text-xs font-semibold uppercase tracking-wide text-cyan-300'>實驗功能</p>
           <h2 id={headingId} className='mt-1 text-lg font-semibold text-white'>
-            本地 HTML 意圖 router
+            本地結構化判斷 tool
           </h2>
           <p id={descriptionId} className='mt-2 text-sm leading-6 text-gray-400'>
-            啟用後，瀏覽器會用 open-jev 的 kev-0.6b 協助判斷 HTML 專案路徑，再交給現有的 agent
-            工具流程。預設關閉；模型不會取代你選用的 AI 服務商。
+            啟用後，主 agent 可以呼叫 openJevDecide，讓瀏覽器本地的 kev-0.6b 一次完成多個
+            choice、score 或 yes/no 判斷，再交回結構化答案與信心值。預設關閉；模型不會取代你選用的
+            AI 服務商。
           </p>
         </div>
         <span className='rounded-full bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-200'>
@@ -145,10 +146,10 @@ const OpenJevExperimentSettings: React.FC<OpenJevExperimentSettingsProps> = ({ c
           data-testid='open-jev-experiment-enabled'
         />
         <span>
-          <span className='block font-medium text-white'>啟用本地實驗判斷</span>
+          <span className='block font-medium text-white'>允許主 agent 呼叫本地判斷 tool</span>
           <span className='mt-1 block text-sm leading-5 text-gray-400'>
-            只有開啟此項且模型能在 WebGPU 執行時，才會影響 HTML 工具 pack；低信心或失敗會保留原本的
-            deterministic 路由。
+            主 agent 只應在離散判斷適合結構化時使用它；一次可批次處理最多 6 題。低信心、WebGPU
+            不可用或推論失敗時，主 agent 會收到可恢復結果並自行繼續。
           </span>
         </span>
       </label>

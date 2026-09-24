@@ -44,8 +44,14 @@ import {
   classifyHtmlProjectIntent,
   PROJECT_BOOTSTRAP_SYSTEM_PROMPT,
 } from './htmlProjectPrompting';
-import { decideOpenJevIntent } from './openJevDecisionService';
 import { getOpenJevExperimentEnabled } from './openJevExperimentPreferences';
+import {
+  executeOpenJevDecisionTool,
+  OPEN_JEV_DECISION_SYSTEM_PROMPT,
+  OPEN_JEV_DECISION_TOOL_DEFINITION,
+  OPEN_JEV_DECISION_TOOL_NAME,
+  OPEN_JEV_MAX_TOOL_CALLS_PER_RUN,
+} from './openJevToolService';
 import { recordHtmlProjectTelemetryEvent } from './htmlProjectAgentTelemetry';
 import {
   buildSubagentDelegationToolDefinition,
@@ -108,7 +114,7 @@ export interface StreamChatParams {
   sessionId?: string | null;
   activeProjectId?: string | null;
   knowledgeChunks?: RagChunk[];
-  /** Opt-in local open-jev router; it never replaces the provider or tool loop. */
+  /** Opt-in local open-jev structured decision tool exposed to the main agent. */
   openJevExperimentEnabled?: boolean;
   subagentDelegationEnabled?: boolean;
   mathToolsEnabled?: boolean;
@@ -467,7 +473,7 @@ export const streamChat = async (params: StreamChatParams) => {
   const effectiveHtmlProjectEnabled = htmlProjectAccessEnabled && htmlProjectEnabled;
   const effectiveProjectBootstrapEnabled = htmlProjectAccessEnabled && projectBootstrapEnabled;
   const effectiveOpenJevExperimentEnabled =
-    htmlProjectAccessEnabled && (openJevExperimentEnabled ?? getOpenJevExperimentEnabled());
+    openJevExperimentEnabled ?? getOpenJevExperimentEnabled();
 
   await initializeProviders();
 
@@ -504,6 +510,7 @@ export const streamChat = async (params: StreamChatParams) => {
   let computeFailureCount = 0;
   let drawGeometryFailureCount = 0;
   let speakTextFailureCount = 0;
+  let openJevToolCallCount = 0;
 
   // askUser 澄清工具:互動 UI (ChatContainer) 提供 onClarifyRequest 即預設曝光。
   const clarifyToolEnabled = typeof onClarifyRequest === 'function';
@@ -536,20 +543,6 @@ export const streamChat = async (params: StreamChatParams) => {
       reason: 'packSetOverride supplied — bypassing intent classification (continuation turn).',
       requiresSummaryPreflight: false,
     };
-  } else if (effectiveOpenJevExperimentEnabled) {
-    try {
-      const experimentalDecision = await decideOpenJevIntent({
-        message,
-        activeProjectId: resolvedActiveProjectId,
-        history,
-      });
-      initialIntentDecision = experimentalDecision?.decision ?? getDeterministicIntentDecision();
-    } catch (error) {
-      // The local model is advisory. Preserve the existing deterministic route when
-      // WebGPU, model files, or inference are unavailable.
-      console.warn('open-jev intent routing unavailable; using deterministic route.', error);
-      initialIntentDecision = getDeterministicIntentDecision();
-    }
   } else {
     initialIntentDecision = getDeterministicIntentDecision();
   }
@@ -665,6 +658,7 @@ export const streamChat = async (params: StreamChatParams) => {
       MARKDOWN_MATH_SYSTEM_PROMPT,
       clarifyToolEnabled ? CLARIFY_SYSTEM_PROMPT : '',
       knowledgeToolEnabled ? KNOWLEDGE_SEARCH_SYSTEM_PROMPT : '',
+      effectiveOpenJevExperimentEnabled ? OPEN_JEV_DECISION_SYSTEM_PROMPT : '',
       mathToolsEnabled ? MATH_TOOLS_SYSTEM_PROMPT : '',
       webSpeechToolsEnabled ? WEB_SPEECH_TOOLS_SYSTEM_PROMPT : '',
       htmlProjectToolEnabled
@@ -726,7 +720,21 @@ export const streamChat = async (params: StreamChatParams) => {
       try {
         let result: unknown;
 
-        if (call.name === KNOWLEDGE_SEARCH_TOOL_NAME) {
+        if (effectiveOpenJevExperimentEnabled && call.name === OPEN_JEV_DECISION_TOOL_NAME) {
+          if (openJevToolCallCount >= OPEN_JEV_MAX_TOOL_CALLS_PER_RUN) {
+            result = {
+              ok: false,
+              recoverable: true,
+              code: 'open-jev-call-limit-reached',
+              message: `openJevDecide can be called at most ${OPEN_JEV_MAX_TOOL_CALLS_PER_RUN} times per provider turn.`,
+              guidance:
+                'Use the structured answers already returned and continue with your own judgment.',
+            };
+          } else {
+            openJevToolCallCount += 1;
+            result = await executeOpenJevDecisionTool(call.args);
+          }
+        } else if (call.name === KNOWLEDGE_SEARCH_TOOL_NAME) {
           result = buildKnowledgeSearchResponse(
             knowledgeChunks,
             call.args as unknown as KnowledgeSearchArgs,
@@ -959,6 +967,7 @@ export const streamChat = async (params: StreamChatParams) => {
               requestedTool: call.name,
               visibleToolNames: [
                 ...(knowledgeToolEnabled ? [KNOWLEDGE_SEARCH_TOOL_NAME] : []),
+                ...(effectiveOpenJevExperimentEnabled ? [OPEN_JEV_DECISION_TOOL_NAME] : []),
                 ...(mathToolsEnabled ? [MATH_COMPUTE_TOOL_NAME, DRAW_GEOMETRY_TOOL_NAME] : []),
                 ...(webSpeechToolsEnabled ? [SPEAK_TEXT_TOOL_NAME] : []),
                 ...htmlProjectToolDefinitions.map(tool => tool.name),
@@ -1035,6 +1044,7 @@ export const streamChat = async (params: StreamChatParams) => {
             },
           ]
         : []),
+      ...(effectiveOpenJevExperimentEnabled ? [OPEN_JEV_DECISION_TOOL_DEFINITION] : []),
       ...(mathToolsEnabled
         ? [
             {

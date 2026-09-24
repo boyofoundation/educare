@@ -1,27 +1,8 @@
-import type { ChatMessage, HtmlProjectIntent, HtmlProjectIntentDecision } from '../types';
-import {
-  classifyHtmlProjectIntent,
-  getHtmlProjectToolPacksForIntent,
-} from './htmlProjectPrompting';
-
-const OPEN_JEV_MODEL = 'kev-0.6b' as const;
-const OPEN_JEV_MIN_CONFIDENCE = 0.65;
-const OPEN_JEV_MAX_STATE_TOKENS = 7_000;
-
-const OPEN_JEV_INTENTS = [
-  'new_build',
-  'resume_project',
-  'inspect_only',
-  'targeted_edit',
-  'finalize_or_complete',
-  'uncertain',
-] as const satisfies readonly HtmlProjectIntent[];
-
-type OpenJevIntentChoice = (typeof OPEN_JEV_INTENTS)[number];
+export const OPEN_JEV_MODEL = 'kev-0.6b' as const;
+export const OPEN_JEV_MAX_STATE_TOKENS = 6_000;
 
 export const OPEN_JEV_WEBGPU_UNSUPPORTED_MESSAGE =
   '此瀏覽器沒有可用的 WebGPU adapter；open-jev 實驗功能需要 WebGPU。';
-export const OPEN_JEV_LOW_CONFIDENCE_MESSAGE = 'open-jev 的意圖信心不足，已保留既有路由。';
 
 export type OpenJevModelStatus =
   | 'idle'
@@ -42,17 +23,40 @@ export interface OpenJevModelSnapshot {
   error?: string;
 }
 
-export interface OpenJevIntentInput {
-  message: string;
-  activeProjectId?: string | null;
-  history?: ChatMessage[];
+export type OpenJevStructuredQuestion =
+  | {
+      id: string;
+      type: 'choice';
+      instructions: string;
+      options: readonly string[];
+      descriptions?: Partial<Record<string, string>>;
+    }
+  | {
+      id: string;
+      type: 'score';
+      instructions: string;
+      options: readonly string[];
+    }
+  | {
+      id: string;
+      type: 'noul';
+      instructions: string;
+    };
+
+export type OpenJevStructuredAnswer =
+  | import('open-jev').ChoiceAnswer<string>
+  | import('open-jev').ScoreAnswer<string>
+  | import('open-jev').NoulAnswer;
+
+export interface OpenJevStructuredDecisionInput {
+  state: string;
+  questions: readonly OpenJevStructuredQuestion[];
 }
 
-export interface OpenJevIntentDecision {
-  decision: HtmlProjectIntentDecision;
-  confidence: number;
-  probabilities: Record<OpenJevIntentChoice, number>;
+export interface OpenJevStructuredDecision {
+  answers: Record<string, OpenJevStructuredAnswer>;
   runtime: import('open-jev').OpenJevRuntime;
+  stateTokenCount: number;
 }
 
 type OpenJevInstance = import('open-jev').OpenJev;
@@ -214,145 +218,69 @@ export const disposeOpenJevModel = async (): Promise<void> => {
   });
 };
 
-const buildState = ({ message, activeProjectId, history }: OpenJevIntentInput): string => {
-  const recentHistory = (history ?? [])
-    .slice(-4)
-    .map(item => `${item.role}: ${item.content}`)
-    .join('\n')
-    .slice(-5_000);
-
-  return [
-    'You are a local, read-only router for an educational AI assistant.',
-    `An HTML project is currently active: ${activeProjectId ? 'yes' : 'no'}.`,
-    'Classify the user request for the HTML project tool route only.',
-    `User request:\n${message}`,
-    `Recent conversation:\n${recentHistory || '(none)'}`,
-  ].join('\n\n');
+const buildOpenJevQuestions = (
+  questions: readonly OpenJevStructuredQuestion[],
+  builders: Pick<Awaited<ReturnType<typeof getOpenJevModule>>, 'choice' | 'score' | 'noul'>,
+): Record<string, import('open-jev').Question> => {
+  const { choice, score, noul } = builders;
+  return Object.fromEntries(
+    questions.map(question => {
+      switch (question.type) {
+        case 'choice':
+          return [
+            question.id,
+            choice(question.instructions, question.options, question.descriptions),
+          ];
+        case 'score':
+          return [question.id, score(question.instructions, question.options)];
+        case 'noul':
+          return [question.id, noul(question.instructions)];
+      }
+    }),
+  );
 };
 
-const isOpenJevIntentChoice = (value: string): value is OpenJevIntentChoice =>
-  (OPEN_JEV_INTENTS as readonly string[]).includes(value);
-
-const isIntentCompatibleWithProjectState = (
-  intent: OpenJevIntentChoice,
-  activeProjectId: string | null | undefined,
-): boolean => {
-  if (intent === 'uncertain') {
-    return false;
+export const decideOpenJevQuestions = async (
+  input: OpenJevStructuredDecisionInput,
+): Promise<OpenJevStructuredDecision> => {
+  const state = input.state.trim();
+  if (!state) {
+    throw new Error('open-jev state cannot be empty.');
   }
-  if (
-    !activeProjectId &&
-    ['inspect_only', 'targeted_edit', 'finalize_or_complete'].includes(intent)
-  ) {
-    return false;
-  }
-  return !(activeProjectId && intent === 'new_build');
-};
-
-const buildExperimentalDecision = (
-  intent: OpenJevIntentChoice,
-  confidence: number,
-  probabilities: Record<OpenJevIntentChoice, number>,
-  input: OpenJevIntentInput,
-): HtmlProjectIntentDecision => {
-  const fallback = classifyHtmlProjectIntent(input.message, input.activeProjectId);
-  const selectedPackSet = getHtmlProjectToolPacksForIntent(intent);
-
-  if (intent === 'resume_project' && !input.activeProjectId) {
-    selectedPackSet.unshift('bootstrap');
-  }
-  for (const pack of fallback.selectedPackSet) {
-    if (pack === 'preview_recheck' && !selectedPackSet.includes(pack)) {
-      selectedPackSet.push(pack);
-    }
-  }
-
-  const confidenceLabel = confidence >= 0.8 ? 'high' : 'medium';
-  const probabilitySummary = Object.entries(probabilities)
-    .sort(([, left], [, right]) => right - left)
-    .slice(0, 3)
-    .map(([label, probability]) => `${label} ${Math.round(probability * 100)}%`)
-    .join(', ');
-
-  return {
-    intent,
-    confidence: confidenceLabel,
-    selectedPackSet,
-    reason: `open-jev experimental router selected ${intent} (${Math.round(confidence * 100)}% confidence; ${probabilitySummary}).`,
-    requiresSummaryPreflight: Boolean(input.activeProjectId) && intent !== 'new_build',
-  };
-};
-
-/**
- * Classify only the project route. The caller owns the explicit experiment
- * flag; every rejected result is represented by the existing deterministic
- * classifier so the provider/tool loop never depends on this model.
- */
-export const decideOpenJevIntent = async (
-  input: OpenJevIntentInput,
-): Promise<OpenJevIntentDecision | null> => {
-  const fallback = classifyHtmlProjectIntent(input.message, input.activeProjectId);
-  if (fallback.selectedPackSet.length === 0 && !input.activeProjectId) {
-    return null;
+  if (input.questions.length === 0) {
+    throw new Error('open-jev requires at least one structured question.');
   }
 
   const instance = await loadOpenJevModel();
-  const state = buildState(input);
-  if (instance.countTokens(state) > OPEN_JEV_MAX_STATE_TOKENS) {
-    updateSnapshot({ status: 'ready', error: '路由內容過長，已保留既有路由。' });
-    return null;
+  const stateTokenCount = instance.countTokens(state);
+  if (stateTokenCount > OPEN_JEV_MAX_STATE_TOKENS) {
+    const message = `open-jev state is too long (${stateTokenCount} tokens; maximum ${OPEN_JEV_MAX_STATE_TOKENS}).`;
+    updateSnapshot({ status: 'ready', error: message });
+    throw new Error(message);
   }
-
-  const { choice } = await getOpenJevModule();
-  const questions = {
-    intent: choice(
-      'Which single HTML project workflow best matches the user request? Choose only a workflow that is supported by the current project state.',
-      OPEN_JEV_INTENTS,
-      {
-        new_build: 'Create a brand-new HTML project.',
-        resume_project: 'Open or continue an existing project.',
-        inspect_only: 'Inspect or summarize without changing files.',
-        targeted_edit: 'Make a focused change to project files.',
-        finalize_or_complete: 'Verify, finish, or finalize the project.',
-        uncertain: 'The request is not clear enough for a project route.',
-      },
-    ),
-  };
 
   updateSnapshot({ status: 'deciding', error: undefined });
   try {
-    const answers = await instance.decide(state, questions, {
+    const module = await getOpenJevModule();
+    const questions = buildOpenJevQuestions(input.questions, module);
+    const rawAnswers = (await instance.decide(state, questions, {
       maxStateTokens: OPEN_JEV_MAX_STATE_TOKENS,
       truncation: 'error',
-    });
-    const answer = answers.intent;
-    if (
-      answer.type !== 'choice' ||
-      !isOpenJevIntentChoice(answer.choice) ||
-      answer.confidence < OPEN_JEV_MIN_CONFIDENCE ||
-      !isIntentCompatibleWithProjectState(answer.choice, input.activeProjectId)
-    ) {
-      updateSnapshot({ status: 'ready', error: OPEN_JEV_LOW_CONFIDENCE_MESSAGE });
-      return null;
-    }
+    })) as Record<string, import('open-jev').Answer>;
 
-    const decision = buildExperimentalDecision(
-      answer.choice,
-      answer.confidence,
-      answer.probabilities,
-      input,
-    );
+    const answers = Object.fromEntries(
+      input.questions.map(question => [question.id, rawAnswers[question.id]]),
+    ) as Record<string, OpenJevStructuredAnswer>;
     updateSnapshot({ status: 'ready', runtime: instance.runtime, error: undefined });
     return {
-      decision,
-      confidence: answer.confidence,
-      probabilities: answer.probabilities,
+      answers,
       runtime: instance.runtime,
+      stateTokenCount,
     };
   } catch (error) {
     updateSnapshot({
       status: 'error',
-      error: error instanceof Error ? error.message : 'open-jev 意圖判斷失敗。',
+      error: error instanceof Error ? error.message : 'open-jev structured decision failed.',
     });
     throw error;
   }

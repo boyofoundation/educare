@@ -192,7 +192,7 @@ export interface AgentRunControllerOptions {
   knowledgeChunks?: RagChunk[];
   /** G9 feature flag — when false, run EXACTLY ONE turn (legacy single-turn behavior). */
   agentHarnessEnabled: boolean;
-  /** Explicit opt-in for the browser-local open-jev HTML intent router. */
+  /** Explicit opt-in for the browser-local open-jev structured decision tool. */
   openJevExperimentEnabled?: boolean;
   subagentDelegationEnabled?: boolean;
   mathToolsEnabled?: boolean;
@@ -406,11 +406,10 @@ export class AgentRunController {
       resumeFrom?.mathToolsEnabled ?? options.mathToolsEnabled ?? false;
     const effectiveWebSpeechToolsEnabled =
       resumeFrom?.webSpeechToolsEnabled ?? options.webSpeechToolsEnabled ?? false;
-    // 專用工具助理不使用 HTML Canvas，避免多套 function calling 工具彼此干擾。
+    // 專用工具助理不使用 HTML Canvas，避免多套 HTML function calling 工具彼此干擾。
     const htmlProjectAccessEnabled = !effectiveMathToolsEnabled && !effectiveWebSpeechToolsEnabled;
     const effectiveOpenJevExperimentEnabled =
-      htmlProjectAccessEnabled &&
-      (resumeFrom?.openJevExperimentEnabled ?? options.openJevExperimentEnabled ?? false);
+      resumeFrom?.openJevExperimentEnabled ?? options.openJevExperimentEnabled ?? false;
     let effectiveHtmlProjectEnabled =
       htmlProjectAccessEnabled &&
       (resumeFrom?.htmlProjectEnabled ?? options.htmlProjectEnabled ?? false);

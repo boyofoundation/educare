@@ -1239,8 +1239,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           htmlProjectAccessEnabled &&
           (resumeCheckpoint?.agentHarnessEnabled ?? projectEditingActive),
         openJevExperimentEnabled:
-          htmlProjectAccessEnabled &&
-          (resumeCheckpoint?.openJevExperimentEnabled ?? getOpenJevExperimentEnabled()),
+          resumeCheckpoint?.openJevExperimentEnabled ?? getOpenJevExperimentEnabled(),
         subagentDelegationEnabled:
           resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
         mathToolsEnabled: effectiveMathToolsEnabled,
