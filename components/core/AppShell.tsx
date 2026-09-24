@@ -16,6 +16,8 @@ import { ChatCompactorService } from '../../services/chatCompactorService';
 import { countConversationRounds, groupMessagesByRounds } from '../../services/conversationUtils';
 import { getBundleMetrics } from '../../services/bundleMetricsService';
 import { ensureOriginalHistoryMetadata } from '../../services/workspaceDraftService';
+import { getOpenJevExperimentEnabled } from '../../services/openJevExperimentPreferences';
+import { filterConversationRoundsByOpenJev } from '../../services/openJevHookService';
 
 const LazyAssistantEditor = React.lazy(async () => {
   const module = await import('../assistant');
@@ -172,13 +174,24 @@ function AppContent(): React.JSX.Element {
   };
 
   // Initialize compression service with default configuration
-  const compressionService = new ChatCompactorService({
-    targetTokens: 2000,
-    triggerRounds: 10,
-    preserveLastRounds: 2,
-    maxRetries: 2,
-    compressionVersion: '1.0',
-  });
+  const compressionService = new ChatCompactorService(
+    {
+      targetTokens: 2000,
+      triggerRounds: 10,
+      preserveLastRounds: 2,
+      maxRetries: 2,
+      compressionVersion: '1.0',
+    },
+    {
+      // Read the preference when compression actually runs so toggling the
+      // experiment does not require remounting the workspace shell.
+      filterRounds: input =>
+        filterConversationRoundsByOpenJev({
+          ...input,
+          enabled: getOpenJevExperimentEnabled(),
+        }),
+    },
+  );
 
   const handleNewMessage = async (
     session: ChatSession,
@@ -226,6 +239,7 @@ function AppContent(): React.JSX.Element {
           const compressionResult = await compressionService.compressConversationHistory(
             roundsToCompress,
             session.compactContext,
+            { topic: userMessage },
           );
 
           if (compressionResult.success && compressionResult.compactContext) {
@@ -233,6 +247,8 @@ function AppContent(): React.JSX.Element {
               originalTokens: compressionResult.originalTokenCount,
               compressedTokens: compressionResult.compressedTokenCount,
               retryCount: compressionResult.retryCount,
+              relevanceApplied: compressionResult.relevanceApplied,
+              filteredRoundCount: compressionResult.filteredRoundCount,
             });
 
             // Calculate preserved messages (keep last N rounds + any incomplete message)

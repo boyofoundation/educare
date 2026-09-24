@@ -940,6 +940,8 @@ export interface AgentRunCheckpoint {
   webSpeechToolsEnabled?: boolean;
   /** Snapshot of the opt-in local open-jev decision tool for deterministic resume behavior. */
   openJevExperimentEnabled?: boolean;
+  /** Advisory local intent context reused by continuation/resume turns. */
+  openJevIntentContext?: import('./services/openJevHookService').OpenJevIntentContext;
   routableTargets?: Array<{ id: string; name: string; description: string }>;
   /** HTML 專案模式開關快照,確保 resume 時維持與原回合一致的工具暴露。 */
   htmlProjectEnabled?: boolean;

@@ -396,6 +396,44 @@ describe('ChatCompactorService', () => {
     afterEach(() => {
       consoleSpy.mockRestore();
     });
+
+    it('filters compaction input through the advisory relevance hook', async () => {
+      vi.mocked(mockManagerStreamChat).mockImplementation(async (params: ChatParams) => {
+        expect(params.message).toContain('Keep this round');
+        expect(params.message).not.toContain('Drop this round');
+        return (async function* () {
+          yield { text: '用戶詢問了保留的主題，助手提供了解答。', isComplete: false };
+          yield { text: '', isComplete: true };
+        })();
+      });
+
+      const filterRounds = vi.fn(async (input: { rounds: ConversationRound[] }) => ({
+        values: input.rounds.slice(0, 1),
+        judgments: [],
+        applied: true,
+        fallback: false,
+        evaluatedCount: input.rounds.length,
+        filteredCount: input.rounds.length - 1,
+      }));
+      const hookCompactor = new ChatCompactorService({}, { filterRounds });
+      const rounds = [
+        createTestRound(1, 'Keep this round', 'Keep answer'),
+        createTestRound(2, 'Drop this round', 'Drop answer'),
+      ];
+
+      const result = await hookCompactor.compressConversationHistory(rounds, undefined, {
+        topic: 'current topic',
+      });
+
+      expect(filterRounds).toHaveBeenCalledWith(
+        expect.objectContaining({ enabled: true, topic: 'current topic', rounds }),
+      );
+      expect(result.success).toBe(true);
+      expect(result.relevanceApplied).toBe(true);
+      expect(result.filteredRoundCount).toBe(1);
+      expect(result.compactContext?.compressedFromRounds).toBe(2);
+    });
+
     it('should successfully compress conversation rounds', async () => {
       // Mock successful LLM response using AsyncIterable
       const responseText =

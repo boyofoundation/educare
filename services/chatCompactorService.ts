@@ -1,4 +1,8 @@
 import { CompactContext, ConversationRound } from '../types';
+import {
+  type OpenJevCompactionFilterInput,
+  type OpenJevRelevanceResult,
+} from './openJevHookService';
 
 /**
  * 聊天壓縮服務配置
@@ -21,6 +25,18 @@ export interface CompressionResult {
   retryCount: number;
   originalTokenCount: number;
   compressedTokenCount: number;
+  relevanceApplied?: boolean;
+  filteredRoundCount?: number;
+}
+
+export interface CompressionOptions {
+  topic?: string;
+}
+
+export interface CompressionHooks {
+  filterRounds?: (
+    input: OpenJevCompactionFilterInput,
+  ) => Promise<OpenJevRelevanceResult<ConversationRound>>;
 }
 
 /**
@@ -31,8 +47,9 @@ export interface CompressionResult {
  */
 export class ChatCompactorService {
   private readonly config: CompressionConfig;
+  private readonly hooks: CompressionHooks;
 
-  constructor(config: Partial<CompressionConfig> = {}) {
+  constructor(config: Partial<CompressionConfig> = {}, hooks: CompressionHooks = {}) {
     this.config = {
       targetTokens: 2000,
       triggerRounds: 10,
@@ -41,6 +58,7 @@ export class ChatCompactorService {
       compressionVersion: '1.0',
       ...config,
     };
+    this.hooks = hooks;
   }
 
   /**
@@ -69,6 +87,7 @@ export class ChatCompactorService {
   async compressConversationHistory(
     rounds: ConversationRound[],
     existingCompact?: CompactContext,
+    options: CompressionOptions = {},
   ): Promise<CompressionResult> {
     if (rounds.length === 0) {
       return {
@@ -81,11 +100,37 @@ export class ChatCompactorService {
     }
 
     const originalTokenCount = this.estimateTokenCount(rounds, existingCompact);
+    let roundsForCompression = rounds;
+    let relevanceApplied = false;
+    let filteredRoundCount = 0;
+
+    if (this.hooks.filterRounds && options.topic?.trim()) {
+      try {
+        const relevance = await this.hooks.filterRounds({
+          enabled: true,
+          topic: options.topic,
+          rounds,
+          existingCompact,
+        });
+        if (relevance.values.length > 0) {
+          roundsForCompression = relevance.values;
+          relevanceApplied = relevance.applied;
+          filteredRoundCount = relevance.filteredCount;
+        }
+      } catch (error) {
+        // A local relevance hook is advisory.  Keep the existing compressor
+        // fully functional if the hook itself fails before returning a result.
+        console.warn('Compaction relevance hook failed; keeping all rounds:', error);
+      }
+    }
     let retryCount = 0;
 
     while (retryCount <= this.config.maxRetries) {
       try {
-        const compressionInput = this.prepareCompressionInput(rounds, existingCompact);
+        const compressionInput = this.prepareCompressionInput(
+          roundsForCompression,
+          existingCompact,
+        );
         const prompt = this.generateCompressionPrompt(compressionInput);
 
         // 使用當前設定的 LLM Provider 進行壓縮
@@ -123,6 +168,8 @@ export class ChatCompactorService {
           retryCount,
           originalTokenCount,
           compressedTokenCount,
+          relevanceApplied,
+          filteredRoundCount,
         };
       } catch (error) {
         retryCount++;

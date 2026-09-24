@@ -1,12 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildKnowledgeSearchIndex,
   buildIndexedKnowledgeChunks,
   buildKnowledgeSearchResponse,
+  buildKnowledgeSearchResponseWithOpenJev,
   searchKnowledgeIndex,
   searchKnowledgeBase,
 } from './knowledgeSearchService';
 import type { RagChunk } from '../types';
+import type { OpenJevStructuredDecisionInput } from './openJevDecisionService';
+import type { OpenJevHookDecisionEvaluator } from './openJevHookService';
 
 const knowledgeChunks: RagChunk[] = [
   {
@@ -113,5 +116,41 @@ describe('knowledgeSearchService', () => {
 
     expect(response.sourceStatus).toBe('no-source');
     expect(response.results).toEqual([]);
+  });
+
+  it('applies the local relevance hook after deterministic search', async () => {
+    const evaluator = vi.fn(async (input: OpenJevStructuredDecisionInput) => ({
+      runtime: { model: 'kev-0.6b', family: 'kev', device: 'webgpu', dtype: 'q4f16' },
+      stateTokenCount: 12,
+      answers: Object.fromEntries(
+        input.questions.map((question, index) => [
+          question.id,
+          {
+            type: 'noul' as const,
+            answer: index === 0,
+            probability: index === 0 ? 0.92 : 0.08,
+            confidence: 0.92,
+          },
+        ]),
+      ),
+    })) as unknown as OpenJevHookDecisionEvaluator;
+
+    const response = await buildKnowledgeSearchResponseWithOpenJev(
+      [
+        { fileName: 'leave.md', content: 'policy leave' },
+        { fileName: 'tax.md', content: 'policy tax' },
+      ],
+      { query: 'policy', maxResults: 2 },
+      { enabled: true, evaluator },
+    );
+
+    expect(response.results).toHaveLength(1);
+    expect(response.results[0]?.fileName).toBe('leave.md');
+    expect(response.relevanceFilter).toEqual({
+      applied: true,
+      fallback: false,
+      evaluatedCount: 2,
+      filteredCount: 1,
+    });
   });
 });

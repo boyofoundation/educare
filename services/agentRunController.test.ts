@@ -10,6 +10,7 @@ const {
   mockSaveCheckpoint,
   mockUpdateCheckpoint,
   mockGatherKnowledge,
+  mockAnalyzeOpenJevIntent,
 } = vi.hoisted(() => ({
   mockStreamChat: vi.fn(),
   mockExecuteHtmlProjectToolCall: vi.fn(),
@@ -19,6 +20,7 @@ const {
   mockSaveCheckpoint: vi.fn().mockResolvedValue(undefined),
   mockUpdateCheckpoint: vi.fn().mockResolvedValue({}),
   mockGatherKnowledge: vi.fn().mockResolvedValue(null),
+  mockAnalyzeOpenJevIntent: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('./llmService', () => ({
@@ -73,6 +75,10 @@ vi.mock('./agentRunCheckpointService', () => ({
 
 vi.mock('./knowledgeGatherService', () => ({
   gatherKnowledge: mockGatherKnowledge,
+}));
+
+vi.mock('./openJevHookService', () => ({
+  analyzeOpenJevIntent: mockAnalyzeOpenJevIntent,
 }));
 
 import {
@@ -287,6 +293,7 @@ describe('AgentRunController', () => {
       summary: 'summary',
     });
     mockGatherKnowledge.mockResolvedValue(null);
+    mockAnalyzeOpenJevIntent.mockResolvedValue(null);
     mockBuildSyntheticMessage.mockImplementation(
       (role: 'user' | 'model', content: string, agentTurnLog?: string) => ({
         role,
@@ -1852,6 +1859,48 @@ describe('AgentRunController', () => {
       resumeFrom.runId,
       expect.objectContaining({ openJevExperimentEnabled: true }),
     );
+  });
+
+  it('analyzes intent before gathering and injects the result into the next provider turn', async () => {
+    const intentContext = {
+      schemaVersion: 1 as const,
+      source: 'open-jev' as const,
+      intent: 'troubleshoot' as const,
+      intentConfidence: 0.82,
+      needsKnowledge: true,
+      knowledgeProbability: 0.88,
+      needsClarification: false,
+      clarificationProbability: 0.18,
+    };
+    const callOrder: string[] = [];
+    mockAnalyzeOpenJevIntent.mockImplementationOnce(async () => {
+      callOrder.push('intent');
+      return intentContext;
+    });
+    mockGatherKnowledge.mockImplementationOnce(async () => {
+      callOrder.push('gather');
+      return null;
+    });
+    const invocations = installStreamChatTurns([
+      buildStreamChatInvocation({ finishReason: 'complete' }),
+    ]);
+
+    const controller = new AgentRunController(
+      buildOptions({
+        openJevExperimentEnabled: true,
+        knowledgeChunks: [{ fileName: 'lesson.md', content: 'lesson' }],
+      }),
+    );
+    await controller.run();
+
+    expect(callOrder).toEqual(['intent', 'gather']);
+    expect(invocations[0]?.params.openJevIntentContext).toEqual(intentContext);
+    expect(
+      mockUpdateCheckpoint.mock.calls.some(
+        ([, payload]) =>
+          (payload as Partial<AgentRunCheckpoint>).openJevIntentContext === intentContext,
+      ),
+    ).toBe(true);
   });
 
   it('disables HTML project access for a math checkpoint with an active project', async () => {

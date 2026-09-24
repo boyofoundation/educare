@@ -34,7 +34,7 @@ vi.mock('./providerRegistry', () => ({
 }));
 
 vi.mock('./knowledgeSearchService', () => ({
-  buildKnowledgeSearchResponse: mockBuildKnowledgeSearchResponse,
+  buildKnowledgeSearchResponseWithOpenJev: mockBuildKnowledgeSearchResponse,
   hasKnowledgeChunks: mockHasKnowledgeChunks,
   KNOWLEDGE_SEARCH_SYSTEM_PROMPT: 'Knowledge prompt',
   KNOWLEDGE_SEARCH_TOOL_DESCRIPTION: 'Knowledge tool',
@@ -213,6 +213,57 @@ describe('streamChat', () => {
     );
     expect(mockExecuteCompute).not.toHaveBeenCalled();
     expect(mockExecuteDrawGeometry).not.toHaveBeenCalled();
+  });
+
+  it('injects the advisory local intent context into the next provider turn', async () => {
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        yield {
+          text: '',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 0,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+
+    const { streamChat } = await import('./llmService');
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'The app crashes when I open the lesson.',
+      assistantId: 'assistant-1',
+      openJevIntentContext: {
+        schemaVersion: 1,
+        source: 'open-jev',
+        intent: 'troubleshoot',
+        intentConfidence: 0.82,
+        needsKnowledge: true,
+        knowledgeProbability: 0.88,
+        needsClarification: false,
+        clarificationProbability: 0.18,
+      },
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    const systemPrompt = String(observedChatParams[0]?.systemPrompt);
+    expect(systemPrompt).toContain('[LOCAL_INTENT_HINT]');
+    expect(systemPrompt).toContain('primary_intent: troubleshoot');
+    expect(systemPrompt).toContain('needs_uploaded_knowledge: yes');
   });
 
   it('forwards provider-generated images to live callbacks and completion metadata', async () => {

@@ -15,7 +15,7 @@ import {
   HTML_PROJECT_WRITE_PACK_NAMES,
 } from './htmlProjectToolService';
 import {
-  buildKnowledgeSearchResponse,
+  buildKnowledgeSearchResponseWithOpenJev,
   hasKnowledgeChunks,
   KNOWLEDGE_SEARCH_SYSTEM_PROMPT,
   KNOWLEDGE_SEARCH_TOOL_DESCRIPTION,
@@ -73,6 +73,7 @@ interface SubagentExecutionEnv {
   activeProjectId?: string | null;
   history: ChatMessage[];
   knowledgeChunks?: RagChunk[];
+  openJevExperimentEnabled?: boolean;
   signal?: AbortSignal;
 }
 
@@ -321,6 +322,7 @@ export const buildSubagentTools = (
     sessionId?: string | null;
     activeProjectId?: string | null;
     knowledgeChunks?: RagChunk[];
+    openJevExperimentEnabled?: boolean;
   },
   callbacks?: {
     onProjectToolActivity?: (update: HtmlProjectWorkspaceUpdate) => void;
@@ -343,9 +345,10 @@ export const buildSubagentTools = (
         return NO_TOOL_RESULT;
       }
       callbacks?.onToolCall?.(call.name);
-      return buildKnowledgeSearchResponse(
+      return buildKnowledgeSearchResponseWithOpenJev(
         env.knowledgeChunks ?? [],
         call.args as { query: string },
+        { enabled: env.openJevExperimentEnabled ?? false },
       );
     });
   }
@@ -575,6 +578,7 @@ export const runSubagentBatch = async (
             sessionId: env.sessionId,
             activeProjectId: env.activeProjectId,
             knowledgeChunks: env.knowledgeChunks,
+            openJevExperimentEnabled: env.openJevExperimentEnabled,
           },
           {
             onProjectToolActivity: callbacks?.onProjectToolActivity,

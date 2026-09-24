@@ -35,6 +35,7 @@ import { getProjectSummaryFromToolResult, streamChat } from './llmService';
 import type { GeometryDoc } from './geometryToolService';
 import type { SpeechUtteranceDoc } from './speechToolService';
 import { gatherKnowledge } from './knowledgeGatherService';
+import { analyzeOpenJevIntent, type OpenJevIntentContext } from './openJevHookService';
 import { classifyAgentRunFailure, type AgentRunFailureClassification } from './agentRunDiagnostics';
 import { getProviderUsageAccounting } from './providers/providerRequest';
 
@@ -432,6 +433,9 @@ export class AgentRunController {
           citations: [...resumeFrom.gatheredContext.citations],
         }
       : undefined;
+    let openJevIntentContext: OpenJevIntentContext | undefined = resumeFrom?.openJevIntentContext;
+    let openJevIntentAnalysisAttempted =
+      Boolean(openJevIntentContext) || !effectiveOpenJevExperimentEnabled;
 
     // Link caller signal → internal abort (one-time).
     this.linkCallerSignal();
@@ -524,6 +528,7 @@ export class AgentRunController {
       snapshotVersion: state.snapshotVersion,
       firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
       gatheredContext,
+      openJevIntentContext,
       tokenTotals: {
         promptTokenCount: totalPromptTokens,
         candidatesTokenCount: totalCandidatesTokens,
@@ -591,6 +596,7 @@ export class AgentRunController {
         snapshotVersion: state.snapshotVersion,
         firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
         gatheredContext,
+        openJevIntentContext,
         tokenTotals: {
           promptTokenCount: totalPromptTokens,
           candidatesTokenCount: totalCandidatesTokens,
@@ -662,6 +668,7 @@ export class AgentRunController {
         snapshotVersion: state.snapshotVersion,
         firstTurnPackSet: firstTurnPackSet ? [...firstTurnPackSet] : undefined,
         gatheredContext,
+        openJevIntentContext,
         tokenTotals: {
           promptTokenCount: totalPromptTokens,
           candidatesTokenCount: totalCandidatesTokens,
@@ -755,6 +762,17 @@ export class AgentRunController {
           break;
         }
 
+        if (state.turnIndex === 0 && !openJevIntentAnalysisAttempted) {
+          openJevIntentAnalysisAttempted = true;
+          openJevIntentContext =
+            (await analyzeOpenJevIntent({
+              enabled: effectiveOpenJevExperimentEnabled,
+              message: originalMessage,
+              recentHistory: options.history.slice(-4),
+            })) ?? undefined;
+          await flushCheckpointProgress(true);
+        }
+
         if (
           state.turnIndex === 0 &&
           !gatheredContext &&
@@ -766,6 +784,7 @@ export class AgentRunController {
               message: originalMessage,
               recentHistory: options.history.slice(-4),
               knowledgeChunks: options.knowledgeChunks ?? [],
+              openJevExperimentEnabled: effectiveOpenJevExperimentEnabled,
               signal: this.internalAbort.signal,
             });
             gatheredContext = nextGatheredContext ?? undefined;
@@ -847,6 +866,7 @@ export class AgentRunController {
             sessionId: options.sessionId,
             activeProjectId: effectiveProjectId,
             knowledgeChunks: options.knowledgeChunks,
+            openJevIntentContext,
             signal: this.internalAbort.signal,
             beforeProviderRequest: async context => {
               const requestIndex =

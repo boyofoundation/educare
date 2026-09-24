@@ -28,7 +28,7 @@ vi.mock('./providerRegistry', () => ({
 }));
 
 vi.mock('./knowledgeSearchService', () => ({
-  buildKnowledgeSearchResponse: mockBuildKnowledgeSearchResponse,
+  buildKnowledgeSearchResponseWithOpenJev: mockBuildKnowledgeSearchResponse,
   hasKnowledgeChunks: mockHasKnowledgeChunks,
   KNOWLEDGE_SEARCH_SYSTEM_PROMPT: 'Knowledge prompt',
   KNOWLEDGE_SEARCH_TOOL_DESCRIPTION: 'Knowledge tool',

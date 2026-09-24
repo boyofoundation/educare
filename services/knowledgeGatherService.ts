@@ -3,7 +3,7 @@ import { ToolCall } from './llmAdapter';
 import { initializeProviders, providerManager } from './providerRegistry';
 import {
   buildIndexedKnowledgeChunks,
-  buildKnowledgeSearchResponse,
+  buildKnowledgeSearchResponseWithOpenJev,
   createExcerpt,
   KNOWLEDGE_SEARCH_SYSTEM_PROMPT,
   KNOWLEDGE_SEARCH_TOOL_DESCRIPTION,
@@ -86,9 +86,16 @@ export const gatherKnowledge = async (params: {
   message: string;
   recentHistory: ChatMessage[];
   knowledgeChunks: RagChunk[];
+  openJevExperimentEnabled?: boolean;
   signal?: AbortSignal;
 }): Promise<KnowledgeGatherResult | null> => {
-  const { message, recentHistory, knowledgeChunks, signal } = params;
+  const {
+    message,
+    recentHistory,
+    knowledgeChunks,
+    openJevExperimentEnabled = false,
+    signal,
+  } = params;
 
   if (!message.trim() || knowledgeChunks.length === 0) {
     return null;
@@ -128,13 +135,14 @@ export const gatherKnowledge = async (params: {
       };
     }
 
-    const response = buildKnowledgeSearchResponse(
+    const response = await buildKnowledgeSearchResponseWithOpenJev(
       knowledgeChunks,
       call.args as {
         query: string;
         maxResults?: number;
         fileName?: string;
       },
+      { enabled: openJevExperimentEnabled },
     );
     for (const match of response.results) {
       const fullChunk = indexedChunkById.get(match.chunkId);

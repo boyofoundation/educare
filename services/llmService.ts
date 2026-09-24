@@ -26,7 +26,7 @@ import {
   type BeforeProviderRequest,
 } from './providers/providerRequest';
 import {
-  buildKnowledgeSearchResponse,
+  buildKnowledgeSearchResponseWithOpenJev,
   hasKnowledgeChunks,
   type KnowledgeSearchArgs,
   KNOWLEDGE_SEARCH_SYSTEM_PROMPT,
@@ -45,6 +45,7 @@ import {
   PROJECT_BOOTSTRAP_SYSTEM_PROMPT,
 } from './htmlProjectPrompting';
 import { getOpenJevExperimentEnabled } from './openJevExperimentPreferences';
+import { formatOpenJevIntentForAgent, type OpenJevIntentContext } from './openJevHookService';
 import {
   executeOpenJevDecisionTool,
   OPEN_JEV_DECISION_SYSTEM_PROMPT,
@@ -116,6 +117,8 @@ export interface StreamChatParams {
   knowledgeChunks?: RagChunk[];
   /** Opt-in local open-jev structured decision tool exposed to the main agent. */
   openJevExperimentEnabled?: boolean;
+  /** Advisory local intent result injected into the next provider turn. */
+  openJevIntentContext?: OpenJevIntentContext | null;
   subagentDelegationEnabled?: boolean;
   mathToolsEnabled?: boolean;
   webSpeechToolsEnabled?: boolean;
@@ -446,6 +449,7 @@ export const streamChat = async (params: StreamChatParams) => {
     activeProjectId,
     knowledgeChunks = [],
     openJevExperimentEnabled,
+    openJevIntentContext,
     signal,
     packSetOverride,
     subagentDelegationEnabled = false,
@@ -659,6 +663,7 @@ export const streamChat = async (params: StreamChatParams) => {
       clarifyToolEnabled ? CLARIFY_SYSTEM_PROMPT : '',
       knowledgeToolEnabled ? KNOWLEDGE_SEARCH_SYSTEM_PROMPT : '',
       effectiveOpenJevExperimentEnabled ? OPEN_JEV_DECISION_SYSTEM_PROMPT : '',
+      openJevIntentContext ? formatOpenJevIntentForAgent(openJevIntentContext) : '',
       mathToolsEnabled ? MATH_TOOLS_SYSTEM_PROMPT : '',
       webSpeechToolsEnabled ? WEB_SPEECH_TOOLS_SYSTEM_PROMPT : '',
       htmlProjectToolEnabled
@@ -735,9 +740,10 @@ export const streamChat = async (params: StreamChatParams) => {
             result = await executeOpenJevDecisionTool(call.args);
           }
         } else if (call.name === KNOWLEDGE_SEARCH_TOOL_NAME) {
-          result = buildKnowledgeSearchResponse(
+          result = await buildKnowledgeSearchResponseWithOpenJev(
             knowledgeChunks,
             call.args as unknown as KnowledgeSearchArgs,
+            { enabled: effectiveOpenJevExperimentEnabled },
           );
         } else if (mathToolsEnabled && call.name === MATH_COMPUTE_TOOL_NAME) {
           const computeResult = await executeCompute(call.args as ComputeArgs);
@@ -889,6 +895,7 @@ export const streamChat = async (params: StreamChatParams) => {
               activeProjectId: resolvedActiveProjectId,
               history,
               knowledgeChunks,
+              openJevExperimentEnabled: effectiveOpenJevExperimentEnabled,
               signal,
             },
             {

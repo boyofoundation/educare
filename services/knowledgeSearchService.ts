@@ -1,5 +1,6 @@
 import { RagChunk, RagSourceLocation, RagSourceType } from '../types';
 import { computeMaterialContentHash, migrateLegacyRagChunks } from './materialDocumentService';
+import { filterRagMatchesByOpenJev, type OpenJevHookDecisionEvaluator } from './openJevHookService';
 
 export const KNOWLEDGE_SEARCH_TOOL_NAME = 'searchKnowledgeBase';
 
@@ -345,5 +346,61 @@ export const buildKnowledgeSearchResponse = (
     totalMatches: matches.length,
     sourceStatus: matches.length > 0 ? 'found' : 'no-source',
     results: matches,
+  };
+};
+
+export interface OpenJevKnowledgeSearchOptions {
+  enabled: boolean;
+  evaluator?: OpenJevHookDecisionEvaluator;
+}
+
+export interface OpenJevKnowledgeSearchRelevanceFilter {
+  applied: boolean;
+  fallback: boolean;
+  evaluatedCount: number;
+  filteredCount: number;
+}
+
+export type OpenJevKnowledgeSearchResponse = ReturnType<typeof buildKnowledgeSearchResponse> & {
+  relevanceFilter?: OpenJevKnowledgeSearchRelevanceFilter;
+};
+
+/**
+ * Runs the deterministic search first, then lets the local kev hook remove
+ * only candidates it considers clearly unrelated.  The synchronous response
+ * remains available for callers that cannot await a browser inference pass.
+ */
+export const buildKnowledgeSearchResponseWithOpenJev = async (
+  knowledgeChunks: RagChunk[],
+  args: KnowledgeSearchArgs,
+  options: OpenJevKnowledgeSearchOptions,
+): Promise<OpenJevKnowledgeSearchResponse> => {
+  const response = buildKnowledgeSearchResponse(knowledgeChunks, args);
+  if (!options.enabled || response.results.length === 0) {
+    return response;
+  }
+
+  const relevance = await filterRagMatchesByOpenJev({
+    enabled: options.enabled,
+    query: args.query,
+    matches: response.results.map(match => ({
+      id: match.chunkId,
+      text: `${match.fileName}\n${match.content}`,
+      value: match,
+    })),
+    evaluator: options.evaluator,
+  });
+
+  return {
+    ...response,
+    totalMatches: relevance.values.length,
+    sourceStatus: relevance.values.length > 0 ? 'found' : 'no-source',
+    results: relevance.values,
+    relevanceFilter: {
+      applied: relevance.applied,
+      fallback: relevance.fallback,
+      evaluatedCount: relevance.evaluatedCount,
+      filteredCount: relevance.filteredCount,
+    },
   };
 };
