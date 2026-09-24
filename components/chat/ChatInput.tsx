@@ -64,8 +64,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const speechRecognitionRef = React.useRef<SpeechRecognitionLike | null>(null);
   const inputLocked = isLoading || disabled || isRunning;
-  const canSend =
-    !inputLocked && !sendDisabled && (value.trim() !== '' || attachments.length > 0);
+  const canSend = !inputLocked && !sendDisabled && (value.trim() !== '' || attachments.length > 0);
 
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (!imageInputEnabled || inputLocked || !onAddAttachmentFiles) {
@@ -116,13 +115,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (
-      e.key === 'Enter' &&
-      !e.shiftKey &&
-      !e.nativeEvent.isComposing &&
-      !isComposing &&
-      canSend
-    ) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !isComposing && canSend) {
       e.preventDefault();
       onSend();
     }
@@ -288,7 +281,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
               className='w-full resize-none rounded-2xl border-2 border-gray-600/40 bg-gray-700/60 px-4 py-3 text-base leading-7 text-white shadow-lg transition-all duration-300 hover:border-gray-500/60 focus:border-cyan-500/60 focus:bg-gray-700/80 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-60 md:px-5 md:py-3.5'
               disabled={isLoading || disabled || isRunning}
               aria-label='輸入訊息'
-              aria-describedby={['input-help', ariaDescribedBy].filter(Boolean).join(' ') || undefined}
+              aria-describedby={
+                ['input-help', ariaDescribedBy].filter(Boolean).join(' ') || undefined
+              }
               aria-multiline='true'
               role='textbox'
               style={{

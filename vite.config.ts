@@ -41,6 +41,8 @@ export default defineConfig(() => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
+      // open-jev and its Transformers.js peer are loaded only after the user opts in.
+      dedupe: ['@huggingface/transformers'],
     },
     build: {
       target: 'es2020',
@@ -75,6 +77,17 @@ export default defineConfig(() => {
             // AI 相關 - 分別處理大型庫
             if (id.includes('@google/genai')) {
               return 'ai-libs';
+            }
+
+            // The browser-local experimental router is dynamically imported after the
+            // opt-in setting is enabled. Keep its sizeable runtime out of the entry bundle.
+            if (
+              id.includes('node_modules/open-jev') ||
+              id.includes('node_modules/@huggingface/transformers') ||
+              id.includes('node_modules/@huggingface/tokenizers') ||
+              id.includes('node_modules/onnxruntime-web')
+            ) {
+              return 'open-jev';
             }
 
             // Math and geometry runtimes are only loaded for completed math-tool calls.

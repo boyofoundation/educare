@@ -226,6 +226,7 @@ const buildCheckpoint = (overrides: Partial<AgentRunCheckpoint> = {}): AgentRunC
   },
   agentHarnessEnabled: overrides.agentHarnessEnabled ?? true,
   mathToolsEnabled: overrides.mathToolsEnabled ?? false,
+  openJevExperimentEnabled: overrides.openJevExperimentEnabled ?? false,
   sharedMode: overrides.sharedMode ?? false,
   budget: overrides.budget,
   budgetUsage: overrides.budgetUsage,
@@ -1822,6 +1823,34 @@ describe('AgentRunController', () => {
     expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
       resumeFrom.runId,
       expect.objectContaining({ mathToolsEnabled: true }),
+    );
+  });
+
+  it('restores the open-jev experiment flag from a checkpoint and forwards it to streamChat', async () => {
+    const resumeFrom = buildCheckpoint({ openJevExperimentEnabled: true });
+    const invocations = installStreamChatTurns([
+      buildStreamChatInvocation({
+        finishReason: 'complete',
+        projectSummary: completeProjectSummary,
+        toolSequence: ['reportTurnOutcome'],
+      }),
+    ]);
+    const controller = new AgentRunController(
+      buildOptions({
+        resumeFrom,
+        openJevExperimentEnabled: false,
+      }),
+    );
+
+    await controller.run();
+
+    expect(invocations[0]?.params.openJevExperimentEnabled).toBe(true);
+    expect(mockSaveCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({ openJevExperimentEnabled: true }),
+    );
+    expect(mockUpdateCheckpoint).toHaveBeenLastCalledWith(
+      resumeFrom.runId,
+      expect.objectContaining({ openJevExperimentEnabled: true }),
     );
   });
 

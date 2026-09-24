@@ -44,6 +44,9 @@ const LazyBundleBuilder = React.lazy(() => import('../bundle/BundleBuilder'));
 const LazyBundleProviderSetup = React.lazy(() => import('../bundle/BundleProviderSetup'));
 const LazyProviderSettings = React.lazy(() => import('../settings/ProviderSettings'));
 const LazyAppearanceSettings = React.lazy(() => import('../settings/AppearanceSettings'));
+const LazyOpenJevExperimentSettings = React.lazy(
+  () => import('../settings/OpenJevExperimentSettings'),
+);
 const LazyWorkspaceDataManagement = React.lazy(() => import('../settings/WorkspaceDataManagement'));
 const LazyPracticeWorkspace = React.lazy(() => import('../practice/PracticeWorkspace'));
 
@@ -717,6 +720,9 @@ function AppContent(): React.JSX.Element {
             </p>
             <LazyBoundary>
               <LazyAppearanceSettings className='mb-6' />
+            </LazyBoundary>
+            <LazyBoundary>
+              <LazyOpenJevExperimentSettings className='mb-6' />
             </LazyBoundary>
             <button
               type='button'

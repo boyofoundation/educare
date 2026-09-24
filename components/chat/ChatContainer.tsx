@@ -67,6 +67,7 @@ import {
   resolveRoutableTargets,
 } from '../../services/assistantRoutingService';
 import { registerWorkspaceOperationFlusher } from '../../services/workspaceOperationService';
+import { getOpenJevExperimentEnabled } from '../../services/openJevExperimentPreferences';
 import {
   buildChatDraftOwnerId,
   clearWorkspaceDraftWithOperationToken,
@@ -1237,6 +1238,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
         agentHarnessEnabled:
           htmlProjectAccessEnabled &&
           (resumeCheckpoint?.agentHarnessEnabled ?? projectEditingActive),
+        openJevExperimentEnabled:
+          htmlProjectAccessEnabled &&
+          (resumeCheckpoint?.openJevExperimentEnabled ?? getOpenJevExperimentEnabled()),
         subagentDelegationEnabled:
           resumeCheckpoint?.subagentDelegationEnabled ?? subagentDelegationEnabled,
         mathToolsEnabled: effectiveMathToolsEnabled,

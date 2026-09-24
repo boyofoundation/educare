@@ -148,6 +148,15 @@ const INTENT_PACKS: Record<HtmlProjectIntentDecision['intent'], HtmlProjectToolP
   uncertain: DEFAULT_UNCERTAIN_PACK_SET,
 };
 
+/**
+ * Return the safe base tool pack for an intent without exposing the mutable
+ * classifier table to callers. The experimental local router uses this to
+ * hand its typed answer back to the existing project-tool boundary.
+ */
+export const getHtmlProjectToolPacksForIntent = (
+  intent: HtmlProjectIntentDecision['intent'],
+): HtmlProjectToolPackName[] => [...INTENT_PACKS[intent]];
+
 const includesKeyword = (normalizedMessage: string, keywords: string[]): boolean =>
   keywords.some(keyword => normalizedMessage.includes(keyword.toLowerCase()));
 

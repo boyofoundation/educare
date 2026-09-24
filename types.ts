@@ -938,6 +938,8 @@ export interface AgentRunCheckpoint {
   subagentDelegationEnabled?: boolean;
   mathToolsEnabled?: boolean;
   webSpeechToolsEnabled?: boolean;
+  /** Snapshot of the opt-in local open-jev router for deterministic resume behavior. */
+  openJevExperimentEnabled?: boolean;
   routableTargets?: Array<{ id: string; name: string; description: string }>;
   /** HTML 專案模式開關快照,確保 resume 時維持與原回合一致的工具暴露。 */
   htmlProjectEnabled?: boolean;

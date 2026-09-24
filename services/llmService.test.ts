@@ -11,6 +11,7 @@ const {
   mockExecuteCompute,
   mockExecuteDrawGeometry,
   mockNormalizeGeometryDoc,
+  mockDecideOpenJevIntent,
 } = vi.hoisted(() => ({
   mockInitializeProviders: vi.fn(),
   mockGetActiveProvider: vi.fn(),
@@ -22,6 +23,7 @@ const {
   mockExecuteCompute: vi.fn(),
   mockExecuteDrawGeometry: vi.fn(),
   mockNormalizeGeometryDoc: vi.fn(),
+  mockDecideOpenJevIntent: vi.fn(),
 }));
 
 vi.mock('./providerRegistry', () => ({
@@ -55,6 +57,10 @@ vi.mock('./htmlProjectToolService', async importOriginal => {
 
 vi.mock('./htmlProjectAgentTelemetry', () => ({
   recordHtmlProjectTelemetryEvent: mockRecordHtmlProjectTelemetryEvent,
+}));
+
+vi.mock('./openJevDecisionService', () => ({
+  decideOpenJevIntent: mockDecideOpenJevIntent,
 }));
 
 vi.mock('./subagentService', () => ({
@@ -106,6 +112,8 @@ describe('streamChat', () => {
     mockExecuteDrawGeometry.mockReset();
     mockNormalizeGeometryDoc.mockReset();
     mockNormalizeGeometryDoc.mockImplementation(document => document);
+    mockDecideOpenJevIntent.mockReset();
+    mockDecideOpenJevIntent.mockResolvedValue(null);
     mockInitializeProviders.mockResolvedValue(undefined);
     mockHasKnowledgeChunks.mockReturnValue(false);
     mockBuildKnowledgeSearchResponse.mockReturnValue({ matches: [] });
@@ -846,6 +854,76 @@ describe('streamChat', () => {
         expect.objectContaining({ name: 'gitListBranches' }),
         expect.objectContaining({ name: 'gitSwitchBranch' }),
       ]),
+    );
+  });
+
+  it('uses the opt-in open-jev decision as an advisory HTML pack route', async () => {
+    const observedChatParams: Array<Record<string, unknown>> = [];
+    const provider = {
+      name: 'gemini',
+      displayName: 'Gemini',
+      supportedModels: ['gemini-2.5-flash'],
+      isAvailable: () => true,
+      streamChat: vi.fn(async function* (params) {
+        observedChatParams.push(params as Record<string, unknown>);
+        yield {
+          text: 'done',
+          isComplete: true,
+          metadata: {
+            promptTokenCount: 3,
+            candidatesTokenCount: 1,
+            provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            toolRoundCount: 0,
+            repeatedRecoverableErrors: [],
+          },
+        };
+      }),
+    };
+    mockGetActiveProvider.mockReturnValue(provider);
+    mockDecideOpenJevIntent.mockResolvedValue({
+      decision: {
+        intent: 'inspect_only',
+        confidence: 'high',
+        selectedPackSet: ['inspect'],
+        reason: 'open-jev test decision',
+        requiresSummaryPreflight: true,
+      },
+      confidence: 0.9,
+      probabilities: {},
+      runtime: {
+        model: 'kev-0.6b',
+        family: 'kev',
+        device: 'webgpu',
+        dtype: 'q4f16',
+      },
+    });
+
+    const { streamChat } = await import('./llmService');
+
+    await streamChat({
+      systemPrompt: 'You are helpful.',
+      history: [],
+      message: 'Please inspect this webpage project.',
+      assistantId: 'assistant-1',
+      activeProjectId: 'project-123',
+      htmlProjectEnabled: true,
+      openJevExperimentEnabled: true,
+      onChunk: vi.fn(),
+      onComplete: vi.fn(),
+    });
+
+    expect(mockDecideOpenJevIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Please inspect this webpage project.',
+        activeProjectId: 'project-123',
+      }),
+    );
+    expect(String(observedChatParams[0]?.systemPrompt)).toContain(
+      'Current routing intent: inspect_only (high confidence).',
+    );
+    expect(String(observedChatParams[0]?.systemPrompt)).toContain(
+      'HTML tool packs recommended for this turn: inspect.',
     );
   });
 

@@ -1116,6 +1116,8 @@ const validateArchiveRecords = (
       !isFiniteNumber(record.tokenTotals.promptTokenCount) ||
       !isFiniteNumber(record.tokenTotals.candidatesTokenCount) ||
       typeof record.agentHarnessEnabled !== 'boolean' ||
+      (record.openJevExperimentEnabled !== undefined &&
+        typeof record.openJevExperimentEnabled !== 'boolean') ||
       typeof record.sharedMode !== 'boolean' ||
       !isFiniteNumber(record.createdAt) ||
       !isFiniteNumber(record.updatedAt) ||

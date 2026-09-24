@@ -44,6 +44,8 @@ import {
   classifyHtmlProjectIntent,
   PROJECT_BOOTSTRAP_SYSTEM_PROMPT,
 } from './htmlProjectPrompting';
+import { decideOpenJevIntent } from './openJevDecisionService';
+import { getOpenJevExperimentEnabled } from './openJevExperimentPreferences';
 import { recordHtmlProjectTelemetryEvent } from './htmlProjectAgentTelemetry';
 import {
   buildSubagentDelegationToolDefinition,
@@ -106,6 +108,8 @@ export interface StreamChatParams {
   sessionId?: string | null;
   activeProjectId?: string | null;
   knowledgeChunks?: RagChunk[];
+  /** Opt-in local open-jev router; it never replaces the provider or tool loop. */
+  openJevExperimentEnabled?: boolean;
   subagentDelegationEnabled?: boolean;
   mathToolsEnabled?: boolean;
   webSpeechToolsEnabled?: boolean;
@@ -435,6 +439,7 @@ export const streamChat = async (params: StreamChatParams) => {
     sessionId,
     activeProjectId,
     knowledgeChunks = [],
+    openJevExperimentEnabled,
     signal,
     packSetOverride,
     subagentDelegationEnabled = false,
@@ -461,6 +466,8 @@ export const streamChat = async (params: StreamChatParams) => {
   const htmlProjectAccessEnabled = !mathToolsEnabled && !webSpeechToolsEnabled;
   const effectiveHtmlProjectEnabled = htmlProjectAccessEnabled && htmlProjectEnabled;
   const effectiveProjectBootstrapEnabled = htmlProjectAccessEnabled && projectBootstrapEnabled;
+  const effectiveOpenJevExperimentEnabled =
+    htmlProjectAccessEnabled && (openJevExperimentEnabled ?? getOpenJevExperimentEnabled());
 
   await initializeProviders();
 
@@ -515,17 +522,37 @@ export const streamChat = async (params: StreamChatParams) => {
   // G2: packSetOverride bypasses intent classification for continuation turns.
   const hasPackSetOverride =
     effectiveHtmlProjectEnabled && !!packSetOverride && packSetOverride.length > 0;
-  const initialIntentDecision: HtmlProjectIntentDecision = !effectiveHtmlProjectEnabled
-    ? htmlProjectModeDisabledDecision
-    : hasPackSetOverride
-      ? {
-          intent: 'uncertain',
-          confidence: 'high',
-          selectedPackSet: [...(packSetOverride as HtmlProjectToolPackName[])],
-          reason: 'packSetOverride supplied — bypassing intent classification (continuation turn).',
-          requiresSummaryPreflight: false,
-        }
-      : classifyHtmlProjectIntent(message, resolvedActiveProjectId);
+  let deterministicIntentDecision: HtmlProjectIntentDecision | undefined;
+  const getDeterministicIntentDecision = (): HtmlProjectIntentDecision =>
+    (deterministicIntentDecision ??= classifyHtmlProjectIntent(message, resolvedActiveProjectId));
+  let initialIntentDecision: HtmlProjectIntentDecision;
+  if (!effectiveHtmlProjectEnabled) {
+    initialIntentDecision = htmlProjectModeDisabledDecision;
+  } else if (hasPackSetOverride) {
+    initialIntentDecision = {
+      intent: 'uncertain',
+      confidence: 'high',
+      selectedPackSet: [...(packSetOverride as HtmlProjectToolPackName[])],
+      reason: 'packSetOverride supplied — bypassing intent classification (continuation turn).',
+      requiresSummaryPreflight: false,
+    };
+  } else if (effectiveOpenJevExperimentEnabled) {
+    try {
+      const experimentalDecision = await decideOpenJevIntent({
+        message,
+        activeProjectId: resolvedActiveProjectId,
+        history,
+      });
+      initialIntentDecision = experimentalDecision?.decision ?? getDeterministicIntentDecision();
+    } catch (error) {
+      // The local model is advisory. Preserve the existing deterministic route when
+      // WebGPU, model files, or inference are unavailable.
+      console.warn('open-jev intent routing unavailable; using deterministic route.', error);
+      initialIntentDecision = getDeterministicIntentDecision();
+    }
+  } else {
+    initialIntentDecision = getDeterministicIntentDecision();
+  }
   let selectedPackSet = [...initialIntentDecision.selectedPackSet];
   let htmlProjectToolEnabled = hasPackSetOverride || selectedPackSet.length > 0;
 
